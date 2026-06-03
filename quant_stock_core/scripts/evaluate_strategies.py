@@ -44,20 +44,26 @@ def main() -> None:
     parser.add_argument("--slippage", type=float, default=0.002)
     parser.add_argument("--baseline", default="small_cap_quality")
     parser.add_argument("--save", default=None, help="保存 run id；结果写入 SQLite strategy_evaluation 表")
+    parser.add_argument("--append-save", action="store_true", help="追加保存单个策略结果，不清空同 run_id 已有记录")
     parser.add_argument("--db-path", default=None, help="SQLite 路径，默认 DESKTOP_DB_PATH 或 DATA_ROOT/meta.db")
     parser.add_argument("--export-files", action="store_true", help="额外导出 JSON/CSV 到 backtest_results/<save>/")
     parser.add_argument("--json", action="store_true", help="仅输出 JSON")
     args = parser.parse_args()
 
     names = _resolve_strategy_names(args.strategies)
+    eval_names = list(names)
+    if args.baseline not in eval_names:
+        eval_names.append(args.baseline)
     results = evaluate(
-        names,
+        eval_names,
         args.start,
         args.end,
         benchmark=args.benchmark,
         slippage=args.slippage,
         baseline=args.baseline,
     )
+    requested = set(names)
+    results = [row for row in results if str(row.get("strategy") or "") in requested]
 
     payload = {
         "start": args.start,
@@ -68,7 +74,7 @@ def main() -> None:
     }
     if args.save:
         db_path = _resolve_db_path(args.db_path)
-        save_strategy_evaluation(db_path, args.save, payload)
+        save_strategy_evaluation(db_path, args.save, payload, delete_existing=not args.append_save)
         log.info(f"策略评估结果已保存到 SQLite: {db_path} run_id={args.save}")
         if args.export_files:
             out_dir = BACKTEST_DIR / args.save
@@ -428,7 +434,7 @@ def _resolve_db_path(value: str | None) -> Path:
     return (ROOT.parent / "data_store" / "meta.db").resolve()
 
 
-def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]) -> None:
+def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any], *, delete_existing: bool = True) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     generated_at = pd.Timestamp.now().isoformat()
     start = str(payload.get("start") or "")
@@ -438,7 +444,8 @@ def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]
     rows = list(payload.get("rows") or [])
     with sqlite3.connect(str(db_path), timeout=30.0) as conn:
         _ensure_strategy_evaluation_table(conn)
-        conn.execute("DELETE FROM strategy_evaluation WHERE run_id = ?", (run_id,))
+        if delete_existing:
+            conn.execute("DELETE FROM strategy_evaluation WHERE run_id = ?", (run_id,))
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -499,7 +506,7 @@ def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]
             ]
             placeholders = ", ".join("?" for _ in columns)
             conn.execute(
-                f"INSERT INTO strategy_evaluation ({', '.join(columns)}) VALUES ({placeholders})",
+                f"INSERT OR REPLACE INTO strategy_evaluation ({', '.join(columns)}) VALUES ({placeholders})",
                 values,
             )
 

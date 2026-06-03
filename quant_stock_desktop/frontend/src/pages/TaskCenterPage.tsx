@@ -95,7 +95,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
         params: {
           start_date: startDate,
           end_date: endDate,
-          strategies: 'enabled',
+          strategies: 'all',
           baseline: 'small_cap_quality',
           benchmark: '000905.SH',
           slippage: slippageBp / 10000
@@ -312,6 +312,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
       return (
         <StrategyEvaluationDetail
           task={selectedTask}
+          childTasks={tasks.filter((item) => item.parent_id === selectedTask.id)}
           onBack={() => { setSelectedTask(null); setDetail(null) }}
           onRefresh={() => showDetail(selectedTask.id)}
           onStart={() => onStart(selectedTask.id)}
@@ -636,8 +637,9 @@ function EvaluationDetail({ task, detail, onOpenResearch, onBack, onRefresh, onS
   )
 }
 
-function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }: {
+function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart, onCancel }: {
   task: TaskDTO
+  childTasks: TaskDTO[]
   onBack: () => void
   onRefresh: () => void
   onStart: () => void
@@ -650,13 +652,18 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
   }, [task.status, onRefresh])
 
   const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
-  const successCount = numberOf(task.summary.success_count, rows.filter((row) => row.status === 'ok').length)
-  const emptyCount = numberOf(task.summary.empty_count, rows.filter((row) => row.status === 'empty').length)
-  const failedCount = numberOf(task.summary.failed_count, rows.filter((row) => row.status !== 'ok' && row.status !== 'empty').length)
-  const admitCount = numberOf(task.summary.admit_count, rows.filter((row) => row.admission === '可启用').length)
-  const limitedCount = numberOf(task.summary.limited_count, rows.filter((row) => row.admission === '限制启用').length)
-  const watchCount = numberOf(task.summary.watch_count, rows.filter((row) => row.admission === '继续观察').length)
-  const rejectCount = numberOf(task.summary.reject_count, rows.filter((row) => row.admission === '暂不启用').length)
+  const strategyRows = buildStrategyAdmissionRows(childTasks, rows)
+  const successCount = numberOf(task.summary.success_count, strategyRows.filter((row) => row.evalStatus === 'ok').length)
+  const emptyCount = numberOf(task.summary.empty_count, strategyRows.filter((row) => row.evalStatus === 'empty').length)
+  const failedCount = Math.max(
+    numberOf(task.summary.failed_count, 0),
+    numberOf(task.summary.failed_task_count, 0),
+    strategyRows.filter((row) => row.taskStatus === 'failed' || (row.evalStatus && row.evalStatus !== 'ok' && row.evalStatus !== 'empty')).length
+  )
+  const admitCount = numberOf(task.summary.admit_count, strategyRows.filter((row) => row.admission === '可启用').length)
+  const limitedCount = numberOf(task.summary.limited_count, strategyRows.filter((row) => row.admission === '限制启用').length)
+  const watchCount = numberOf(task.summary.watch_count, strategyRows.filter((row) => row.admission === '继续观察').length)
+  const rejectCount = numberOf(task.summary.reject_count, strategyRows.filter((row) => row.admission === '暂不启用').length)
   const isRunning = task.status === 'running'
   const isRunnable = task.status !== 'running' && task.status !== 'success'
 
@@ -679,7 +686,7 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
       {task.error_message && <div className="errorBox">{task.error_message}</div>}
 
       <div className="metricGrid">
-        <Metric label="策略数" value={`${numberOf(task.summary.strategy_count, rows.length)}`} />
+        <Metric label="策略数" value={`${numberOf(task.summary.strategy_count, strategyRows.length)}`} />
         <Metric label="成功" value={`${successCount}`} />
         <Metric label="空仓" value={`${emptyCount}`} />
         <Metric label="失败" value={`${failedCount}`} tone={failedCount > 0 ? 'negative' : ''} />
@@ -701,10 +708,13 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
           <table>
             <thead>
               <tr>
+                <th>序号</th>
                 <th>策略</th>
                 <th>建议</th>
                 <th>准入分</th>
-                <th>状态</th>
+                <th>任务</th>
+                <th>进度</th>
+                <th>评估</th>
                 <th>启用</th>
                 <th>收益分</th>
                 <th>风调分</th>
@@ -726,19 +736,24 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
                 <th>最差月</th>
                 <th>重合度</th>
                 <th>相关性</th>
+                <th>尝试</th>
+                <th>错误</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={String(row.strategy)}>
-                  <td>{String(row.label || row.strategy)}</td>
+              {strategyRows.map((row) => (
+                <tr key={row.key}>
+                  <td>{row.sequence}/{row.total}</td>
+                  <td>{row.label}</td>
                   <td>
-                    <span className={`admissionBadge ${admissionClass(String(row.admission || ''))}`} title={String(row.reason || '')}>
-                      {String(row.admission || '—')}
+                    <span className={`admissionBadge ${admissionClass(row.admission)}`} title={row.reason}>
+                      {row.admission || '—'}
                     </span>
                   </td>
                   <td>{scoreText(row.admission_score)}</td>
-                  <td><span className={`badge ${String(row.status)}`}>{String(row.status || '-')}</span></td>
+                  <td><span className={`badge ${row.taskStatus}`}>{row.taskStatus}</span></td>
+                  <td>{Math.round(row.progress * 100)}%</td>
+                  <td><span className={`badge ${row.evalStatus || 'created'}`}>{row.evalStatus || '—'}</span></td>
                   <td>{row.enabled ? '是' : '否'}</td>
                   <td>{scoreText(row.return_score)}</td>
                   <td>{scoreText(row.risk_adjusted_score)}</td>
@@ -760,10 +775,12 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
                   <td>{row.worst_month_return == null ? '—' : percent(numberOf(row.worst_month_return, 0), true)}</td>
                   <td>{row.overlap_with_baseline == null ? '—' : percent(numberOf(row.overlap_with_baseline, 0))}</td>
                   <td>{row.corr_with_baseline == null ? '—' : numberOf(row.corr_with_baseline, 0).toFixed(2)}</td>
+                  <td>{row.attempt}/{row.maxAttempts}</td>
+                  <td>{row.error || '—'}</td>
                 </tr>
               ))}
-              {!isRunning && rows.length === 0 && <tr><td colSpan={25} className="emptyCell">暂无评估结果，启动任务后生成准入表</td></tr>}
-              {isRunning && rows.length === 0 && <tr><td colSpan={25} className="emptyCell">评估运行中...</td></tr>}
+              {!isRunning && strategyRows.length === 0 && <tr><td colSpan={30} className="emptyCell">暂无策略子任务，创建策略准入后会初始化候选策略</td></tr>}
+              {isRunning && strategyRows.length === 0 && <tr><td colSpan={30} className="emptyCell">评估运行中...</td></tr>}
             </tbody>
           </table>
         </div>
@@ -996,6 +1013,68 @@ function AISuggestionList({ title, items, wide = false }: { title: string; items
       ) : <div className="mutedText">暂无</div>}
     </div>
   )
+}
+
+type StrategyAdmissionRow = Record<string, unknown> & {
+  key: string
+  label: string
+  admission: string
+  reason: string
+  taskStatus: string
+  evalStatus: string
+  progress: number
+  sequence: number
+  total: number
+  enabled?: unknown
+  attempt: number
+  maxAttempts: number
+  error: string
+}
+
+function buildStrategyAdmissionRows(childTasks: TaskDTO[], resultRows: Array<Record<string, unknown>>): StrategyAdmissionRow[] {
+  if (childTasks.length === 0) {
+    return resultRows.map((row, index) => ({
+      ...row,
+      key: String(row.strategy || index),
+      label: String(row.label || row.strategy || '—'),
+      admission: String(row.admission || ''),
+      reason: String(row.reason || ''),
+      taskStatus: String(row.status || 'success'),
+      evalStatus: String(row.status || ''),
+      progress: 1,
+      sequence: index + 1,
+      total: resultRows.length,
+      attempt: 1,
+      maxAttempts: 1,
+      error: String(row.error || '')
+    }))
+  }
+  const resultByStrategy = new Map<string, Record<string, unknown>>()
+  for (const row of resultRows) {
+    const strategy = String(row.strategy || '')
+    if (strategy) resultByStrategy.set(strategy, row)
+  }
+  return childTasks.map((child) => {
+    const strategy = String(child.params.strategy || child.subtask_key || '')
+    const result = resultByStrategy.get(strategy) || child.summary || {}
+    return {
+      ...result,
+      key: child.id,
+      strategy,
+      label: String(result.label || child.subtask_name || child.name || strategy || '—'),
+      admission: String(result.admission || ''),
+      reason: String(result.reason || child.error_message || ''),
+      taskStatus: child.status,
+      evalStatus: String(result.status || ''),
+      progress: child.progress,
+      sequence: child.sequence,
+      total: child.total,
+      enabled: result.enabled ?? child.params.enabled,
+      attempt: child.attempt,
+      maxAttempts: child.max_attempts || 1,
+      error: child.error_message || String(result.error || '')
+    }
+  })
 }
 
 function buildSchemeRows(childTasks: TaskDTO[], resultRows: Array<Record<string, unknown>>, sortKey: string) {

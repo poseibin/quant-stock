@@ -640,6 +640,15 @@ func readStrategyEvaluationSummaryFromFile(resultPath string) string {
 	return string(summary)
 }
 
+func readStrategyEvaluationRowSummaryFromDB(db *sql.DB, runID string, strategyName string) string {
+	row := db.QueryRow(`SELECT payload_json FROM strategy_evaluation WHERE run_id = ? AND strategy = ?`, runID, strategyName)
+	var payloadJSON string
+	if err := row.Scan(&payloadJSON); err != nil {
+		return ""
+	}
+	return payloadJSON
+}
+
 func enrichStrategyEvaluationSummary(payload map[string]any) {
 	rows, _ := payload["rows"].([]any)
 	success := 0
@@ -965,7 +974,116 @@ func (app *App) CreateTask(req task.CreateRequest) (task.DTO, error) {
 		}
 		return task.ToDTO(parent), nil
 	}
+	if req.TaskType == task.TypeStrategyEvaluation {
+		parent, err := app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		if err := app.initializeStrategyEvaluation(parent); err != nil {
+			return task.DTO{}, err
+		}
+		parent, err = app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		return task.ToDTO(parent), nil
+	}
 	return dto, nil
+}
+
+func (app *App) initializeStrategyEvaluation(parent task.Task) error {
+	if app.database == nil {
+		if err := app.ensureDatabase(); err != nil {
+			return err
+		}
+	}
+	params := task.ToDTO(parent).Params
+	startDate := stringParam(params, "start_date", "")
+	endDate := stringParam(params, "end_date", "")
+	if startDate == "" || endDate == "" {
+		return errors.New("strategy evaluation requires start_date and end_date")
+	}
+	strategyNames := app.resolveStrategyAdmissionNames(params["strategies"])
+	if len(strategyNames) == 0 {
+		return errors.New("no strategy candidates generated")
+	}
+	children, err := app.taskService.Repository().ListChildren(parent.ID)
+	if err != nil {
+		return err
+	}
+	if len(children) > 0 {
+		return nil
+	}
+	now := time.Now()
+	runID := parent.ExternalRunID
+	if runID == "" {
+		runID = "se_" + strings.ReplaceAll(parent.ID, "-", "")
+	}
+	parent.ExternalRunID = runID
+	parent.Total = len(strategyNames)
+	parent.Progress = 0
+	parent.ResultPath = filepath.Join(app.settings.DataPath, "backtest_results", runID)
+	parent.SummaryJSON = mustJSON(map[string]any{
+		"start":          startDate,
+		"end":            endDate,
+		"benchmark":      stringParam(params, "benchmark", "000905.SH"),
+		"baseline":       stringParam(params, "baseline", "small_cap_quality"),
+		"strategy_count": len(strategyNames),
+		"planned_count":  len(strategyNames),
+		"success_count":  0,
+		"empty_count":    0,
+		"failed_count":   0,
+		"admit_count":    0,
+		"limited_count":  0,
+		"watch_count":    0,
+		"reject_count":   0,
+		"rows":           []any{},
+	})
+	parent.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(parent); err != nil {
+		return err
+	}
+	if err := app.taskService.Repository().UpdateStatus(parent); err != nil {
+		return err
+	}
+	for idx, strategyName := range strategyNames {
+		childParams := map[string]any{
+			"start_date": startDate,
+			"end_date":   endDate,
+			"strategies": strategyName,
+			"strategy":   strategyName,
+			"baseline":   stringParam(params, "baseline", "small_cap_quality"),
+			"benchmark":  stringParam(params, "benchmark", "000905.SH"),
+			"slippage":   numberParam(params, "slippage", 0.002),
+		}
+		paramsData, err := json.Marshal(childParams)
+		if err != nil {
+			return err
+		}
+		child := task.Task{
+			ID:            task.NewID(),
+			Name:          app.strategyDisplayName(strategyName),
+			TaskType:      task.TypeStrategyEvaluation,
+			Status:        task.StatusCreated,
+			Progress:      0,
+			ParamsJSON:    string(paramsData),
+			WorkerType:    "python",
+			ExternalRunID: runID,
+			ParentID:      parent.ID,
+			GroupRunID:    runID,
+			SubtaskKey:    strategyName,
+			SubtaskName:   app.strategyDisplayName(strategyName),
+			Sequence:      idx + 1,
+			Total:         len(strategyNames),
+			MaxAttempts:   2,
+			CreatedAt:     now.Add(time.Duration(idx) * time.Millisecond),
+			UpdatedAt:     now,
+		}
+		if err := app.taskService.Repository().Create(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type portfolioCandidatePlan struct {
@@ -1346,6 +1464,21 @@ func (app *App) resolvePortfolioStrategyNames(value any) []string {
 	return names
 }
 
+func (app *App) resolveStrategyAdmissionNames(value any) []string {
+	selected := strategyParam(value)
+	if selected == "" || selected == "enabled" {
+		selected = "all"
+	}
+	return app.resolvePortfolioStrategyNames(selected)
+}
+
+func (app *App) strategyDisplayName(name string) string {
+	if strategy, ok := app.settings.Strategies[name]; ok && strings.TrimSpace(strategy.Label) != "" {
+		return strings.TrimSpace(strategy.Label)
+	}
+	return name
+}
+
 func (app *App) admittedPortfolioStrategyNames(names []string) ([]string, bool) {
 	if len(names) == 0 || app.database == nil || app.database.Conn() == nil {
 		return names, false
@@ -1464,6 +1597,24 @@ func (app *App) reconcileTaskStatus(t task.Task) task.Task {
 			if status != task.StatusRunning {
 				t.Status = status
 				t.FinishedAt = now
+			}
+			_ = app.taskService.Repository().UpdateStatus(t)
+			_ = app.taskService.Repository().UpdateRuntime(t)
+			return t
+		}
+	}
+	if t.TaskType == task.TypeStrategyEvaluation && t.ParentID == "" {
+		children, err := app.taskService.Repository().ListChildren(t.ID)
+		if err == nil && len(children) > 0 {
+			t.Progress = portfolioParentProgress(children)
+			t.SummaryJSON = app.strategyEvaluationSummaryForParent(t, children)
+			t.UpdatedAt = now
+			if t.Status == task.StatusRunning {
+				status := portfolioParentStatus(children)
+				if status != task.StatusRunning {
+					t.Status = status
+					t.FinishedAt = now
+				}
 			}
 			_ = app.taskService.Repository().UpdateStatus(t)
 			_ = app.taskService.Repository().UpdateRuntime(t)
@@ -2192,36 +2343,159 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 }
 
 func (app *App) startStrategyEvaluationTask(t task.Task) (task.DTO, error) {
-	runID := t.ExternalRunID
-	if runID == "" {
-		runID = "se_" + strings.ReplaceAll(t.ID, "-", "")
+	if t.ParentID != "" {
+		go func() {
+			updated, err := app.startStrategyEvaluationChildTaskSync(t)
+			if err != nil && updated.WorkerPID == 0 && updated.Status != task.StatusFailed {
+				now := time.Now()
+				updated.Status = task.StatusFailed
+				updated.Progress = 1
+				updated.ErrorMessage = err.Error()
+				updated.FinishedAt = now
+				updated.UpdatedAt = now
+				_ = app.taskService.Repository().UpdateRuntime(updated)
+			}
+		}()
+		deadline := time.Now().Add(750 * time.Millisecond)
+		for {
+			latest, err := app.taskService.Repository().Get(t.ID)
+			if err != nil {
+				return task.DTO{}, err
+			}
+			if latest.Status == task.StatusRunning || latest.Status == task.StatusFailed || latest.Status == task.StatusSuccess {
+				return task.ToDTO(latest), nil
+			}
+			if time.Now().After(deadline) {
+				return task.ToDTO(latest), nil
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
-	runPath := filepath.Join(app.settings.DataPath, "backtest_results", runID)
-	logPath := filepath.Join(runPath, "worker.log")
-	if err := os.MkdirAll(runPath, 0o755); err != nil {
-		return task.DTO{}, err
-	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	children, err := app.taskService.Repository().ListChildren(t.ID)
 	if err != nil {
 		return task.DTO{}, err
 	}
-	quantRoot := app.quantStockCorePath()
-	pythonPath := pythonPathForCore(quantRoot)
+	if len(children) == 0 {
+		if err := app.initializeStrategyEvaluation(t); err != nil {
+			return task.DTO{}, err
+		}
+		children, err = app.taskService.Repository().ListChildren(t.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+	}
+	now := time.Now()
+	for _, child := range children {
+		if child.Status == task.StatusCancelled || child.Status == task.StatusInterrupted {
+			child.Status = task.StatusCreated
+			child.Progress = 0
+			child.WorkerPID = 0
+			child.ErrorMessage = ""
+			child.StartedAt = time.Time{}
+			child.FinishedAt = time.Time{}
+			child.UpdatedAt = now
+			_ = app.taskService.Repository().UpdateRuntime(child)
+		}
+	}
+	children, err = app.taskService.Repository().ListChildren(t.ID)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	t.Status = task.StatusRunning
+	t.Progress = portfolioParentProgress(children)
+	t.WorkerPID = 0
+	t.ErrorMessage = ""
+	t.Total = len(children)
+	t.StartedAt = now
+	t.FinishedAt = time.Time{}
+	t.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
+		return task.DTO{}, err
+	}
+	go app.runStrategyEvaluationChildren(t)
+	return task.ToDTO(t), nil
+}
+
+func (app *App) runStrategyEvaluationChildren(parent task.Task) {
+	for {
+		latestParent, err := app.taskService.Repository().Get(parent.ID)
+		if err != nil {
+			app.finishStrategyEvaluationParent(parent, task.StatusFailed, err.Error(), nil)
+			return
+		}
+		if latestParent.Status != task.StatusRunning {
+			return
+		}
+		parent = latestParent
+		children, err := app.taskService.Repository().ListChildren(parent.ID)
+		if err != nil {
+			app.finishStrategyEvaluationParent(parent, task.StatusFailed, err.Error(), children)
+			return
+		}
+		next := firstRunnablePortfolioChild(children)
+		if next == nil {
+			app.finishStrategyEvaluationParent(parent, portfolioParentStatus(children), "", children)
+			return
+		}
+		child, err := app.startStrategyEvaluationChildTaskSync(*next)
+		if err != nil {
+			if child.ID == "" {
+				child = *next
+			}
+			if child.Status != task.StatusFailed && child.Status != task.StatusCancelled {
+				child.Status = task.StatusFailed
+				child.ErrorMessage = err.Error()
+				child.Progress = 1
+				child.WorkerPID = 0
+				child.FinishedAt = time.Now()
+				child.UpdatedAt = child.FinishedAt
+				_ = app.taskService.Repository().UpdateRuntime(child)
+			}
+		}
+		children, _ = app.taskService.Repository().ListChildren(parent.ID)
+		parent.Progress = portfolioParentProgress(children)
+		parent.SummaryJSON = app.strategyEvaluationSummaryForParent(parent, children)
+		parent.UpdatedAt = time.Now()
+		_ = app.taskService.Repository().UpdateStatus(parent)
+		_ = app.taskService.Repository().UpdateRuntime(parent)
+	}
+}
+
+func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, error) {
+	runID := t.GroupRunID
+	if runID == "" {
+		runID = t.ExternalRunID
+	}
+	if runID == "" {
+		return t, errors.New("strategy evaluation child requires group run id")
+	}
 	params := task.ToDTO(t).Params
 	startDate := stringParam(params, "start_date", "")
 	endDate := stringParam(params, "end_date", "")
-	if startDate == "" || endDate == "" {
-		_ = logFile.Close()
-		return task.DTO{}, errors.New("strategy evaluation requires start_date and end_date")
+	strategyName := stringParam(params, "strategy", t.SubtaskKey)
+	if startDate == "" || endDate == "" || strategyName == "" {
+		return t, errors.New("strategy evaluation child requires start_date, end_date and strategy")
 	}
+	runPath := filepath.Join(app.settings.DataPath, "backtest_results", runID, strategyName)
+	logPath := filepath.Join(runPath, "worker.log")
+	if err := os.MkdirAll(runPath, 0o755); err != nil {
+		return t, err
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return t, err
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
 	args := []string{
 		"scripts/evaluate_strategies.py",
 		"--start", startDate,
 		"--end", endDate,
-		"--strategies", strategyParam(params["strategies"]),
+		"--strategies", strategyName,
 		"--baseline", stringParam(params, "baseline", "small_cap_quality"),
 		"--benchmark", stringParam(params, "benchmark", "000905.SH"),
 		"--save", runID,
+		"--append-save",
 		"--db-path", filepath.Join(app.settings.DataPath, "meta.db"),
 		"--json",
 	}
@@ -2239,7 +2513,7 @@ func (app *App) startStrategyEvaluationTask(t task.Task) (task.DTO, error) {
 	)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
-		return task.DTO{}, err
+		return t, err
 	}
 	now := time.Now()
 	t.Status = task.StatusRunning
@@ -2248,40 +2522,95 @@ func (app *App) startStrategyEvaluationTask(t task.Task) (task.DTO, error) {
 	t.LogPath = logPath
 	t.WorkerPID = cmd.Process.Pid
 	t.ExternalRunID = runID
+	t.GroupRunID = runID
 	t.ErrorMessage = ""
+	t.Attempt++
 	t.StartedAt = now
+	t.FinishedAt = time.Time{}
 	t.UpdatedAt = now
 	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
 		_ = logFile.Close()
-		return task.DTO{}, err
+		return t, err
 	}
-	go app.waitStrategyEvaluation(cmd, logFile, t)
-	return task.ToDTO(t), nil
-}
-
-func (app *App) waitStrategyEvaluation(cmd *exec.Cmd, logFile *os.File, t task.Task) {
-	err := cmd.Wait()
+	waitErr := cmd.Wait()
 	_ = logFile.Close()
 	finishedAt := time.Now()
+	latest, latestErr := app.taskService.Repository().Get(t.ID)
+	if latestErr == nil && latest.Status == task.StatusCancelled {
+		return latest, nil
+	}
 	t.WorkerPID = 0
 	t.Progress = 1
 	t.UpdatedAt = finishedAt
 	t.FinishedAt = finishedAt
-	if err != nil {
+	if waitErr != nil {
 		t.Status = task.StatusFailed
-		t.ErrorMessage = err.Error()
+		t.ErrorMessage = waitErr.Error()
 		_ = app.taskService.Repository().UpdateRuntime(t)
-		return
+		return t, waitErr
 	}
 	t.Status = task.StatusSuccess
-	t.SummaryJSON = readStrategyEvaluationSummaryFromDB(app.database.Conn(), t.ExternalRunID)
-	if t.SummaryJSON == "" {
-		t.SummaryJSON = readStrategyEvaluationSummaryFromFile(t.ResultPath)
-	}
+	t.SummaryJSON = readStrategyEvaluationRowSummaryFromDB(app.database.Conn(), runID, strategyName)
+	_ = app.taskService.Repository().UpdateRuntime(t)
 	if t.SummaryJSON != "" {
 		_ = app.taskService.Repository().UpdateStatus(t)
 	}
-	_ = app.taskService.Repository().UpdateRuntime(t)
+	return t, nil
+}
+
+func (app *App) finishStrategyEvaluationParent(parent task.Task, status task.Status, message string, children []task.Task) {
+	now := time.Now()
+	parent.Status = status
+	parent.Progress = portfolioParentProgress(children)
+	if status == task.StatusSuccess {
+		parent.Progress = 1
+	}
+	parent.WorkerPID = 0
+	parent.ErrorMessage = message
+	parent.SummaryJSON = app.strategyEvaluationSummaryForParent(parent, children)
+	parent.FinishedAt = now
+	parent.UpdatedAt = now
+	_ = app.taskService.Repository().UpdateStatus(parent)
+	_ = app.taskService.Repository().UpdateRuntime(parent)
+}
+
+func (app *App) strategyEvaluationSummaryForParent(parent task.Task, children []task.Task) string {
+	summary := readStrategyEvaluationSummaryFromDB(app.database.Conn(), parent.ExternalRunID)
+	payload := map[string]any{}
+	if summary != "" {
+		_ = json.Unmarshal([]byte(summary), &payload)
+	} else if parent.SummaryJSON != "" {
+		_ = json.Unmarshal([]byte(parent.SummaryJSON), &payload)
+	}
+	successChildren := 0
+	failedChildren := 0
+	runningChildren := 0
+	for _, child := range children {
+		switch child.Status {
+		case task.StatusSuccess:
+			successChildren++
+		case task.StatusFailed, task.StatusCancelled, task.StatusInterrupted:
+			failedChildren++
+		case task.StatusRunning:
+			runningChildren++
+		}
+	}
+	payload["planned_count"] = len(children)
+	payload["completed_count"] = successChildren
+	payload["failed_task_count"] = failedChildren
+	payload["running_count"] = runningChildren
+	payload["progress"] = portfolioParentProgress(children)
+	if _, ok := payload["strategy_count"]; !ok {
+		payload["strategy_count"] = len(children)
+	}
+	if _, ok := payload["rows"]; !ok {
+		payload["rows"] = []any{}
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return parent.SummaryJSON
+	}
+	return string(out)
 }
 
 func (app *App) startPortfolioOptimizationTask(t task.Task) (task.DTO, error) {
@@ -2746,6 +3075,30 @@ func (app *App) CancelTask(id string) (task.DTO, error) {
 		t.Progress = portfolioParentProgress(children)
 		t.FinishedAt = time.Now()
 		t.UpdatedAt = t.FinishedAt
+		_ = app.taskService.Repository().UpdateRuntime(t)
+		return task.ToDTO(t), nil
+	}
+	if t.TaskType == task.TypeStrategyEvaluation && t.ParentID == "" {
+		children, _ := app.taskService.Repository().ListChildren(t.ID)
+		for _, child := range children {
+			if child.Status == task.StatusRunning && child.WorkerPID > 0 {
+				_ = worker.NewManager().Cancel(child.WorkerPID)
+				child.Status = task.StatusCancelled
+				child.WorkerPID = 0
+				child.ErrorMessage = "parent task cancelled"
+				child.FinishedAt = time.Now()
+				child.UpdatedAt = child.FinishedAt
+				_ = app.taskService.Repository().UpdateRuntime(child)
+			}
+		}
+		t.Status = task.StatusCancelled
+		t.WorkerPID = 0
+		t.ErrorMessage = "task cancelled"
+		t.Progress = portfolioParentProgress(children)
+		t.FinishedAt = time.Now()
+		t.UpdatedAt = t.FinishedAt
+		t.SummaryJSON = app.strategyEvaluationSummaryForParent(t, children)
+		_ = app.taskService.Repository().UpdateStatus(t)
 		_ = app.taskService.Repository().UpdateRuntime(t)
 		return task.ToDTO(t), nil
 	}
