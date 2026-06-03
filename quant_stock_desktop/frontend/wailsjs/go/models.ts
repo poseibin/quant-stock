@@ -27,11 +27,12 @@ export namespace config {
 	    }
 	}
 	export class Settings {
-	    workspace_path: string;
 	    data_path: string;
 	    default_initial_cash: number;
 	    default_rebalance_freq: number;
 	    tushare_token: string;
+	    deepseek_token: string;
+	    deepseek_model: string;
 	    strategies: Record<string, StrategySettings>;
 	    portfolio_risk: Record<string, any>;
 	    exit_rules: Record<string, any>;
@@ -42,11 +43,12 @@ export namespace config {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.workspace_path = source["workspace_path"];
 	        this.data_path = source["data_path"];
 	        this.default_initial_cash = source["default_initial_cash"];
 	        this.default_rebalance_freq = source["default_rebalance_freq"];
 	        this.tushare_token = source["tushare_token"];
+	        this.deepseek_token = source["deepseek_token"];
+	        this.deepseek_model = source["deepseek_model"];
 	        this.strategies = this.convertValues(source["strategies"], StrategySettings, true);
 	        this.portfolio_risk = source["portfolio_risk"];
 	        this.exit_rules = source["exit_rules"];
@@ -1308,6 +1310,14 @@ export namespace task {
 	    worker_pid: number;
 	    external_run_id: string;
 	    error_message: string;
+	    parent_id: string;
+	    group_run_id: string;
+	    subtask_key: string;
+	    subtask_name: string;
+	    sequence: number;
+	    total: number;
+	    attempt: number;
+	    max_attempts: number;
 	    created_at: string;
 	    queued_at: string;
 	    started_at: string;
@@ -1333,6 +1343,14 @@ export namespace task {
 	        this.worker_pid = source["worker_pid"];
 	        this.external_run_id = source["external_run_id"];
 	        this.error_message = source["error_message"];
+	        this.parent_id = source["parent_id"];
+	        this.group_run_id = source["group_run_id"];
+	        this.subtask_key = source["subtask_key"];
+	        this.subtask_name = source["subtask_name"];
+	        this.sequence = source["sequence"];
+	        this.total = source["total"];
+	        this.attempt = source["attempt"];
+	        this.max_attempts = source["max_attempts"];
 	        this.created_at = source["created_at"];
 	        this.queued_at = source["queued_at"];
 	        this.started_at = source["started_at"];

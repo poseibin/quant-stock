@@ -952,15 +952,71 @@ h1 {
   border-top-left-radius: 12px;
 }
 
+.taskFormCard {
+  padding: 22px 24px;
+}
+
+.taskFormGrid {
+  grid-template-columns:
+    minmax(180px, 1.15fr)
+    minmax(150px, 1fr)
+    minmax(150px, 1fr)
+    minmax(120px, 0.74fr)
+    minmax(140px, 0.86fr)
+    minmax(120px, 0.74fr)
+    minmax(330px, 1.45fr);
+  column-gap: 16px;
+  row-gap: 0;
+}
+
+.taskFormGrid .field input,
+.taskFormGrid .field select {
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 11px;
+}
+
 .formActionsBottom {
   display: flex;
+  gap: 14px;
   justify-content: flex-end;
   margin-top: 18px;
 }
 
-.formActionsBottom .primaryButton {
-  min-width: 132px;
+.taskActionsField {
+  align-self: end;
   margin-top: 0;
+}
+
+.formActionsBottom .secondaryButton,
+.formActionsBottom .primaryButton {
+  min-height: 44px;
+  margin-top: 0;
+  padding: 0 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 820;
+}
+
+.formActionsBottom .secondaryButton {
+  min-width: 140px;
+  color: #dbe5f8;
+  border-color: rgba(132, 150, 178, 0.28);
+  background: linear-gradient(180deg, rgba(27, 35, 50, 0.92), rgba(12, 18, 30, 0.94));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.formActionsBottom .secondaryButton:hover {
+  border-color: rgba(164, 184, 216, 0.42);
+  background: linear-gradient(180deg, rgba(36, 46, 64, 0.96), rgba(17, 25, 38, 0.96));
+}
+
+.formActionsBottom .primaryButton {
+  min-width: 180px;
+  color: #17110a;
+  border-color: rgba(255, 211, 106, 0.68);
+  background: linear-gradient(180deg, #ffd36a 0%, #ffb000 100%);
+  box-shadow: 0 12px 26px rgba(255, 176, 0, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.42);
 }
 
 .formTitle {
@@ -1000,8 +1056,9 @@ h1 {
 
 .runtimeConfigGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(240px, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 36px;
+  row-gap: 18px;
   align-items: end;
 }
 
@@ -1010,9 +1067,13 @@ h1 {
   margin-bottom: 0;
 }
 
-.runtimeConfigGrid .field:nth-child(4),
-.runtimeConfigGrid .field:nth-child(5) {
-  max-width: 220px;
+.runtimeFieldWide {
+  grid-column: auto;
+}
+
+.runtimeFieldCompact {
+  grid-column: auto;
+  max-width: 590px;
 }
 
 .field {
@@ -1030,6 +1091,7 @@ h1 {
 .field input,
 .field select {
   width: 100%;
+  min-width: 0;
   min-height: 48px;
   padding: 10px 13px;
   color: #eef2ff;
@@ -1202,6 +1264,11 @@ h1 {
   color: #ffd782;
 }
 
+.admissionBadge.limited {
+  background: rgba(74, 144, 226, 0.16);
+  color: #91c8ff;
+}
+
 .admissionBadge.reject {
   background: rgba(255, 93, 93, 0.14);
   color: #ff9a9a;
@@ -1367,9 +1434,16 @@ h1 {
 }
 
 .field em {
+  display: block;
+  min-height: 16px;
   color: #ff7d7d;
   font-size: 12px;
   font-style: normal;
+  line-height: 16px;
+}
+
+.field:not([data-invalid]) em {
+  visibility: hidden;
 }
 
 .primaryButton {
@@ -3185,9 +3259,108 @@ th {
   background: rgba(255, 59, 48, 0.1);
 }
 
+.aiAnalysisBox {
+  margin: 0;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(3, 8, 18, 0.34);
+  color: #e8edf8;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.aiLoopPanel {
+  display: grid;
+  gap: 14px;
+}
+
+.aiLoopGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.aiSuggestionCard,
+.aiNextEvalCard {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(3, 8, 18, 0.28);
+}
+
+.aiSuggestionCard.wide,
+.aiNextEvalCard {
+  grid-column: 1 / -1;
+}
+
+.miniCardTitle {
+  margin-bottom: 10px;
+  color: #eef2ff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.aiSuggestionCard ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  color: #cfd7e7;
+  line-height: 1.65;
+}
+
+.configDiffGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.configDiffGrid div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.configDiffGrid span {
+  display: block;
+  margin-bottom: 6px;
+  color: #8f9ab3;
+  font-size: 12px;
+}
+
+.configDiffGrid b {
+  display: block;
+  overflow: hidden;
+  color: #eef2ff;
+  font-size: 13px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactEmpty {
+  padding: 12px;
+}
+
 @media (max-width: 1320px) {
   .main {
     padding: 24px;
+  }
+
+  .taskFormGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 16px;
+  }
+
+  .taskActionsField {
+    grid-column: 2 / 4;
   }
 
   .dashboardMetricGrid {
@@ -3218,6 +3391,14 @@ th {
 
   .returnHeadline {
     padding-top: 0;
+  }
+
+  .runtimeFieldWide {
+    grid-column: auto;
+  }
+
+  .runtimeFieldCompact {
+    grid-column: auto;
   }
 }
 
@@ -3263,6 +3444,31 @@ th {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .runtimeConfigGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .taskFormGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .taskActionsField {
+    grid-column: 1 / -1;
+    justify-content: stretch;
+  }
+
+  .taskActionsField .secondaryButton,
+  .taskActionsField .primaryButton {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .runtimeFieldWide,
+  .runtimeFieldCompact {
+    grid-column: auto;
+    max-width: none;
+  }
+
   .returnHeadline b {
     font-size: 30px;
   }
@@ -3270,5 +3476,11 @@ th {
   .returnChart,
   .projectedLimitChart {
     height: 320px;
+  }
+}
+
+@media (max-width: 480px) {
+  .taskFormGrid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

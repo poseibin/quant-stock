@@ -7,6 +7,7 @@ declare global {
           GetSettings: () => Promise<SettingsResponse>
           SaveSettings: (settings: Settings) => Promise<SettingsResponse>
           ApplyPortfolioCandidate: (request: ApplyPortfolioCandidateRequest) => Promise<SettingsResponse>
+          AnalyzePortfolioTask: (id: string) => Promise<TaskDTO>
           CreateTask: (request: CreateTaskRequest) => Promise<TaskDTO>
           StartTask: (id: string) => Promise<TaskDTO>
           CancelTask: (id: string) => Promise<TaskDTO>
@@ -50,11 +51,12 @@ export interface AppInfo {
 }
 
 export interface Settings {
-  workspace_path: string
   data_path: string
   default_initial_cash: number
   default_rebalance_freq: number
   tushare_token: string
+  deepseek_token: string
+  deepseek_model: string
   strategies: Record<string, StrategySettings>
   portfolio_risk: Record<string, unknown>
   exit_rules: Record<string, unknown>
@@ -111,6 +113,14 @@ export interface TaskDTO {
   worker_pid: number
   external_run_id: string
   error_message: string
+  parent_id: string
+  group_run_id: string
+  subtask_key: string
+  subtask_name: string
+  sequence: number
+  total: number
+  attempt: number
+  max_attempts: number
   created_at: string
   queued_at: string
   started_at: string
@@ -371,11 +381,12 @@ export async function getSettings(): Promise<SettingsResponse> {
 
   return {
     settings: {
-      workspace_path: '/Users/kitty/IdeaProjects/lh/quant_stock_desktop',
-      data_path: '/Users/kitty/IdeaProjects/lh/quant_stock_desktop/data_store',
+      data_path: '/Users/kitty/Library/Application Support/QuantStockDesktop/data_store',
       default_initial_cash: 500000,
       default_rebalance_freq: 5,
       tushare_token: '',
+      deepseek_token: '',
+      deepseek_model: 'deepseek-v4-pro',
       strategies: defaultStrategies(),
       portfolio_risk: {
         max_industry_weight: 0.3,
@@ -423,6 +434,14 @@ export async function applyPortfolioCandidate(request: ApplyPortfolioCandidateRe
     return window.go.main.App.ApplyPortfolioCandidate(request)
   }
   return getSettings()
+}
+
+export async function analyzePortfolioTask(id: string): Promise<TaskDTO> {
+  if (window.go?.main?.App?.AnalyzePortfolioTask) {
+    return window.go.main.App.AnalyzePortfolioTask(id)
+  }
+  const task = mockTask({ name: id, task_type: 'portfolio_optimization', params: {} })
+  return { ...task, summary: { ai_analysis: '开发模式占位：连接桌面应用后可调用 DeepSeek 生成组合分析。' } }
 }
 
 export async function createTask(request: CreateTaskRequest): Promise<TaskDTO> {
@@ -814,6 +833,14 @@ function mockTask(request: CreateTaskRequest): TaskDTO {
     worker_pid: 0,
     external_run_id: `tm_mock_${Date.now()}`,
     error_message: '',
+    parent_id: '',
+    group_run_id: '',
+    subtask_key: '',
+    subtask_name: '',
+    sequence: 0,
+    total: 0,
+    attempt: 0,
+    max_attempts: 1,
     created_at: now,
     queued_at: '',
     started_at: '',

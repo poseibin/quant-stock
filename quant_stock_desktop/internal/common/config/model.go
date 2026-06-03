@@ -1,11 +1,12 @@
 package config
 
 type Settings struct {
-	WorkspacePath        string                      `json:"workspace_path"`
 	DataPath             string                      `json:"data_path"`
 	DefaultInitialCash   float64                     `json:"default_initial_cash"`
 	DefaultRebalanceFreq int                         `json:"default_rebalance_freq"`
 	TushareToken         string                      `json:"tushare_token"`
+	DeepSeekToken        string                      `json:"deepseek_token"`
+	DeepSeekModel        string                      `json:"deepseek_model"`
 	Strategies           map[string]StrategySettings `json:"strategies"`
 	PortfolioRisk        map[string]any              `json:"portfolio_risk"`
 	ExitRules            map[string]any              `json:"exit_rules"`

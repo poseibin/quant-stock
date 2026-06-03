@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,14 @@ func (db *DB) Migrate() error {
 			worker_pid INTEGER,
 			external_run_id TEXT,
 			error_message TEXT,
+			parent_id TEXT,
+			group_run_id TEXT,
+			subtask_key TEXT,
+			subtask_name TEXT,
+			sequence INTEGER NOT NULL DEFAULT 0,
+			total INTEGER NOT NULL DEFAULT 0,
+			attempt INTEGER NOT NULL DEFAULT 0,
+			max_attempts INTEGER NOT NULL DEFAULT 1,
 			created_at TEXT NOT NULL,
 			queued_at TEXT,
 			started_at TEXT,
@@ -190,6 +199,7 @@ func (db *DB) Migrate() error {
 			enabled INTEGER NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT '',
 			admission TEXT NOT NULL DEFAULT '',
+			admission_score REAL,
 			reason TEXT NOT NULL DEFAULT '',
 			start_date TEXT NOT NULL,
 			end_date TEXT NOT NULL,
@@ -203,12 +213,23 @@ func (db *DB) Migrate() error {
 			calmar REAL,
 			win_rate REAL,
 			n_days INTEGER,
+			month_count INTEGER,
+			monthly_win_rate REAL,
+			worst_month_return REAL,
+			positive_3m_rate REAL,
 			avg_turnover REAL,
 			avg_holdings REAL,
 			avg_total_mv REAL,
 			avg_amount REAL,
 			overlap_with_baseline REAL,
 			corr_with_baseline REAL,
+			return_score REAL,
+			drawdown_score REAL,
+			risk_adjusted_score REAL,
+			cost_score REAL,
+			capacity_score REAL,
+			stability_score REAL,
+			independence_score REAL,
 			error TEXT NOT NULL DEFAULT '',
 			generated_at TEXT NOT NULL,
 			payload_json TEXT NOT NULL,
@@ -354,9 +375,26 @@ func (db *DB) Migrate() error {
 		`ALTER TABLE pool_summary ADD COLUMN cum_return REAL NOT NULL DEFAULT 0;`,
 		`ALTER TABLE pool_summary ADD COLUMN n_closed INTEGER NOT NULL DEFAULT 0;`,
 		`ALTER TABLE time_machine_trades ADD COLUMN is_new INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE evaluation_tasks ADD COLUMN parent_id TEXT;`,
+		`ALTER TABLE evaluation_tasks ADD COLUMN group_run_id TEXT;`,
+		`ALTER TABLE evaluation_tasks ADD COLUMN subtask_key TEXT;`,
+		`ALTER TABLE evaluation_tasks ADD COLUMN subtask_name TEXT;`,
+		`ALTER TABLE evaluation_tasks ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE evaluation_tasks ADD COLUMN total INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE evaluation_tasks ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE evaluation_tasks ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1;`,
 	}
 	for _, statement := range alterStatements {
 		_, _ = db.conn.Exec(statement)
+	}
+	postAlterStatements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_parent_id ON evaluation_tasks(parent_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_group_run_id ON evaluation_tasks(group_run_id);`,
+	}
+	for _, statement := range postAlterStatements {
+		if _, err := db.conn.Exec(statement); err != nil {
+			return err
+		}
 	}
 	return db.migrateStrategyEvaluationSchema()
 }
@@ -385,7 +423,7 @@ func (db *DB) migrateStrategyEvaluationSchema() error {
 		return err
 	}
 	if columns["run_id"] {
-		return nil
+		return db.ensureStrategyEvaluationScoreColumns(columns)
 	}
 
 	_, err = db.conn.Exec(`
@@ -397,6 +435,7 @@ func (db *DB) migrateStrategyEvaluationSchema() error {
 			enabled INTEGER NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT '',
 			admission TEXT NOT NULL DEFAULT '',
+			admission_score REAL,
 			reason TEXT NOT NULL DEFAULT '',
 			start_date TEXT NOT NULL,
 			end_date TEXT NOT NULL,
@@ -410,12 +449,23 @@ func (db *DB) migrateStrategyEvaluationSchema() error {
 			calmar REAL,
 			win_rate REAL,
 			n_days INTEGER,
+			month_count INTEGER,
+			monthly_win_rate REAL,
+			worst_month_return REAL,
+			positive_3m_rate REAL,
 			avg_turnover REAL,
 			avg_holdings REAL,
 			avg_total_mv REAL,
 			avg_amount REAL,
 			overlap_with_baseline REAL,
 			corr_with_baseline REAL,
+			return_score REAL,
+			drawdown_score REAL,
+			risk_adjusted_score REAL,
+			cost_score REAL,
+			capacity_score REAL,
+			stability_score REAL,
+			independence_score REAL,
 			error TEXT NOT NULL DEFAULT '',
 			generated_at TEXT NOT NULL,
 			payload_json TEXT NOT NULL,
@@ -429,4 +479,30 @@ func (db *DB) migrateStrategyEvaluationSchema() error {
 		CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_admission ON strategy_evaluation(admission);
 	`)
 	return err
+}
+
+func (db *DB) ensureStrategyEvaluationScoreColumns(columns map[string]bool) error {
+	addColumns := map[string]string{
+		"admission_score":     "REAL",
+		"month_count":         "INTEGER",
+		"monthly_win_rate":    "REAL",
+		"worst_month_return":  "REAL",
+		"positive_3m_rate":    "REAL",
+		"return_score":        "REAL",
+		"drawdown_score":      "REAL",
+		"risk_adjusted_score": "REAL",
+		"cost_score":          "REAL",
+		"capacity_score":      "REAL",
+		"stability_score":     "REAL",
+		"independence_score":  "REAL",
+	}
+	for name, ddl := range addColumns {
+		if columns[strings.ToLower(name)] {
+			continue
+		}
+		if _, err := db.conn.Exec(fmt.Sprintf("ALTER TABLE strategy_evaluation ADD COLUMN %s %s", name, ddl)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

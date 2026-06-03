@@ -100,13 +100,10 @@ export function SettingsPage() {
       <div className="formCard">
         <div className="formTitle">本地运行配置</div>
         <div className="runtimeConfigGrid">
-          <Field label="Workspace 路径" issue={findIssue(issues, 'workspace_path')}>
-            <input value={settings.workspace_path} onChange={(event) => update('workspace_path', event.target.value)} />
-          </Field>
-          <Field label="数据目录" issue={findIssue(issues, 'data_path')}>
+          <Field label="数据目录" issue={findIssue(issues, 'data_path')} className="runtimeField runtimeFieldWide">
             <input value={settings.data_path} onChange={(event) => update('data_path', event.target.value)} />
           </Field>
-          <Field label="Tushare Token" issue={findIssue(issues, 'tushare_token')}>
+          <Field label="Tushare Token" issue={findIssue(issues, 'tushare_token')} className="runtimeField runtimeFieldWide">
             <input
               type="password"
               placeholder="请输入 Tushare Token"
@@ -114,10 +111,24 @@ export function SettingsPage() {
               onChange={(event) => update('tushare_token', event.target.value)}
             />
           </Field>
-          <Field label="默认初始资金" issue={findIssue(issues, 'default_initial_cash')}>
+          <Field label="DeepSeek Token" issue={findIssue(issues, 'deepseek_token')} className="runtimeField runtimeFieldWide">
+            <input
+              type="password"
+              placeholder="请输入 DeepSeek Token"
+              value={settings.deepseek_token || ''}
+              onChange={(event) => update('deepseek_token', event.target.value)}
+            />
+          </Field>
+          <Field label="DeepSeek 模型" issue={findIssue(issues, 'deepseek_model')} className="runtimeField runtimeFieldWide">
+            <input
+              value={settings.deepseek_model || 'deepseek-v4-pro'}
+              onChange={(event) => update('deepseek_model', event.target.value)}
+            />
+          </Field>
+          <Field label="默认初始资金" issue={findIssue(issues, 'default_initial_cash')} className="runtimeField runtimeFieldCompact">
             <input type="number" value={settings.default_initial_cash} onChange={(event) => update('default_initial_cash', Number(event.target.value))} />
           </Field>
-          <Field label="默认调仓频率" issue={findIssue(issues, 'default_rebalance_freq')}>
+          <Field label="默认调仓频率" issue={findIssue(issues, 'default_rebalance_freq')} className="runtimeField runtimeFieldCompact">
             <input type="number" value={settings.default_rebalance_freq} onChange={(event) => update('default_rebalance_freq', Number(event.target.value))} />
           </Field>
         </div>

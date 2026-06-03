@@ -317,6 +317,9 @@ func quantStockRoot(dataPath string) string {
 }
 
 func quantCorePython(projectRoot string) string {
+	if w := bundledWorkerPath(); w != "" {
+		return w
+	}
 	parent := filepath.Dir(projectRoot) // .../lh
 	candidates := []string{
 		filepath.Join(projectRoot, ".venv", "bin", "python"),
@@ -328,6 +331,24 @@ func quantCorePython(projectRoot string) string {
 		}
 	}
 	return "python3"
+}
+
+func bundledWorkerPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return ""
+	}
+	macosDir := filepath.Dir(exe)
+	contentsDir := filepath.Dir(macosDir)
+	candidate := filepath.Join(contentsDir, "Resources", "quant_worker", "quant_worker")
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate
+	}
+	return ""
 }
 
 func logDesktopSignal(logPath string, format string, args ...any) {

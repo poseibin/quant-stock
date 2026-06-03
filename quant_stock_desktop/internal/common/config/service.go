@@ -23,15 +23,11 @@ func (service *Service) WithDB(db *sql.DB) *Service {
 }
 
 func DefaultSettings(homeDir string) Settings {
-	workspacePath, err := os.Getwd()
-	if err != nil {
-		workspacePath = filepath.Join(homeDir, "QuantStockDesktop")
-	}
 	return normalize(Settings{
-		WorkspacePath:        workspacePath,
-		DataPath:             filepath.Join(filepath.Dir(workspacePath), "data_store"),
+		DataPath:             defaultDataPathForHome(homeDir),
 		DefaultInitialCash:   500000,
 		DefaultRebalanceFreq: 5,
+		DeepSeekModel:        "deepseek-v4-pro",
 		Strategies:           defaultStrategies(),
 		PortfolioRisk:        defaultPortfolioRisk(),
 		ExitRules:            defaultExitRules(),
@@ -51,14 +47,11 @@ func (service *Service) Load(defaults Settings) (Settings, error) {
 		_ = service.Save(settings)
 		return settings, nil
 	}
-	return normalize(defaults), nil
+	return normalize(cloneSettings(defaults)), nil
 }
 
 func (service *Service) Save(settings Settings) error {
 	settings = normalize(settings)
-	if err := os.MkdirAll(settings.WorkspacePath, 0o755); err != nil {
-		return err
-	}
 	if err := os.MkdirAll(settings.DataPath, 0o755); err != nil {
 		return err
 	}
@@ -74,7 +67,7 @@ func (service *Service) loadFromDB(defaults Settings) (Settings, error) {
 	if err := row.Scan(&value); err != nil {
 		return Settings{}, err
 	}
-	settings := defaults
+	settings := cloneSettings(defaults)
 	if err := json.Unmarshal([]byte(value), &settings); err != nil {
 		return Settings{}, err
 	}
@@ -97,7 +90,7 @@ func (service *Service) Validate(settings Settings) []ValidationIssue {
 	checkDir := func(field string, path string) {
 		info, err := os.Stat(path)
 		if err != nil {
-			issues = append(issues, ValidationIssue{Field: field, Message: "路径不存在，保存配置后会自动创建"})
+			issues = append(issues, ValidationIssue{Field: field, Message: "路径不存在，请先创建目录"})
 			return
 		}
 		if !info.IsDir() {
@@ -106,7 +99,6 @@ func (service *Service) Validate(settings Settings) []ValidationIssue {
 	}
 
 	settings = normalize(settings)
-	checkDir("workspace_path", settings.WorkspacePath)
 	checkDir("data_path", settings.DataPath)
 
 	if settings.DefaultInitialCash <= 0 {
@@ -131,14 +123,17 @@ func (service *Service) Validate(settings Settings) []ValidationIssue {
 }
 
 func normalize(settings Settings) Settings {
-	if settings.DataPath == "" && settings.WorkspacePath != "" {
-		settings.DataPath = filepath.Join(filepath.Dir(settings.WorkspacePath), "data_store")
+	if settings.DataPath == "" {
+		settings.DataPath = defaultDataPath()
 	}
 	if settings.DefaultInitialCash == 0 {
 		settings.DefaultInitialCash = 500000
 	}
 	if settings.DefaultRebalanceFreq == 0 {
 		settings.DefaultRebalanceFreq = 5
+	}
+	if settings.DeepSeekModel == "" {
+		settings.DeepSeekModel = "deepseek-v4-pro"
 	}
 	settings.Strategies = mergeStrategies(defaultStrategies(), settings.Strategies)
 	if settings.PortfolioRisk == nil {
@@ -148,6 +143,36 @@ func normalize(settings Settings) Settings {
 		settings.ExitRules = defaultExitRules()
 	}
 	return settings
+}
+
+func defaultDataPath() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join("data_store")
+	}
+	return defaultDataPathForHome(homeDir)
+}
+
+func defaultDataPathForHome(homeDir string) string {
+	return filepath.Join(homeDir, "Library", "Application Support", "QuantStockDesktop", "data_store")
+}
+
+func cloneSettings(settings Settings) Settings {
+	settings.Strategies = cloneStrategies(settings.Strategies)
+	settings.PortfolioRisk = cloneAnyMap(settings.PortfolioRisk)
+	settings.ExitRules = cloneAnyMap(settings.ExitRules)
+	return settings
+}
+
+func cloneStrategies(strategies map[string]StrategySettings) map[string]StrategySettings {
+	if strategies == nil {
+		return nil
+	}
+	out := make(map[string]StrategySettings, len(strategies))
+	for name, strategy := range strategies {
+		out[name] = cloneStrategySettings(strategy)
+	}
+	return out
 }
 
 func mergeStrategies(defaults map[string]StrategySettings, current map[string]StrategySettings) map[string]StrategySettings {

@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -99,12 +104,23 @@ func (app *App) GetSettings() SettingsResponse {
 }
 
 func (app *App) SaveSettings(settings config.Settings) SettingsResponse {
-	if settings.DataPath == "" && settings.WorkspacePath != "" {
-		settings.DataPath = filepath.Join(settings.WorkspacePath, "data_store")
+	if strings.TrimSpace(settings.DataPath) == "" {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			settings.DataPath = config.DefaultSettings(homeDir).DataPath
+		} else {
+			settings.DataPath = app.settings.DataPath
+		}
 	}
-	previousWorkspace := app.settings.WorkspacePath
+	issues := app.configService.Validate(settings)
+	if len(issues) > 0 {
+		return SettingsResponse{
+			Settings: settings,
+			Issues:   issues,
+		}
+	}
+	previousDataPath := app.settings.DataPath
 	app.settings = settings
-	if settings.WorkspacePath != previousWorkspace {
+	if settings.DataPath != previousDataPath {
 		_ = app.reopenDatabase()
 	} else {
 		_ = app.ensureDatabase()
@@ -630,6 +646,7 @@ func enrichStrategyEvaluationSummary(payload map[string]any) {
 	empty := 0
 	failed := 0
 	admit := 0
+	limited := 0
 	watch := 0
 	reject := 0
 	for _, item := range rows {
@@ -645,6 +662,8 @@ func enrichStrategyEvaluationSummary(payload map[string]any) {
 		switch row["admission"] {
 		case "可启用":
 			admit++
+		case "限制启用":
+			limited++
 		case "继续观察":
 			watch++
 		case "暂不启用":
@@ -656,6 +675,7 @@ func enrichStrategyEvaluationSummary(payload map[string]any) {
 	payload["empty_count"] = empty
 	payload["failed_count"] = failed
 	payload["admit_count"] = admit
+	payload["limited_count"] = limited
 	payload["watch_count"] = watch
 	payload["reject_count"] = reject
 }
@@ -670,28 +690,52 @@ func readPortfolioOptimizationSummaryFromDB(db *sql.DB, runID string) string {
 	if err := json.Unmarshal([]byte(summaryJSON), &payload); err != nil {
 		payload = map[string]any{}
 	}
-	rows, err := db.Query(`SELECT payload_json FROM portfolio_optimization_candidates
-		WHERE run_id = ? ORDER BY rank`, runID)
+	rows, err := db.Query(`SELECT rank, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json FROM portfolio_optimization_candidates
+		WHERE run_id = ? ORDER BY CASE WHEN rank > 0 THEN 0 ELSE 1 END, rank, score DESC`, runID)
 	if err != nil {
 		return ""
 	}
 	defer rows.Close()
+	topN := int(numberParam(payload, "top_n", 40))
+	if topN <= 0 {
+		topN = 40
+	}
 	items := make([]any, 0)
+	finishedCount := 0
 	for rows.Next() {
+		var rank int
+		var score float64
+		var annualReturn, maxDrawdown, sharpe, calmar, avgTurnover, avgHoldings, avgTotalMV, avgAmount sql.NullFloat64
 		var payloadJSON string
-		if err := rows.Scan(&payloadJSON); err != nil {
+		if err := rows.Scan(&rank, &score, &annualReturn, &maxDrawdown, &sharpe, &calmar, &avgTurnover, &avgHoldings, &avgTotalMV, &avgAmount, &payloadJSON); err != nil {
 			return ""
 		}
 		var item map[string]any
 		if err := json.Unmarshal([]byte(payloadJSON), &item); err == nil {
-			items = append(items, item)
+			finishedCount++
+			item["rank"] = rank
+			item["score"] = score
+			overlayNullableFloat(item, "annual_return", annualReturn)
+			overlayNullableFloat(item, "max_drawdown", maxDrawdown)
+			overlayNullableFloat(item, "sharpe", sharpe)
+			overlayNullableFloat(item, "calmar", calmar)
+			overlayNullableFloat(item, "avg_turnover", avgTurnover)
+			overlayNullableFloat(item, "avg_holdings", avgHoldings)
+			overlayNullableFloat(item, "avg_total_mv", avgTotalMV)
+			overlayNullableFloat(item, "avg_amount", avgAmount)
+			if len(items) < topN {
+				items = append(items, item)
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return ""
 	}
 	payload["rows"] = items
-	payload["candidate_count"] = len(items)
+	payload["finished_candidate_count"] = finishedCount
+	if _, ok := payload["candidate_count"]; !ok {
+		payload["candidate_count"] = len(items)
+	}
 	if len(items) > 0 {
 		if top, ok := items[0].(map[string]any); ok {
 			payload["best_name"] = top["name"]
@@ -903,7 +947,479 @@ func (app *App) CreateTask(req task.CreateRequest) (task.DTO, error) {
 	if err := app.ensureTaskService(); err != nil {
 		return task.DTO{}, err
 	}
-	return app.taskService.Create(req)
+	dto, err := app.taskService.Create(req)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	if req.TaskType == task.TypePortfolioOptimization {
+		parent, err := app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		if err := app.initializePortfolioEvaluation(parent); err != nil {
+			return task.DTO{}, err
+		}
+		parent, err = app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		return task.ToDTO(parent), nil
+	}
+	return dto, nil
+}
+
+type portfolioCandidatePlan struct {
+	ID               string             `json:"candidate_id"`
+	Name             string             `json:"name"`
+	Weights          map[string]float64 `json:"weights"`
+	ExitArchitecture map[string]any     `json:"exit_architecture"`
+	PositionRule     map[string]any     `json:"position_rule"`
+	RebalanceFreq    int                `json:"rebalance_freq"`
+	RiskRule         map[string]any     `json:"risk_rule"`
+}
+
+type portfolioBaseGroup struct {
+	Name  string
+	Items []portfolioCandidatePlan
+}
+
+func (app *App) initializePortfolioEvaluation(parent task.Task) error {
+	if app.database == nil {
+		if err := app.ensureDatabase(); err != nil {
+			return err
+		}
+	}
+	params := task.ToDTO(parent).Params
+	startDate := stringParam(params, "start_date", "")
+	endDate := stringParam(params, "end_date", "")
+	if startDate == "" || endDate == "" {
+		return errors.New("portfolio evaluation requires start_date and end_date")
+	}
+	objective := stringParam(params, "objective", "平衡")
+	benchmark := stringParam(params, "benchmark", "000905.SH")
+	topN := int(numberParam(params, "top_n", 40))
+	maxCandidates := int(numberParam(params, "max_candidates", 0))
+	strategyNames := app.resolvePortfolioStrategyNames(params["strategies"])
+	admissionFiltered := false
+	if admittedNames, ok := app.admittedPortfolioStrategyNames(strategyNames); ok {
+		strategyNames = admittedNames
+		admissionFiltered = true
+	}
+	candidates := app.generatePortfolioCandidatesFromNames(strategyNames, objective, maxCandidates)
+	if len(candidates) == 0 {
+		return errors.New("no portfolio candidates generated")
+	}
+
+	now := time.Now()
+	parent.Total = len(candidates)
+	parent.Progress = 0
+	parent.SummaryJSON = mustJSON(map[string]any{
+		"start":           startDate,
+		"end":             endDate,
+		"objective":       objective,
+		"benchmark":       benchmark,
+		"strategy_count":  len(strategyNames),
+		"candidate_count": len(candidates),
+		"planned_count":   len(candidates),
+		"completed_count": 0,
+		"failed_count":    0,
+		"top_n":           topN,
+		"admission_used":  admissionFiltered,
+		"rows":            []any{},
+	})
+	parent.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(parent); err != nil {
+		return err
+	}
+	if err := app.taskService.Repository().UpdateStatus(parent); err != nil {
+		return err
+	}
+	if err := app.writePortfolioRunPlan(parent.ExternalRunID, startDate, endDate, objective, benchmark, len(strategyNames), topN, candidates); err != nil {
+		return err
+	}
+
+	for idx, candidate := range candidates {
+		childParams := map[string]any{
+			"start_date":        startDate,
+			"end_date":          endDate,
+			"candidate_id":      candidate.ID,
+			"candidate_name":    candidate.Name,
+			"weights":           candidate.Weights,
+			"entry":             map[string]any{"type": "strategy_weight_mix", "weights": candidate.Weights},
+			"exit_architecture": candidate.ExitArchitecture,
+			"position_rule":     candidate.PositionRule,
+			"rebalance_freq":    candidate.RebalanceFreq,
+			"risk_rule":         candidate.RiskRule,
+			"scheme":            candidate.toSchemePayload(),
+			"objective":         objective,
+			"benchmark":         benchmark,
+			"slippage":          numberParam(params, "slippage", 0.002),
+		}
+		paramsData, err := json.Marshal(childParams)
+		if err != nil {
+			return err
+		}
+		child := task.Task{
+			ID:            task.NewID(),
+			Name:          candidate.Name,
+			TaskType:      task.TypePortfolioOptimization,
+			Status:        task.StatusCreated,
+			Progress:      0,
+			ParamsJSON:    string(paramsData),
+			WorkerType:    "python",
+			ExternalRunID: parent.ExternalRunID,
+			ParentID:      parent.ID,
+			GroupRunID:    parent.ExternalRunID,
+			SubtaskKey:    candidate.ID,
+			SubtaskName:   candidate.Name,
+			Sequence:      idx + 1,
+			Total:         len(candidates),
+			MaxAttempts:   2,
+			CreatedAt:     now.Add(time.Duration(idx) * time.Millisecond),
+			UpdatedAt:     now,
+		}
+		if err := app.taskService.Repository().Create(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (app *App) writePortfolioRunPlan(runID string, startDate string, endDate string, objective string, benchmark string, strategyCount int, topN int, candidates []portfolioCandidatePlan) error {
+	if runID == "" {
+		return errors.New("portfolio run id is required")
+	}
+	summary := mustJSON(map[string]any{
+		"start":           startDate,
+		"end":             endDate,
+		"objective":       objective,
+		"benchmark":       benchmark,
+		"strategy_count":  strategyCount,
+		"candidate_count": len(candidates),
+		"planned_count":   len(candidates),
+		"completed_count": 0,
+		"failed_count":    0,
+		"top_n":           topN,
+		"rows":            []any{},
+	})
+	_, err := app.database.Conn().Exec(`INSERT INTO portfolio_optimization_runs(
+		run_id, start_date, end_date, objective, benchmark, strategy_count,
+		viable_count, candidate_count, top_n, generated_at, summary_json,
+		created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, datetime('now'), datetime('now'))
+	ON CONFLICT(run_id) DO UPDATE SET
+		start_date = excluded.start_date,
+		end_date = excluded.end_date,
+		objective = excluded.objective,
+		benchmark = excluded.benchmark,
+		strategy_count = excluded.strategy_count,
+		candidate_count = excluded.candidate_count,
+		top_n = excluded.top_n,
+		generated_at = excluded.generated_at,
+		summary_json = excluded.summary_json,
+		updated_at = excluded.updated_at`,
+		runID, startDate, endDate, objective, benchmark, strategyCount, len(candidates), topN, time.Now().Format(time.RFC3339), summary)
+	return err
+}
+
+func (app *App) generatePortfolioCandidates(value any, objective string, maxCandidates int) []portfolioCandidatePlan {
+	names := app.resolvePortfolioStrategyNames(value)
+	if admittedNames, ok := app.admittedPortfolioStrategyNames(names); ok {
+		names = admittedNames
+	}
+	return app.generatePortfolioCandidatesFromNames(names, objective, maxCandidates)
+}
+
+func (app *App) generatePortfolioCandidatesFromNames(names []string, objective string, maxCandidates int) []portfolioCandidatePlan {
+	labels := func(name string) string {
+		if strategy, ok := app.settings.Strategies[name]; ok && strings.TrimSpace(strategy.Label) != "" {
+			return strategy.Label
+		}
+		return name
+	}
+	candidates := make([]portfolioCandidatePlan, 0)
+	baseGroups := []portfolioBaseGroup{
+		{Name: "single"},
+		{Name: "core"},
+		{Name: "pair"},
+		{Name: "triple"},
+		{Name: "objective"},
+	}
+	seenWeights := map[string]bool{}
+	addBase := func(groupName string, name string, weights map[string]float64) {
+		weights = normalizeWeights(weights)
+		if len(weights) == 0 {
+			return
+		}
+		keyData, _ := json.Marshal(weights)
+		key := string(keyData)
+		if seenWeights[key] {
+			return
+		}
+		seenWeights[key] = true
+		item := portfolioCandidatePlan{
+			Name:    name,
+			Weights: weights,
+		}
+		for idx := range baseGroups {
+			if baseGroups[idx].Name == groupName {
+				baseGroups[idx].Items = append(baseGroups[idx].Items, item)
+				return
+			}
+		}
+	}
+	for _, name := range names {
+		addBase("single", "单策略-"+labels(name), map[string]float64{name: 1})
+	}
+	core := ""
+	for _, name := range names {
+		if name == "small_cap_quality" {
+			core = name
+			break
+		}
+	}
+	if core == "" && len(names) > 0 {
+		core = names[0]
+	}
+	if core != "" {
+		for _, other := range names {
+			if other != core {
+				addBase("core", "核心增强-"+labels(core)+"+"+labels(other), map[string]float64{core: 0.65, other: 0.35})
+			}
+		}
+	}
+	for i := 0; i < len(names); i++ {
+		for j := i + 1; j < len(names); j++ {
+			addBase("pair", "双策略等权-"+labels(names[i])+"+"+labels(names[j]), map[string]float64{names[i]: 1, names[j]: 1})
+		}
+	}
+	for i := 0; i < len(names); i++ {
+		for j := i + 1; j < len(names); j++ {
+			for k := j + 1; k < len(names); k++ {
+				addBase("triple", "三策略等权-"+labels(names[i])+"+"+labels(names[j])+"+"+labels(names[k]), map[string]float64{names[i]: 1, names[j]: 1, names[k]: 1})
+			}
+		}
+	}
+	objectiveSets := map[string][]string{
+		"稳健": {"dividend_low_vol", "garp_quality", "forecast_revision"},
+		"进攻": {"forecast_revision", "trend_quality", "moneyflow_pullback", "small_cap_quality"},
+		"平衡": {"small_cap_quality", "forecast_revision", "garp_quality", "dividend_low_vol"},
+	}
+	if preferred, ok := objectiveSets[objective]; ok {
+		weights := map[string]float64{}
+		for _, name := range preferred {
+			if containsString(names, name) {
+				weights[name] = 1
+			}
+		}
+		addBase("objective", objective+"核心方案", weights)
+	}
+	baseCandidates := interleaveBaseGroups(baseGroups)
+	exitPlans := app.portfolioExitPlans(objective)
+	rebalanceFreqs := []int{5}
+	if objective == "稳健" {
+		rebalanceFreqs = []int{5, 20}
+	} else if objective == "进攻" {
+		rebalanceFreqs = []int{1, 5}
+	}
+	seenScheme := map[string]bool{}
+	for _, exitPlan := range exitPlans {
+		for _, rebalanceFreq := range rebalanceFreqs {
+			for _, base := range baseCandidates {
+				if maxCandidates > 0 && len(candidates) >= maxCandidates {
+					return candidates
+				}
+				candidate := base
+				candidate.RebalanceFreq = rebalanceFreq
+				candidate.ExitArchitecture = cloneMap(exitPlan)
+				candidate.PositionRule = map[string]any{"type": "score_weighted_equal_cap", "max_weight": 0.1, "min_position_count": 3}
+				candidate.RiskRule = map[string]any{"portfolio_risk": app.settings.PortfolioRisk}
+				keyData, _ := json.Marshal(candidate.toSchemePayload())
+				key := string(keyData)
+				if seenScheme[key] {
+					continue
+				}
+				seenScheme[key] = true
+				candidate.ID = fmt.Sprintf("scheme_%03d", len(candidates)+1)
+				candidate.Name = fmt.Sprintf("%s / %s / %s", base.Name, rebalanceLabel(rebalanceFreq), exitLabel(exitPlan))
+				candidates = append(candidates, candidate)
+			}
+		}
+	}
+	return candidates
+}
+
+func interleaveBaseGroups(groups []portfolioBaseGroup) []portfolioCandidatePlan {
+	out := make([]portfolioCandidatePlan, 0)
+	maxLen := 0
+	for _, group := range groups {
+		if len(group.Items) > maxLen {
+			maxLen = len(group.Items)
+		}
+	}
+	for index := 0; index < maxLen; index++ {
+		for _, group := range groups {
+			if index < len(group.Items) {
+				out = append(out, group.Items[index])
+			}
+		}
+	}
+	return out
+}
+
+func (candidate portfolioCandidatePlan) toSchemePayload() map[string]any {
+	return map[string]any{
+		"scheme_type":       "trading_scheme",
+		"name":              candidate.Name,
+		"entry":             map[string]any{"type": "strategy_weight_mix", "weights": candidate.Weights},
+		"exit_architecture": candidate.ExitArchitecture,
+		"position_rule":     candidate.PositionRule,
+		"rebalance_freq":    candidate.RebalanceFreq,
+		"risk_rule":         candidate.RiskRule,
+	}
+}
+
+func (app *App) portfolioExitPlans(objective string) []map[string]any {
+	baseSlippage := 0.003
+	if value, ok := app.settings.ExitRules["slippage"]; ok {
+		baseSlippage = numberParam(map[string]any{"slippage": value}, "slippage", baseSlippage)
+	}
+	plans := []map[string]any{
+		{"type": "rebalance_only", "label": "跌出目标池卖出", "enabled": false, "slippage": baseSlippage},
+		{"type": "stop_loss", "label": "跌出目标池+固定止损", "enabled": true, "stop_loss": -0.12, "slippage": baseSlippage},
+		{"type": "trailing_stop", "label": "跌出目标池+移动止盈", "enabled": true, "trailing_stop": -0.08, "trailing_exec": "next_open", "slippage": baseSlippage},
+		{"type": "stop_loss_trailing", "label": "跌出目标池+止损+移动止盈", "enabled": true, "stop_loss": -0.12, "trailing_stop": -0.08, "trailing_exec": "next_open", "slippage": baseSlippage},
+	}
+	if objective == "稳健" {
+		plans = append(plans, map[string]any{"type": "tight_risk", "label": "稳健止损+移动止盈", "enabled": true, "stop_loss": -0.08, "trailing_stop": -0.06, "trailing_exec": "next_open", "slippage": baseSlippage})
+	}
+	if objective == "进攻" {
+		plans = append(plans, map[string]any{"type": "wide_risk", "label": "进攻宽止损+移动止盈", "enabled": true, "stop_loss": -0.16, "trailing_stop": -0.1, "trailing_exec": "next_open", "slippage": baseSlippage})
+	}
+	return plans
+}
+
+func cloneMap(value map[string]any) map[string]any {
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[key] = item
+	}
+	return out
+}
+
+func rebalanceLabel(freq int) string {
+	switch freq {
+	case 1:
+		return "日调仓"
+	case 20:
+		return "月调仓"
+	default:
+		return "周调仓"
+	}
+}
+
+func exitLabel(plan map[string]any) string {
+	if label := strings.TrimSpace(fmt.Sprint(plan["label"])); label != "" && label != "<nil>" {
+		return label
+	}
+	return strings.TrimSpace(fmt.Sprint(plan["type"]))
+}
+
+func (app *App) resolvePortfolioStrategyNames(value any) []string {
+	selected := strategyParam(value)
+	names := make([]string, 0)
+	if selected == "all" || selected == "enabled" {
+		for name, strategy := range app.settings.Strategies {
+			if selected == "all" || strategy.Enabled {
+				names = append(names, name)
+			}
+		}
+	} else {
+		for _, item := range strings.Split(selected, ",") {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				names = append(names, item)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (app *App) admittedPortfolioStrategyNames(names []string) ([]string, bool) {
+	if len(names) == 0 || app.database == nil || app.database.Conn() == nil {
+		return names, false
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT strategy, admission
+		FROM strategy_evaluation
+		WHERE run_id = (
+			SELECT run_id
+			FROM strategy_evaluation
+			ORDER BY datetime(generated_at) DESC, datetime(updated_at) DESC
+			LIMIT 1
+		)`)
+	if err != nil {
+		return names, false
+	}
+	defer rows.Close()
+
+	allowed := map[string]bool{}
+	seen := false
+	for rows.Next() {
+		var strategyName string
+		var admission string
+		if err := rows.Scan(&strategyName, &admission); err != nil {
+			return names, false
+		}
+		seen = true
+		if strings.TrimSpace(admission) == "可启用" {
+			allowed[strategyName] = true
+		}
+	}
+	if err := rows.Err(); err != nil || !seen {
+		return names, false
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if allowed[name] {
+			out = append(out, name)
+		}
+	}
+	return out, true
+}
+
+func normalizeWeights(weights map[string]float64) map[string]float64 {
+	total := 0.0
+	for _, weight := range weights {
+		if weight > 0 {
+			total += weight
+		}
+	}
+	if total <= 0 {
+		return map[string]float64{}
+	}
+	out := make(map[string]float64, len(weights))
+	for name, weight := range weights {
+		if weight > 0 {
+			out[name] = weight / total
+		}
+	}
+	return out
+}
+
+func containsString(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func mustJSON(value any) string {
+	data, _ := json.Marshal(value)
+	return string(data)
 }
 
 func (app *App) ListTasks(query task.Query) ([]task.DTO, error) {
@@ -938,6 +1454,22 @@ func (app *App) reconcileTaskStatus(t task.Task) task.Task {
 	}
 
 	now := time.Now()
+	if t.TaskType == task.TypePortfolioOptimization && t.ParentID == "" {
+		children, err := app.taskService.Repository().ListChildren(t.ID)
+		if err == nil && len(children) > 0 {
+			status := portfolioParentStatus(children)
+			t.Progress = portfolioParentProgress(children)
+			t.SummaryJSON = app.portfolioSummaryForParent(t, children)
+			t.UpdatedAt = now
+			if status != task.StatusRunning {
+				t.Status = status
+				t.FinishedAt = now
+			}
+			_ = app.taskService.Repository().UpdateStatus(t)
+			_ = app.taskService.Repository().UpdateRuntime(t)
+			return t
+		}
+	}
 	if app.database != nil && t.ExternalRunID != "" {
 		var summary string
 		switch t.TaskType {
@@ -1018,6 +1550,566 @@ func (app *App) GetTaskLog(id string, tailBytes int) (string, error) {
 	return string(data), nil
 }
 
+func (app *App) AnalyzePortfolioTask(id string) (task.DTO, error) {
+	if err := app.ensureTaskService(); err != nil {
+		return task.DTO{}, err
+	}
+	t, err := app.taskService.Repository().Get(id)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	if t.TaskType != task.TypePortfolioOptimization || t.ParentID != "" {
+		return task.DTO{}, errors.New("只能分析方案评估父任务")
+	}
+	children, err := app.taskService.Repository().ListChildren(t.ID)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	planned, succeeded, running, failed := portfolioAnalysisCoverage(children)
+	if planned == 0 {
+		return task.DTO{}, errors.New("方案评估还没有初始化子任务")
+	}
+	if running > 0 {
+		return task.DTO{}, errors.New("方案评估还在运行，等全部子任务完成后再做 AI 分析")
+	}
+	if succeeded != planned {
+		return task.DTO{}, fmt.Errorf("方案评估结果不完整：计划 %d 个，成功 %d 个，失败/取消 %d 个。请先重跑失败子任务，否则模型无法判断完整方案效果", planned, succeeded, failed)
+	}
+	token := strings.TrimSpace(app.settings.DeepSeekToken)
+	if token == "" {
+		return task.DTO{}, errors.New("请先在设置里填写 DeepSeek Token")
+	}
+	contextPayload, err := app.buildPortfolioAnalysisContext(t, children)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	analysis, recommendation, err := app.callDeepSeekForPortfolioAnalysis(contextPayload)
+	now := time.Now()
+	summary := map[string]any{}
+	if t.SummaryJSON != "" {
+		_ = json.Unmarshal([]byte(t.SummaryJSON), &summary)
+	}
+	if err != nil {
+		summary["ai_analysis_error"] = err.Error()
+	} else {
+		summary["ai_analysis"] = analysis
+		summary["ai_recommendation"] = recommendation
+		if nextEval, ok := recommendation["next_eval_config"].(map[string]any); ok {
+			summary["ai_next_eval_config"] = normalizeNextEvalConfig(t, nextEval)
+		}
+		summary["ai_analysis_error"] = ""
+		summary["ai_analysis_model"] = app.deepSeekModel()
+		summary["ai_analysis_at"] = now.Format(time.RFC3339)
+	}
+	data, _ := json.Marshal(summary)
+	t.SummaryJSON = string(data)
+	t.UpdatedAt = now
+	_ = app.taskService.Repository().UpdateStatus(t)
+	if t.ExternalRunID != "" {
+		_, _ = app.database.Conn().Exec(`UPDATE portfolio_optimization_runs SET summary_json = ?, updated_at = datetime('now') WHERE run_id = ?`, string(data), t.ExternalRunID)
+	}
+	if err != nil {
+		return task.ToDTO(t), err
+	}
+	return task.ToDTO(t), nil
+}
+
+func portfolioAnalysisCoverage(children []task.Task) (planned int, succeeded int, running int, failed int) {
+	planned = len(children)
+	for _, child := range children {
+		switch child.Status {
+		case task.StatusSuccess:
+			succeeded++
+		case task.StatusRunning, task.StatusQueued, task.StatusCreated:
+			running++
+		case task.StatusFailed, task.StatusCancelled, task.StatusInterrupted:
+			failed++
+		}
+	}
+	return planned, succeeded, running, failed
+}
+
+func (app *App) buildPortfolioAnalysisContext(parent task.Task, children []task.Task) (map[string]any, error) {
+	params := task.ToDTO(parent).Params
+	runID := parent.ExternalRunID
+	topN := int(numberParam(params, "top_n", 40))
+	if topN <= 0 {
+		topN = 40
+	}
+	rows := make([]map[string]any, 0)
+	if app.database != nil && runID != "" {
+		dbRows, err := app.database.Conn().Query(`SELECT rank, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json
+			FROM portfolio_optimization_candidates
+			WHERE run_id = ?
+			ORDER BY CASE WHEN rank > 0 THEN rank ELSE 999999 END ASC, score DESC
+			LIMIT ?`, runID, topN)
+		if err != nil {
+			return nil, err
+		}
+		defer dbRows.Close()
+		for dbRows.Next() {
+			var rank int
+			var score float64
+			var annualReturn, maxDrawdown, sharpe, calmar, avgTurnover, avgHoldings, avgTotalMV, avgAmount sql.NullFloat64
+			var payloadJSON string
+			if err := dbRows.Scan(&rank, &score, &annualReturn, &maxDrawdown, &sharpe, &calmar, &avgTurnover, &avgHoldings, &avgTotalMV, &avgAmount, &payloadJSON); err != nil {
+				return nil, err
+			}
+			item := map[string]any{}
+			if err := json.Unmarshal([]byte(payloadJSON), &item); err != nil {
+				continue
+			}
+			item["rank"] = rank
+			item["score"] = score
+			overlayNullableFloat(item, "annual_return", annualReturn)
+			overlayNullableFloat(item, "max_drawdown", maxDrawdown)
+			overlayNullableFloat(item, "sharpe", sharpe)
+			overlayNullableFloat(item, "calmar", calmar)
+			overlayNullableFloat(item, "avg_turnover", avgTurnover)
+			overlayNullableFloat(item, "avg_holdings", avgHoldings)
+			overlayNullableFloat(item, "avg_total_mv", avgTotalMV)
+			overlayNullableFloat(item, "avg_amount", avgAmount)
+			rows = append(rows, item)
+		}
+		if err := dbRows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	childItems := make([]map[string]any, 0, len(children))
+	for _, child := range children {
+		childItems = append(childItems, map[string]any{
+			"sequence":      child.Sequence,
+			"total":         child.Total,
+			"candidate_id":  child.SubtaskKey,
+			"name":          child.SubtaskName,
+			"status":        child.Status,
+			"progress":      child.Progress,
+			"attempt":       child.Attempt,
+			"max_attempts":  child.MaxAttempts,
+			"error_message": child.ErrorMessage,
+		})
+	}
+	strategyNames := map[string]bool{}
+	for _, row := range rows {
+		if weights, ok := row["weights"].(map[string]any); ok {
+			for name := range weights {
+				strategyNames[name] = true
+			}
+		}
+	}
+	selected := strategyParam(params["strategies"])
+	if selected == "all" || selected == "enabled" || selected == "" {
+		for name := range app.settings.Strategies {
+			strategyNames[name] = true
+		}
+	} else {
+		for _, name := range strings.Split(selected, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				strategyNames[name] = true
+			}
+		}
+	}
+	strategies := make([]map[string]any, 0, len(strategyNames))
+	for name := range strategyNames {
+		if strategy, ok := app.settings.Strategies[name]; ok {
+			strategies = append(strategies, map[string]any{
+				"name":      name,
+				"label":     strategy.Label,
+				"enabled":   strategy.Enabled,
+				"weight":    strategy.Weight,
+				"rebalance": strategy.Rebalance,
+				"universe":  strategy.Universe,
+				"filters":   strategy.Filters,
+				"selection": strategy.Selection,
+				"position":  strategy.Position,
+			})
+		}
+	}
+	sort.Slice(strategies, func(i, j int) bool {
+		return fmt.Sprint(strategies[i]["name"]) < fmt.Sprint(strategies[j]["name"])
+	})
+	parentSummary := map[string]any{}
+	if parent.SummaryJSON != "" {
+		_ = json.Unmarshal([]byte(parent.SummaryJSON), &parentSummary)
+	}
+	planned, succeeded, running, failed := portfolioAnalysisCoverage(children)
+	return map[string]any{
+		"task": map[string]any{
+			"id":       parent.ID,
+			"name":     parent.Name,
+			"run_id":   runID,
+			"status":   parent.Status,
+			"progress": parent.Progress,
+			"params":   params,
+			"summary":  parentSummary,
+		},
+		"coverage": map[string]any{
+			"planned":   planned,
+			"succeeded": succeeded,
+			"running":   running,
+			"failed":    failed,
+		},
+		"candidate_results":           rows,
+		"strategy_contribution_stats": buildStrategyContributionStats(rows),
+		"subtasks":                    childItems,
+		"strategy_rules":              strategies,
+		"portfolio_risk":              app.settings.PortfolioRisk,
+		"exit_rules":                  app.settings.ExitRules,
+	}, nil
+}
+
+func (app *App) callDeepSeekForPortfolioAnalysis(contextPayload map[string]any) (string, map[string]any, error) {
+	data, err := json.Marshal(contextPayload)
+	if err != nil {
+		return "", nil, err
+	}
+	userPrompt := `下面是一个量化方案评估任务的完整结构化结果和策略规则。candidate_results 是本轮全量候选交易方案结果，包含 entry、exit_architecture、position_rule、rebalance_freq、risk_rule；strategy_contribution_stats 是按入场策略聚合后的贡献统计。
+
+请只输出一个 JSON 对象，不要 Markdown 代码块，不要额外解释。格式如下：
+{
+  "analysis_md": "中文分析摘要，控制在 800 字以内，必须引用输入指标",
+  "diagnosis": ["为什么这轮表现好/不好"],
+  "keep": ["下一轮应保留的策略或规则"],
+  "change": ["下一轮应调整的策略、权重、过滤条件、调仓频率或风控"],
+  "remove": ["暂时剔除或降低权重的策略/规则"],
+  "validation_plan": ["必须通过新回测验证的假设"],
+  "next_eval_config": {
+    "name": "下一轮评估名称",
+    "task_type": "portfolio_optimization",
+    "params": {
+      "start_date": "YYYYMMDD",
+      "end_date": "YYYYMMDD",
+      "strategies": ["strategy_name"],
+      "objective": "稳健|平衡|进攻",
+      "max_candidates": 40,
+			"top_n": 40,
+      "benchmark": "000905.SH",
+      "slippage": 0.003
+    }
+  }
+}
+
+要求：
+1. 哪些完整交易方案盈利性最好，必须同时引用入场策略、出场架构、调仓频率，并优先引用 total_return、annual_return、excess_annual_return、win_rate；
+2. 哪些规则拖累收益或风险，必须结合 max_drawdown、annual_volatility、sharpe、calmar、avg_turnover 判断；
+3. next_eval_config 必须是可以直接创建下一轮方案评估的参数；
+4. 不要编造数据，必须引用输入里的指标；如果 coverage 不是全成功，请在 diagnosis 中说明缺口，并不要给激进结论。
+
+JSON:
+` + string(data)
+	body := map[string]any{
+		"model": app.deepSeekModel(),
+		"messages": []map[string]string{
+			{"role": "system", "content": "你是量化策略研究员，擅长根据回测指标和策略规则做归因、风险诊断和下一轮实验设计。输出要简洁、具体、可验证。"},
+			{"role": "user", "content": userPrompt},
+		},
+		"thinking":         map[string]string{"type": "enabled"},
+		"reasoning_effort": "high",
+		"stream":           false,
+	}
+	requestBody, err := json.Marshal(body)
+	if err != nil {
+		return "", nil, err
+	}
+	req, err := http.NewRequestWithContext(app.ctx, http.MethodPost, "https://api.deepseek.com/chat/completions", bytes.NewReader(requestBody))
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(app.settings.DeepSeekToken))
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", nil, fmt.Errorf("DeepSeek 请求失败：HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", nil, err
+	}
+	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
+		return "", nil, errors.New("DeepSeek 返回为空")
+	}
+	raw := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	recommendation, err := parseDeepSeekJSON(raw)
+	if err != nil {
+		return raw, map[string]any{"analysis_md": raw}, nil
+	}
+	analysis := strings.TrimSpace(fmt.Sprint(recommendation["analysis_md"]))
+	if analysis == "" {
+		analysis = raw
+	}
+	return analysis, recommendation, nil
+}
+
+func parseDeepSeekJSON(raw string) (map[string]any, error) {
+	text := strings.TrimSpace(raw)
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start >= 0 && end > start {
+		text = text[start : end+1]
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func normalizeNextEvalConfig(parent task.Task, config map[string]any) map[string]any {
+	params := task.ToDTO(parent).Params
+	nextParams := map[string]any{}
+	if raw, ok := config["params"].(map[string]any); ok {
+		for key, value := range raw {
+			nextParams[key] = value
+		}
+	}
+	defaults := map[string]any{
+		"start_date":     params["start_date"],
+		"end_date":       params["end_date"],
+		"strategies":     params["strategies"],
+		"objective":      params["objective"],
+		"max_candidates": params["max_candidates"],
+		"top_n":          params["top_n"],
+		"benchmark":      params["benchmark"],
+		"slippage":       params["slippage"],
+	}
+	for key, value := range defaults {
+		if nextParams[key] == nil || fmt.Sprint(nextParams[key]) == "" {
+			nextParams[key] = value
+		}
+	}
+	if nextParams["objective"] == nil || fmt.Sprint(nextParams["objective"]) == "" {
+		nextParams["objective"] = "平衡"
+	}
+	if nextParams["max_candidates"] == nil {
+		nextParams["max_candidates"] = 40
+	}
+	if nextParams["top_n"] == nil {
+		nextParams["top_n"] = 40
+	}
+	if nextParams["benchmark"] == nil || fmt.Sprint(nextParams["benchmark"]) == "" {
+		nextParams["benchmark"] = "000905.SH"
+	}
+	if nextParams["slippage"] == nil {
+		nextParams["slippage"] = 0.003
+	}
+	name := strings.TrimSpace(fmt.Sprint(config["name"]))
+	if name == "" || name == "<nil>" {
+		name = parent.Name + " - 下一轮"
+	}
+	return map[string]any{
+		"name":      name,
+		"task_type": "portfolio_optimization",
+		"params":    nextParams,
+	}
+}
+
+func buildStrategyContributionStats(rows []map[string]any) []map[string]any {
+	type agg struct {
+		Name                string
+		Count               int
+		BestRank            int
+		BestCandidate       string
+		BestScore           float64
+		ScoreSum            float64
+		TotalReturnSum      float64
+		TotalReturnCount    int
+		AnnualSum           float64
+		AnnualCount         int
+		VolatilitySum       float64
+		VolatilityCount     int
+		DrawdownSum         float64
+		DrawdownCount       int
+		SharpeSum           float64
+		SharpeCount         int
+		WinRateSum          float64
+		WinRateCount        int
+		ExcessAnnualSum     float64
+		ExcessAnnualCount   int
+		SingleCandidateName string
+		SingleScore         float64
+		SingleTotalReturn   any
+		SingleAnnual        any
+		SingleDrawdown      any
+		SingleWinRate       any
+	}
+	stats := map[string]*agg{}
+	for _, row := range rows {
+		weights, ok := row["weights"].(map[string]any)
+		if !ok {
+			continue
+		}
+		score, _ := numericAny(row["score"])
+		rank := intNumericAny(row["rank"])
+		name := fmt.Sprint(row["name"])
+		for strategy, rawWeight := range weights {
+			weight, ok := numericAny(rawWeight)
+			if !ok || weight <= 0 {
+				continue
+			}
+			item := stats[strategy]
+			if item == nil {
+				item = &agg{Name: strategy, BestRank: 1 << 30}
+				stats[strategy] = item
+			}
+			item.Count++
+			item.ScoreSum += score
+			if rank > 0 && rank < item.BestRank {
+				item.BestRank = rank
+				item.BestCandidate = name
+				item.BestScore = score
+			}
+			if annual, ok := numericAny(row["annual_return"]); ok {
+				item.AnnualSum += annual
+				item.AnnualCount++
+			}
+			if totalReturn, ok := numericAny(row["total_return"]); ok {
+				item.TotalReturnSum += totalReturn
+				item.TotalReturnCount++
+			}
+			if volatility, ok := numericAny(row["annual_volatility"]); ok {
+				item.VolatilitySum += volatility
+				item.VolatilityCount++
+			}
+			if drawdown, ok := numericAny(row["max_drawdown"]); ok {
+				item.DrawdownSum += drawdown
+				item.DrawdownCount++
+			}
+			if sharpe, ok := numericAny(row["sharpe"]); ok {
+				item.SharpeSum += sharpe
+				item.SharpeCount++
+			}
+			if winRate, ok := numericAny(row["win_rate"]); ok {
+				item.WinRateSum += winRate
+				item.WinRateCount++
+			}
+			if excessAnnual, ok := numericAny(row["excess_annual_return"]); ok {
+				item.ExcessAnnualSum += excessAnnual
+				item.ExcessAnnualCount++
+			}
+			if len(weights) == 1 && weight > 0.99 {
+				item.SingleCandidateName = name
+				item.SingleScore = score
+				item.SingleTotalReturn = row["total_return"]
+				item.SingleAnnual = row["annual_return"]
+				item.SingleDrawdown = row["max_drawdown"]
+				item.SingleWinRate = row["win_rate"]
+			}
+		}
+	}
+	names := make([]string, 0, len(stats))
+	for name := range stats {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		item := stats[name]
+		bestRank := any(nil)
+		if item.BestRank < 1<<30 {
+			bestRank = item.BestRank
+		}
+		out = append(out, map[string]any{
+			"strategy":                 item.Name,
+			"candidate_count":          item.Count,
+			"avg_score":                safeAvg(item.ScoreSum, item.Count),
+			"avg_total_return":         safeAvgAny(item.TotalReturnSum, item.TotalReturnCount),
+			"best_rank":                bestRank,
+			"best_candidate":           item.BestCandidate,
+			"best_score":               item.BestScore,
+			"avg_annual_return":        safeAvgAny(item.AnnualSum, item.AnnualCount),
+			"avg_annual_volatility":    safeAvgAny(item.VolatilitySum, item.VolatilityCount),
+			"avg_max_drawdown":         safeAvgAny(item.DrawdownSum, item.DrawdownCount),
+			"avg_sharpe":               safeAvgAny(item.SharpeSum, item.SharpeCount),
+			"avg_win_rate":             safeAvgAny(item.WinRateSum, item.WinRateCount),
+			"avg_excess_annual_return": safeAvgAny(item.ExcessAnnualSum, item.ExcessAnnualCount),
+			"single_candidate":         item.SingleCandidateName,
+			"single_score":             item.SingleScore,
+			"single_total_return":      item.SingleTotalReturn,
+			"single_annual_return":     item.SingleAnnual,
+			"single_max_drawdown":      item.SingleDrawdown,
+			"single_win_rate":          item.SingleWinRate,
+		})
+	}
+	return out
+}
+
+func numericAny(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		next, err := typed.Float64()
+		return next, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func intNumericAny(value any) int {
+	if number, ok := numericAny(value); ok {
+		return int(number)
+	}
+	return 0
+}
+
+func safeAvg(sum float64, count int) float64 {
+	if count <= 0 {
+		return 0
+	}
+	return sum / float64(count)
+}
+
+func safeAvgAny(sum float64, count int) any {
+	if count <= 0 {
+		return nil
+	}
+	return sum / float64(count)
+}
+
+func (app *App) deepSeekModel() string {
+	model := strings.TrimSpace(app.settings.DeepSeekModel)
+	if model == "" {
+		return "deepseek-v4-pro"
+	}
+	return model
+}
+
+func nullableFloat(value sql.NullFloat64) any {
+	if value.Valid {
+		return value.Float64
+	}
+	return nil
+}
+
+func overlayNullableFloat(item map[string]any, key string, value sql.NullFloat64) {
+	if value.Valid {
+		item[key] = value.Float64
+	}
+}
+
 func (app *App) DeleteTask(id string) error {
 	if err := app.ensureTaskService(); err != nil {
 		return err
@@ -1053,6 +2145,9 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 		return app.startStrategyEvaluationTask(t)
 	}
 	if t.TaskType == task.TypePortfolioOptimization {
+		if t.ParentID != "" {
+			return app.startPortfolioCandidateTask(t)
+		}
 		return app.startPortfolioOptimizationTask(t)
 	}
 	runID := t.ExternalRunID
@@ -1190,47 +2285,189 @@ func (app *App) waitStrategyEvaluation(cmd *exec.Cmd, logFile *os.File, t task.T
 }
 
 func (app *App) startPortfolioOptimizationTask(t task.Task) (task.DTO, error) {
-	runID := t.ExternalRunID
-	if runID == "" {
-		runID = "po_" + strings.ReplaceAll(t.ID, "-", "")
-	}
-	runPath := filepath.Join(app.settings.DataPath, "backtest_results", runID)
-	logPath := filepath.Join(runPath, "worker.log")
-	if err := os.MkdirAll(runPath, 0o755); err != nil {
-		return task.DTO{}, err
-	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	children, err := app.taskService.Repository().ListChildren(t.ID)
 	if err != nil {
 		return task.DTO{}, err
 	}
-	quantRoot := app.quantStockCorePath()
-	pythonPath := pythonPathForCore(quantRoot)
+	if len(children) == 0 {
+		if err := app.initializePortfolioEvaluation(t); err != nil {
+			return task.DTO{}, err
+		}
+		children, err = app.taskService.Repository().ListChildren(t.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+	}
+	now := time.Now()
+	for _, child := range children {
+		if child.Status == task.StatusCancelled || child.Status == task.StatusInterrupted {
+			child.Status = task.StatusCreated
+			child.Progress = 0
+			child.WorkerPID = 0
+			child.ErrorMessage = ""
+			child.StartedAt = time.Time{}
+			child.FinishedAt = time.Time{}
+			child.UpdatedAt = now
+			_ = app.taskService.Repository().UpdateRuntime(child)
+		}
+	}
+	children, err = app.taskService.Repository().ListChildren(t.ID)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	t.Status = task.StatusRunning
+	t.Progress = portfolioParentProgress(children)
+	t.WorkerPID = 0
+	t.ErrorMessage = ""
+	t.Total = len(children)
+	t.StartedAt = now
+	t.FinishedAt = time.Time{}
+	t.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
+		return task.DTO{}, err
+	}
+	go app.runPortfolioOptimizationChildren(t)
+	return task.ToDTO(t), nil
+}
+
+func (app *App) runPortfolioOptimizationChildren(parent task.Task) {
+	for {
+		latestParent, err := app.taskService.Repository().Get(parent.ID)
+		if err != nil {
+			app.finishPortfolioParent(parent, task.StatusFailed, err.Error(), nil)
+			return
+		}
+		if latestParent.Status != task.StatusRunning {
+			return
+		}
+		parent = latestParent
+		children, err := app.taskService.Repository().ListChildren(parent.ID)
+		if err != nil {
+			app.finishPortfolioParent(parent, task.StatusFailed, err.Error(), children)
+			return
+		}
+		next := firstRunnablePortfolioChild(children)
+		if next == nil {
+			app.finishPortfolioParent(parent, portfolioParentStatus(children), "", children)
+			return
+		}
+		child, err := app.startPortfolioCandidateTaskSync(*next)
+		if err != nil {
+			if child.ID == "" {
+				child = *next
+			}
+			if child.Status != task.StatusFailed && child.Status != task.StatusCancelled {
+				child.Status = task.StatusFailed
+				child.ErrorMessage = err.Error()
+				child.Progress = 1
+				child.WorkerPID = 0
+				child.FinishedAt = time.Now()
+				child.UpdatedAt = child.FinishedAt
+				_ = app.taskService.Repository().UpdateRuntime(child)
+			}
+		}
+		children, _ = app.taskService.Repository().ListChildren(parent.ID)
+		parent.Progress = portfolioParentProgress(children)
+		parent.SummaryJSON = app.portfolioSummaryForParent(parent, children)
+		parent.UpdatedAt = time.Now()
+		_ = app.taskService.Repository().UpdateStatus(parent)
+		_ = app.taskService.Repository().UpdateRuntime(parent)
+	}
+}
+
+func (app *App) startPortfolioCandidateTask(t task.Task) (task.DTO, error) {
+	go func() {
+		updated, err := app.startPortfolioCandidateTaskSync(t)
+		if err != nil && updated.WorkerPID == 0 && updated.Status != task.StatusFailed {
+			now := time.Now()
+			updated.Status = task.StatusFailed
+			updated.Progress = 1
+			updated.ErrorMessage = err.Error()
+			updated.FinishedAt = now
+			updated.UpdatedAt = now
+			_ = app.taskService.Repository().UpdateRuntime(updated)
+		}
+	}()
+	deadline := time.Now().Add(750 * time.Millisecond)
+	for {
+		latest, err := app.taskService.Repository().Get(t.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		if latest.Status == task.StatusRunning || latest.Status == task.StatusFailed || latest.Status == task.StatusSuccess {
+			return task.ToDTO(latest), nil
+		}
+		if time.Now().After(deadline) {
+			return task.ToDTO(latest), nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func (app *App) startPortfolioCandidateTaskSync(t task.Task) (task.Task, error) {
+	runID := t.GroupRunID
+	if runID == "" {
+		runID = t.ExternalRunID
+	}
+	if runID == "" {
+		return t, errors.New("portfolio candidate requires group run id")
+	}
 	params := task.ToDTO(t).Params
 	startDate := stringParam(params, "start_date", "")
 	endDate := stringParam(params, "end_date", "")
-	if startDate == "" || endDate == "" {
-		_ = logFile.Close()
-		return task.DTO{}, errors.New("portfolio optimization requires start_date and end_date")
+	candidateID := stringParam(params, "candidate_id", t.SubtaskKey)
+	candidateName := stringParam(params, "candidate_name", t.SubtaskName)
+	if startDate == "" || endDate == "" || candidateID == "" {
+		return t, errors.New("portfolio candidate requires start_date, end_date and candidate_id")
 	}
+	weightsJSON, err := json.Marshal(params["weights"])
+	if err != nil {
+		return t, err
+	}
+	schemeJSON, err := json.Marshal(params["scheme"])
+	if err != nil {
+		return t, err
+	}
+	exitJSON, err := json.Marshal(params["exit_architecture"])
+	if err != nil {
+		return t, err
+	}
+	runPath := filepath.Join(app.settings.DataPath, "backtest_results", runID, candidateID)
+	logPath := filepath.Join(runPath, "worker.log")
+	if err := os.MkdirAll(runPath, 0o755); err != nil {
+		return t, err
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return t, err
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
 	args := []string{
-		"scripts/optimize_portfolio.py",
+		"scripts/run_portfolio_candidate.py",
 		"--start", startDate,
 		"--end", endDate,
-		"--strategies", strategyParam(params["strategies"]),
+		"--candidate-id", candidateID,
+		"--candidate-name", candidateName,
+		"--weights-json", string(weightsJSON),
+		"--scheme-json", string(schemeJSON),
+		"--exit-json", string(exitJSON),
+		"--rebalance-freq", strconv.Itoa(int(numberParam(params, "rebalance_freq", 5))),
+		"--run-id", runID,
 		"--benchmark", stringParam(params, "benchmark", "000905.SH"),
 		"--objective", stringParam(params, "objective", "平衡"),
-		"--max-candidates", trimFloat(numberParam(params, "max_candidates", 40)),
-		"--top-n", trimFloat(numberParam(params, "top_n", 10)),
-		"--save", runID,
 		"--db-path", filepath.Join(app.settings.DataPath, "meta.db"),
-		"--json",
 	}
 	if slippage := numberParam(params, "slippage", 0.002); slippage > 0 {
 		args = append(args, "--slippage", trimFloat(slippage))
 	}
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = quantRoot
-	cmd.Stdout = logFile
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = logFile.Close()
+		return t, err
+	}
 	cmd.Stderr = logFile
 	cmd.Env = append(os.Environ(),
 		"DATA_ROOT="+app.settings.DataPath,
@@ -1239,7 +2476,7 @@ func (app *App) startPortfolioOptimizationTask(t task.Task) (task.DTO, error) {
 	)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
-		return task.DTO{}, err
+		return t, err
 	}
 	now := time.Now()
 	t.Status = task.StatusRunning
@@ -1248,37 +2485,238 @@ func (app *App) startPortfolioOptimizationTask(t task.Task) (task.DTO, error) {
 	t.LogPath = logPath
 	t.WorkerPID = cmd.Process.Pid
 	t.ExternalRunID = runID
+	t.GroupRunID = runID
 	t.ErrorMessage = ""
+	t.Attempt++
 	t.StartedAt = now
+	t.FinishedAt = time.Time{}
 	t.UpdatedAt = now
 	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
 		_ = logFile.Close()
-		return task.DTO{}, err
+		return t, err
 	}
-	go app.waitPortfolioOptimization(cmd, logFile, t)
-	return task.ToDTO(t), nil
-}
-
-func (app *App) waitPortfolioOptimization(cmd *exec.Cmd, logFile *os.File, t task.Task) {
-	err := cmd.Wait()
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		_, _ = logFile.WriteString(line + "\n")
+		if event := parseWorkerEvent(line); event != nil {
+			if progress, ok := event["progress"].(float64); ok {
+				t.Progress = clamp(progress, 0, 1)
+				t.UpdatedAt = time.Now()
+				_ = app.taskService.Repository().UpdateRuntime(t)
+			}
+		}
+	}
+	scanErr := scanner.Err()
+	waitErr := cmd.Wait()
 	_ = logFile.Close()
 	finishedAt := time.Now()
+	latest, latestErr := app.taskService.Repository().Get(t.ID)
+	if latestErr == nil && latest.Status == task.StatusCancelled {
+		return latest, nil
+	}
 	t.WorkerPID = 0
 	t.Progress = 1
 	t.UpdatedAt = finishedAt
 	t.FinishedAt = finishedAt
-	if err != nil {
+	if scanErr != nil {
 		t.Status = task.StatusFailed
-		t.ErrorMessage = err.Error()
+		t.ErrorMessage = scanErr.Error()
 		_ = app.taskService.Repository().UpdateRuntime(t)
-		return
+		return t, scanErr
+	}
+	if waitErr != nil {
+		t.Status = task.StatusFailed
+		t.ErrorMessage = waitErr.Error()
+		_ = app.taskService.Repository().UpdateRuntime(t)
+		return t, waitErr
 	}
 	t.Status = task.StatusSuccess
-	t.SummaryJSON = readPortfolioOptimizationSummaryFromDB(app.database.Conn(), t.ExternalRunID)
+	t.SummaryJSON = readPortfolioCandidateSummaryFromDB(app.database.Conn(), runID, candidateID)
+	_ = app.taskService.Repository().UpdateRuntime(t)
 	if t.SummaryJSON != "" {
 		_ = app.taskService.Repository().UpdateStatus(t)
 	}
-	_ = app.taskService.Repository().UpdateRuntime(t)
+	_ = app.reRankPortfolioCandidates(runID)
+	return t, nil
+}
+
+func firstRunnablePortfolioChild(children []task.Task) *task.Task {
+	for idx := range children {
+		child := children[idx]
+		if child.Status == task.StatusSuccess || child.Status == task.StatusRunning || child.Status == task.StatusCancelled || child.Status == task.StatusInterrupted {
+			continue
+		}
+		if child.MaxAttempts > 0 && child.Attempt >= child.MaxAttempts && child.Status == task.StatusFailed {
+			continue
+		}
+		return &child
+	}
+	return nil
+}
+
+func portfolioParentProgress(children []task.Task) float64 {
+	if len(children) == 0 {
+		return 0
+	}
+	done := 0.0
+	for _, child := range children {
+		if child.Status == task.StatusSuccess || child.Status == task.StatusFailed || child.Status == task.StatusCancelled || child.Status == task.StatusInterrupted {
+			done += 1
+		} else if child.Status == task.StatusRunning {
+			done += clamp(child.Progress, 0, 1)
+		}
+	}
+	return clamp(done/float64(len(children)), 0, 1)
+}
+
+func portfolioParentStatus(children []task.Task) task.Status {
+	if len(children) == 0 {
+		return task.StatusFailed
+	}
+	failed := 0
+	for _, child := range children {
+		switch child.Status {
+		case task.StatusCreated, task.StatusQueued, task.StatusRunning:
+			return task.StatusRunning
+		case task.StatusFailed, task.StatusCancelled, task.StatusInterrupted:
+			failed++
+		}
+	}
+	if failed > 0 {
+		return task.StatusFailed
+	}
+	return task.StatusSuccess
+}
+
+func (app *App) finishPortfolioParent(parent task.Task, status task.Status, message string, children []task.Task) {
+	now := time.Now()
+	parent.Status = status
+	parent.Progress = portfolioParentProgress(children)
+	if status == task.StatusSuccess {
+		parent.Progress = 1
+	}
+	parent.WorkerPID = 0
+	parent.ErrorMessage = message
+	parent.SummaryJSON = app.portfolioSummaryForParent(parent, children)
+	parent.FinishedAt = now
+	parent.UpdatedAt = now
+	_ = app.taskService.Repository().UpdateStatus(parent)
+	_ = app.taskService.Repository().UpdateRuntime(parent)
+}
+
+func (app *App) portfolioSummaryForParent(parent task.Task, children []task.Task) string {
+	summary := readPortfolioOptimizationSummaryFromDB(app.database.Conn(), parent.ExternalRunID)
+	payload := map[string]any{}
+	if summary != "" {
+		_ = json.Unmarshal([]byte(summary), &payload)
+	} else if parent.SummaryJSON != "" {
+		_ = json.Unmarshal([]byte(parent.SummaryJSON), &payload)
+	}
+	parentPayload := map[string]any{}
+	if parent.SummaryJSON != "" {
+		_ = json.Unmarshal([]byte(parent.SummaryJSON), &parentPayload)
+		copyAISummaryFields(payload, parentPayload)
+	}
+	completed := 0
+	failed := 0
+	running := 0
+	for _, child := range children {
+		switch child.Status {
+		case task.StatusSuccess:
+			completed++
+		case task.StatusFailed, task.StatusCancelled, task.StatusInterrupted:
+			failed++
+		case task.StatusRunning:
+			running++
+		}
+	}
+	payload["planned_count"] = len(children)
+	payload["completed_count"] = completed
+	payload["failed_count"] = failed
+	payload["running_count"] = running
+	payload["progress"] = portfolioParentProgress(children)
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return parent.SummaryJSON
+	}
+	_, _ = app.database.Conn().Exec(`UPDATE portfolio_optimization_runs SET summary_json = ?, updated_at = datetime('now') WHERE run_id = ?`, string(out), parent.ExternalRunID)
+	return string(out)
+}
+
+func copyAISummaryFields(dst map[string]any, src map[string]any) {
+	for _, key := range []string{
+		"ai_analysis",
+		"ai_recommendation",
+		"ai_next_eval_config",
+		"ai_analysis_error",
+		"ai_analysis_model",
+		"ai_analysis_at",
+	} {
+		if value, ok := src[key]; ok {
+			dst[key] = value
+		}
+	}
+}
+
+func (app *App) reRankPortfolioCandidates(runID string) error {
+	rows, err := app.database.Conn().Query(`SELECT candidate_id, score FROM portfolio_optimization_candidates WHERE run_id = ? AND status = 'ok' ORDER BY score DESC`, runID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type candidateScore struct {
+		ID    string
+		Score float64
+	}
+	items := make([]candidateScore, 0)
+	for rows.Next() {
+		var item candidateScore
+		if err := rows.Scan(&item.ID, &item.Score); err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for idx, item := range items {
+		if _, err := app.database.Conn().Exec(`UPDATE portfolio_optimization_candidates SET rank = ?, updated_at = datetime('now') WHERE run_id = ? AND candidate_id = ?`, idx+1, runID, item.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readPortfolioCandidateSummaryFromDB(db *sql.DB, runID string, candidateID string) string {
+	row := db.QueryRow(`SELECT payload_json FROM portfolio_optimization_candidates WHERE run_id = ? AND candidate_id = ?`, runID, candidateID)
+	var payloadJSON string
+	if err := row.Scan(&payloadJSON); err != nil {
+		return ""
+	}
+	return payloadJSON
+}
+
+func parseWorkerEvent(line string) map[string]any {
+	line = strings.TrimSpace(line)
+	if line == "" || !strings.HasPrefix(line, "{") {
+		return nil
+	}
+	var event map[string]any
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return nil
+	}
+	return event
+}
+
+func clamp(value float64, min float64, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 func (app *App) CancelTask(id string) (task.DTO, error) {
@@ -1288,6 +2726,28 @@ func (app *App) CancelTask(id string) (task.DTO, error) {
 	t, err := app.taskService.Repository().Get(id)
 	if err != nil {
 		return task.DTO{}, err
+	}
+	if t.TaskType == task.TypePortfolioOptimization && t.ParentID == "" {
+		children, _ := app.taskService.Repository().ListChildren(t.ID)
+		for _, child := range children {
+			if child.Status == task.StatusRunning && child.WorkerPID > 0 {
+				_ = worker.NewManager().Cancel(child.WorkerPID)
+				child.Status = task.StatusCancelled
+				child.WorkerPID = 0
+				child.ErrorMessage = "parent task cancelled"
+				child.FinishedAt = time.Now()
+				child.UpdatedAt = child.FinishedAt
+				_ = app.taskService.Repository().UpdateRuntime(child)
+			}
+		}
+		t.Status = task.StatusCancelled
+		t.WorkerPID = 0
+		t.ErrorMessage = "task cancelled"
+		t.Progress = portfolioParentProgress(children)
+		t.FinishedAt = time.Now()
+		t.UpdatedAt = t.FinishedAt
+		_ = app.taskService.Repository().UpdateRuntime(t)
+		return task.ToDTO(t), nil
 	}
 	if t.WorkerPID > 0 {
 		_ = worker.NewManager().Cancel(t.WorkerPID)
@@ -1313,9 +2773,8 @@ func (app *App) CancelTask(id string) (task.DTO, error) {
 
 func (app *App) quantStockCorePath() string {
 	candidates := []string{
-		filepath.Join(filepath.Dir(app.settings.WorkspacePath), "quant_stock_core"),
-		filepath.Join(app.settings.WorkspacePath, "..", "quant_stock_core"),
 		filepath.Join(filepath.Dir(app.settings.DataPath), "quant_stock_core"),
+		filepath.Join(mustGetwd(), "..", "quant_stock_core"),
 	}
 	for _, candidate := range candidates {
 		clean := filepath.Clean(candidate)
@@ -1323,15 +2782,40 @@ func (app *App) quantStockCorePath() string {
 			return clean
 		}
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(app.settings.WorkspacePath), "quant_stock_core"))
+	return filepath.Clean(filepath.Join(filepath.Dir(app.settings.DataPath), "quant_stock_core"))
 }
 
 func pythonPathForCore(quantRoot string) string {
+	if w := bundledWorkerPath(); w != "" {
+		return w
+	}
 	candidate := filepath.Join(quantRoot, ".venv", "bin", "python")
 	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 		return candidate
 	}
 	return "python3"
+}
+
+// bundledWorkerPath returns the path to the embedded quant_worker binary
+// when running inside a macOS .app bundle, or an empty string otherwise.
+func bundledWorkerPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return ""
+	}
+	// Inside .app: .../QuantStockDesktop.app/Contents/MacOS/QuantStockDesktop
+	// Resources is sibling of MacOS:  .../Contents/Resources/quant_worker/quant_worker
+	macosDir := filepath.Dir(exe)
+	contentsDir := filepath.Dir(macosDir)
+	candidate := filepath.Join(contentsDir, "Resources", "quant_worker", "quant_worker")
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate
+	}
+	return ""
 }
 
 func (app *App) ensureTaskService() error {

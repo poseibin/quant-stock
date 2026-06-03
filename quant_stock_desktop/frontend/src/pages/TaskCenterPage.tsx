@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Play, RefreshCw, Square, Trash2 } from 'lucide-react'
+import { ArrowLeft, Play, RefreshCw, Sparkles, Square, Trash2 } from 'lucide-react'
 import { DataGrid, type Column } from 'react-data-grid'
 import * as echarts from 'echarts/core'
 import { DataZoomComponent, GridComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import { LineChart } from 'echarts/charts'
 import { CanvasRenderer } from 'echarts/renderers'
-import { applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getTimeMachineDetail, listTasks, refreshTaskStatus, startTask, type Settings, type TaskDTO, type TimeMachineDetail } from '../services/app'
+import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getTimeMachineDetail, listTasks, refreshTaskStatus, startTask, type TaskDTO, type TimeMachineDetail } from '../services/app'
 import { Field } from '../components/Field'
 import { formatDate } from '../components/format'
 
-const strategyOrder = ['forecast_revision', 'dividend_low_vol', 'trend_quality', 'garp_quality', 'moneyflow_pullback', 'small_cap_quality', 'reversal', 'insider_buy', 'lhb_follow', 'industry_rotation', 'beijing_se']
 const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization'])
 
 echarts.use([CanvasRenderer, DataZoomComponent, GridComponent, LineChart, TitleComponent, TooltipComponent])
@@ -20,8 +19,9 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   const [detail, setDetail] = useState<TimeMachineDetail | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [evalMode, setEvalMode] = useState<'time_machine' | 'strategy_evaluation' | 'portfolio_optimization'>('time_machine')
-  const [name, setName] = useState('时光机评估')
+  const [aiAnalyzing, setAiAnalyzing] = useState(false)
+  const [nextEvalCreating, setNextEvalCreating] = useState(false)
+  const [name, setName] = useState('时光机')
   const [startDate, setStartDate] = useState(() => formatYYYYMMDD(addYears(new Date(), -1)))
   const [endDate, setEndDate] = useState(() => formatYYYYMMDD(new Date()))
   const [initialCash, setInitialCash] = useState(500000)
@@ -32,16 +32,10 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   const [trailingExec, setTrailingExec] = useState('next_open')
   const [slippageBp, setSlippageBp] = useState(30)
   const [optimizationObjective, setOptimizationObjective] = useState('平衡')
-  const [maxCandidates, setMaxCandidates] = useState(40)
-  const [topN, setTopN] = useState(10)
-  const [settings, setSettings] = useState<Settings | null>(null)
-  const [strategyOptions, setStrategyOptions] = useState<Array<{ name: string; label: string; enabled: boolean }>>([])
-  const [defaultStrategyNames, setDefaultStrategyNames] = useState<string[]>([])
-  const [selectedStrategies, setSelectedStrategies] = useState<string[]>([])
-  const [strategiesOpen, setStrategiesOpen] = useState(false)
+  const [topN, setTopN] = useState(40)
 
   const refresh = async () => {
-    const items = (await listTasks({ limit: 100 })).filter((item) => evaluationTaskTypes.has(item.task_type))
+    const items = (await listTasks({ limit: 500 })).filter((item) => evaluationTaskTypes.has(item.task_type))
     setTasks(items)
     if (selectedTask) {
       const latest = items.find((item) => item.id === selectedTask.id)
@@ -60,14 +54,6 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   useEffect(() => {
     refresh()
     getSettings().then((response) => {
-      setSettings(response.settings)
-      const strategies = response.settings.strategies || {}
-      const names = strategyOrder.filter((name) => strategies[name]).concat(Object.keys(strategies).filter((name) => !strategyOrder.includes(name)))
-      const options = names.map((name) => ({ name, label: strategies[name]?.label || name, enabled: Boolean(strategies[name]?.enabled) }))
-      const enabled = options.filter((item) => item.enabled).map((item) => item.name)
-      setStrategyOptions(options)
-      setDefaultStrategyNames(enabled)
-      setSelectedStrategies(enabled)
       const exitRules = response.settings.exit_rules || {}
       setExitEnabled(Boolean(exitRules.enabled))
       setStopLossPct(Number(exitRules.stop_loss ?? -0.12) * 100)
@@ -78,61 +64,48 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   }, [])
 
   const onCreate = async () => {
-    const strategiesFilter = settings && sameSet(selectedStrategies, defaultStrategyNames) ? null : selectedStrategies
-    if (evalMode === 'strategy_evaluation') {
-      await createTask({
-        name,
-        task_type: 'strategy_evaluation',
-        params: {
-          start_date: startDate,
-          end_date: endDate,
-          strategies: selectedStrategies.length === strategyOptions.length ? 'all' : selectedStrategies,
-          baseline: 'small_cap_quality',
-          benchmark: '000905.SH',
-          slippage: slippageBp / 10000
-        }
-      })
-      await refresh()
-      return
-    }
-    if (evalMode === 'portfolio_optimization') {
+    setError('')
+    try {
       await createTask({
         name,
         task_type: 'portfolio_optimization',
         params: {
           start_date: startDate,
           end_date: endDate,
-          strategies: selectedStrategies.length === strategyOptions.length ? 'all' : selectedStrategies,
+          strategies: 'enabled',
           objective: optimizationObjective,
-          max_candidates: maxCandidates,
           top_n: topN,
           benchmark: '000905.SH',
           slippage: slippageBp / 10000
         }
       })
       await refresh()
-      return
+      setNotice('已创建时光机，策略池会优先使用最近一次策略准入结果')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
     }
-    await createTask({
-      name,
-      task_type: 'evaluation_time_machine',
-      params: {
-        start_date: startDate,
-        end_date: endDate,
-        initial_cash: initialCash,
-        rebalance_freq: rebalanceFreq,
-        use_signal_cache: true,
-        strategies_filter: strategiesFilter,
-        exit_rules_cfg: {
-          enabled: exitEnabled,
-          stop_loss: stopLossPct / 100,
-          trailing_stop: trailingStopPct / 100,
-          trailing_exec: trailingExec,
+  }
+
+  const onCreateStrategyAdmission = async () => {
+    setError('')
+    try {
+      await createTask({
+        name: `策略准入-${startDate}-${endDate}`,
+        task_type: 'strategy_evaluation',
+        params: {
+          start_date: startDate,
+          end_date: endDate,
+          strategies: 'enabled',
+          baseline: 'small_cap_quality',
+          benchmark: '000905.SH',
           slippage: slippageBp / 10000
         }
-      }
-    })
-    await refresh()
+      })
+      await refresh()
+      setNotice('已创建策略准入评估，运行完成后会影响下一次时光机策略池')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
   }
 
   const onStart = async (id: string) => {
@@ -145,32 +118,46 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     }
   }
 
+  const onAnalyzePortfolio = async (id: string) => {
+    setError('')
+    setAiAnalyzing(true)
+    try {
+      const updated = await analyzePortfolioTask(id)
+      setSelectedTask(updated)
+      setNotice('AI 分析已生成')
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      const updated = await refreshTaskStatus(id).catch(() => null)
+      if (updated) setSelectedTask(updated)
+    } finally {
+      setAiAnalyzing(false)
+    }
+  }
+
   const applyCandidate = async (task: TaskDTO, row: Record<string, unknown>) => {
     const candidateId = String(row.candidate_id || '')
     if (!candidateId) return
-    const response = await applyPortfolioCandidate({ run_id: task.external_run_id, candidate_id: candidateId })
-    setSettings(response.settings)
-    const strategies = response.settings.strategies || {}
-    const enabled = Object.entries(strategies).filter(([, strategy]) => strategy.enabled).map(([name]) => name)
-    setDefaultStrategyNames(enabled)
-    setSelectedStrategies(enabled)
-    setNotice(`已应用组合：${String(row.name || candidateId)}`)
+    await applyPortfolioCandidate({ run_id: task.external_run_id, candidate_id: candidateId })
+    setNotice(`已应用方案入场权重：${String(row.name || candidateId)}`)
   }
 
   const createReviewTask = async (task: TaskDTO, row: Record<string, unknown>) => {
     await applyCandidate(task, row)
     const strategies = String(row.strategies || '').split(',').map((item) => item.trim()).filter(Boolean)
+    const exitArchitecture = asRecord(row.exit_architecture) || asRecord(asRecord(row.scheme)?.exit_architecture)
+    const rebalance = numberOf(row.rebalance_freq, rebalanceFreq)
     await createTask({
-      name: `复核-${String(row.name || '组合')}`,
+      name: `复核-${String(row.name || '方案')}`,
       task_type: 'evaluation_time_machine',
       params: {
         start_date: task.params.start_date || task.summary.start,
         end_date: task.params.end_date || task.summary.end,
         initial_cash: initialCash,
-        rebalance_freq: rebalanceFreq,
+        rebalance_freq: rebalance,
         use_signal_cache: true,
         strategies_filter: strategies,
-        exit_rules_cfg: {
+        exit_rules_cfg: exitArchitecture || {
           enabled: exitEnabled,
           stop_loss: stopLossPct / 100,
           trailing_stop: trailingStopPct / 100,
@@ -181,56 +168,108 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     })
     setSelectedTask(null)
     setDetail(null)
-    setNotice(`已创建复核时光机：${String(row.name || '')}`)
+    setNotice(`已创建方案复核时光机：${String(row.name || '')}`)
     await refresh()
+  }
+
+  const createNextPortfolioEvaluation = async (task: TaskDTO) => {
+    const nextConfig = asRecord(task.summary.ai_next_eval_config) || asRecord(asRecord(task.summary.ai_recommendation)?.next_eval_config)
+    const params = asRecord(nextConfig?.params)
+    if (!nextConfig || !params) {
+      setError('AI 还没有给出可创建的下一轮评估配置，请先运行 AI 分析')
+      return
+    }
+    setError('')
+    setNextEvalCreating(true)
+    try {
+      const created = await createTask({
+        name: String(nextConfig.name || `${task.name} - 下一轮`),
+        task_type: String(nextConfig.task_type || 'portfolio_optimization'),
+        params
+      })
+      setNotice(`已创建下一轮评估：${created.name}`)
+      setSelectedTask(null)
+      setDetail(null)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setNextEvalCreating(false)
+    }
   }
 
   const columns = useMemo<Column<TaskDTO>[]>(() => [
     {
       key: 'name',
       name: '名称',
-      minWidth: 150,
+      minWidth: 170,
       resizable: true,
       renderCell: ({ row }) => row.name
     },
     {
       key: 'task_type',
       name: '类型',
-      width: 230,
+      width: 120,
       resizable: true,
-      renderCell: ({ row }) => row.task_type
+      renderCell: ({ row }) => taskTypeLabel(row)
+    },
+    {
+      key: 'subtask',
+      name: '子任务/进度',
+      width: 140,
+      resizable: true,
+      renderCell: ({ row }) => taskProgressLabel(row)
     },
     {
       key: 'status',
       name: '状态',
-      width: 130,
+      width: 96,
       renderCell: ({ row }) => <span className={`badge ${row.status}`}>{row.status}</span>
     },
     {
-      key: 'progress',
-      name: '进度',
-      width: 90,
-      renderCell: ({ row }) => `${Math.round(row.progress * 100)}%`
+      key: 'total_return',
+      name: '累计收益',
+      width: 110,
+      cellClass: (row) => toneOf(taskMetric(row, 'total_return')),
+      renderCell: ({ row }) => metricPercent(row, 'total_return', true)
     },
     {
-      key: 'external_run_id',
-      name: 'Run ID',
-      minWidth: 300,
-      resizable: true,
-      cellClass: 'mono',
-      renderCell: ({ row }) => row.external_run_id || '-'
+      key: 'annual_return',
+      name: '年化',
+      width: 100,
+      cellClass: (row) => toneOf(taskMetric(row, 'annual_return')),
+      renderCell: ({ row }) => metricPercent(row, 'annual_return', true)
     },
     {
-      key: 'created_at',
-      name: '创建时间',
-      width: 220,
-      resizable: true,
-      renderCell: ({ row }) => formatDate(row.created_at)
+      key: 'excess_annual_return',
+      name: '超额',
+      width: 100,
+      cellClass: (row) => toneOf(taskMetric(row, 'excess_annual_return')),
+      renderCell: ({ row }) => metricPercent(row, 'excess_annual_return', true)
+    },
+    {
+      key: 'win_rate',
+      name: '胜率',
+      width: 92,
+      renderCell: ({ row }) => metricPercent(row, 'win_rate')
+    },
+    {
+      key: 'max_drawdown',
+      name: '回撤',
+      width: 92,
+      cellClass: 'negative',
+      renderCell: ({ row }) => metricPercent(row, 'max_drawdown')
+    },
+    {
+      key: 'sharpe',
+      name: '夏普',
+      width: 82,
+      renderCell: ({ row }) => metricNumber(row, 'sharpe')
     },
     {
       key: 'actions',
       name: '操作',
-      width: 260,
+      width: 220,
       cellClass: 'taskGridActionsCell',
       headerCellClass: 'taskGridActionsCell',
       renderCell: ({ row }) => (
@@ -248,15 +287,22 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     }
   ], [onStart, refresh, showDetail])
 
+  const tableRows = useMemo(() => tasks.filter((item) => !item.parent_id), [tasks])
+
   if (selectedTask) {
     if (selectedTask.task_type === 'portfolio_optimization') {
       return (
         <PortfolioOptimizationDetail
           task={selectedTask}
+          childTasks={tasks.filter((item) => item.parent_id === selectedTask.id)}
           onBack={() => { setSelectedTask(null); setDetail(null) }}
           onRefresh={() => showDetail(selectedTask.id)}
           onStart={() => onStart(selectedTask.id)}
           onCancel={async () => { await cancelTask(selectedTask.id); await showDetail(selectedTask.id) }}
+          onAnalyze={() => onAnalyzePortfolio(selectedTask.id)}
+          aiAnalyzing={aiAnalyzing}
+          onCreateNext={() => createNextPortfolioEvaluation(selectedTask)}
+          nextEvalCreating={nextEvalCreating}
           onApply={(row) => applyCandidate(selectedTask, row)}
           onReview={(row) => createReviewTask(selectedTask, row)}
         />
@@ -298,93 +344,26 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   return (
     <div className="taskPage">
       <div className="taskModeTabs">
-        <button className={evalMode === 'time_machine' ? 'active' : ''} onClick={() => { setEvalMode('time_machine'); setName('时光机评估'); setSelectedStrategies(defaultStrategyNames) }}>时光机</button>
-        <button className={evalMode === 'strategy_evaluation' ? 'active' : ''} onClick={() => { setEvalMode('strategy_evaluation'); setName('策略准入评估'); setSelectedStrategies(strategyOptions.map((item) => item.name)) }}>策略准入</button>
-        <button className={evalMode === 'portfolio_optimization' ? 'active' : ''} onClick={() => { setEvalMode('portfolio_optimization'); setName('一键组合优化'); setSelectedStrategies(strategyOptions.map((item) => item.name)) }}>组合优化</button>
+        <button className="active" onClick={() => setName('时光机')}>时光机</button>
       </div>
-      <div className="formCard">
-        <div className="formGrid">
+      <div className="formCard taskFormCard">
+        <div className="formGrid taskFormGrid">
           <Field label="评估名称"><input value={name} onChange={(event) => setName(event.target.value)} /></Field>
-          {evalMode === 'time_machine' && <Field label="初始资金"><input type="number" value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></Field>}
           <Field label="开始日期"><input value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
           <Field label="结束日期"><input value={endDate} onChange={(event) => setEndDate(event.target.value)} /></Field>
-          {evalMode === 'time_machine' && <Field label="调仓频率">
-            <select value={rebalanceFreq} onChange={(event) => setRebalanceFreq(Number(event.target.value))}>
-              <option value={5}>每周（推荐）</option>
-              <option value={20}>每月</option>
-              <option value={1}>每天</option>
-            </select>
-          </Field>}
-          {(evalMode === 'strategy_evaluation' || evalMode === 'portfolio_optimization') && <Field label="滑点 bp"><input type="number" value={slippageBp} onChange={(event) => setSlippageBp(Number(event.target.value))} /></Field>}
-          {evalMode === 'portfolio_optimization' && <Field label="优化目标">
+          <Field label="滑点 bp"><input type="number" value={slippageBp} onChange={(event) => setSlippageBp(Number(event.target.value))} /></Field>
+          <Field label="优化目标">
             <select value={optimizationObjective} onChange={(event) => setOptimizationObjective(event.target.value)}>
               <option value="稳健">稳健</option>
               <option value="平衡">平衡</option>
               <option value="进攻">进攻</option>
             </select>
-          </Field>}
-          {evalMode === 'portfolio_optimization' && <Field label="候选组合数"><input type="number" value={maxCandidates} onChange={(event) => setMaxCandidates(Number(event.target.value))} /></Field>}
-          {evalMode === 'portfolio_optimization' && <Field label="展示 Top N"><input type="number" value={topN} onChange={(event) => setTopN(Number(event.target.value))} /></Field>}
-        </div>
-
-        {evalMode === 'time_machine' && <div className={`riskPanel ${exitEnabled ? 'open' : ''}`}>
-          <div className="riskPanelHeader">
-            <div>
-              <div className="fieldLabel">风控规则</div>
-              <span>{exitEnabled ? '止损 / 移动止盈 / 滑点已启用' : '关闭后本次评估不执行硬性卖出规则'}</span>
-            </div>
-            <label className="toggleField compact">
-              <input type="checkbox" checked={exitEnabled} onChange={(event) => setExitEnabled(event.target.checked)} />
-              <span>{exitEnabled ? '已启用' : '已关闭'}</span>
-              <i />
-            </label>
+          </Field>
+          <Field label="AI / 展示 Top N"><input type="number" value={topN} onChange={(event) => setTopN(Number(event.target.value))} /></Field>
+          <div className="formActionsBottom taskActionsField">
+            <button className="secondaryButton quietButton" onClick={onCreateStrategyAdmission}>创建策略准入</button>
+            <button className="primaryButton" onClick={onCreate}>创建时光机</button>
           </div>
-          {exitEnabled && (
-            <div className="riskGrid">
-              <Field label="移动止盈成交">
-                <select value={trailingExec} onChange={(event) => setTrailingExec(event.target.value)}>
-                  <option value="next_open">次日开盘价</option>
-                  <option value="close">当日收盘价</option>
-                </select>
-              </Field>
-              <Field label="成本止损 %"><input type="number" value={stopLossPct} onChange={(event) => setStopLossPct(Number(event.target.value))} /></Field>
-              <Field label="移动止盈 %"><input type="number" value={trailingStopPct} onChange={(event) => setTrailingStopPct(Number(event.target.value))} /></Field>
-              <Field label="滑点 bp"><input type="number" value={slippageBp} onChange={(event) => setSlippageBp(Number(event.target.value))} /></Field>
-            </div>
-          )}
-        </div>}
-
-        <div className={`strategyPanel ${strategiesOpen ? 'open' : ''}`}>
-          <button className="foldHeader" onClick={() => setStrategiesOpen((open) => !open)}>
-            <div>
-              <div className="fieldLabel">{evalMode === 'strategy_evaluation' ? '参与准入评估的策略插件' : evalMode === 'portfolio_optimization' ? '参与组合搜索的策略插件' : '参与评估的策略插件'}</div>
-              <span>已选择 {selectedStrategies.length} / {strategyOptions.length} 个策略</span>
-            </div>
-            <i>{strategiesOpen ? '收起' : '展开'}</i>
-          </button>
-          {strategiesOpen && (
-            <div className="strategyOptionGrid">
-              {strategyOptions.map((strategy) => (
-                <label key={strategy.name} className="strategyOption">
-                  <input
-                    type="checkbox"
-                    checked={selectedStrategies.includes(strategy.name)}
-                    onChange={(event) => {
-                      setSelectedStrategies((prev) => event.target.checked
-                        ? [...prev, strategy.name]
-                        : prev.filter((name) => name !== strategy.name))
-                    }}
-                  />
-                  <i />
-                  <span>{strategy.label}</span>
-                  <em>{strategy.name}</em>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="formActionsBottom">
-          <button className="primaryButton" onClick={onCreate}>{evalMode === 'strategy_evaluation' ? '创建策略准入评估' : evalMode === 'portfolio_optimization' ? '创建组合优化' : '创建评估'}</button>
         </div>
       </div>
 
@@ -399,14 +378,15 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
           <DataGrid
             className="taskGrid rdg-dark"
             columns={columns}
-            rows={tasks}
+            rows={tableRows}
             rowKeyGetter={(row) => row.id}
             rowHeight={58}
             headerRowHeight={48}
             defaultColumnOptions={{ resizable: true }}
             enableVirtualization={false}
+            onCellDoubleClick={({ row }) => showDetail(row.id)}
           />
-          {tasks.length === 0 && <div className="taskGridEmpty">暂无评估</div>}
+          {tableRows.length === 0 && <div className="taskGridEmpty">暂无评估</div>}
         </div>
       </div>
     </div>
@@ -674,6 +654,7 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
   const emptyCount = numberOf(task.summary.empty_count, rows.filter((row) => row.status === 'empty').length)
   const failedCount = numberOf(task.summary.failed_count, rows.filter((row) => row.status !== 'ok' && row.status !== 'empty').length)
   const admitCount = numberOf(task.summary.admit_count, rows.filter((row) => row.admission === '可启用').length)
+  const limitedCount = numberOf(task.summary.limited_count, rows.filter((row) => row.admission === '限制启用').length)
   const watchCount = numberOf(task.summary.watch_count, rows.filter((row) => row.admission === '继续观察').length)
   const rejectCount = numberOf(task.summary.reject_count, rows.filter((row) => row.admission === '暂不启用').length)
   const isRunning = task.status === 'running'
@@ -703,6 +684,7 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
         <Metric label="空仓" value={`${emptyCount}`} />
         <Metric label="失败" value={`${failedCount}`} tone={failedCount > 0 ? 'negative' : ''} />
         <Metric label="可启用" value={`${admitCount}`} tone={admitCount > 0 ? 'positive' : ''} />
+        <Metric label="限制启用" value={`${limitedCount}`} />
         <Metric label="观察" value={`${watchCount}`} />
         <Metric label="暂不启用" value={`${rejectCount}`} tone={rejectCount > 0 ? 'negative' : ''} />
         <Metric label="结果目录" value={resultPathText(task)} hint={task.result_path} />
@@ -712,7 +694,7 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
         <div className="tableHeader">
           <div>
             <div className="formTitle">策略准入表</div>
-            <p className="recommendationMeta">收益、回撤、换手、容量暴露与小盘质量重合度</p>
+            <p className="recommendationMeta">按收益质量、风险调整、回撤控制、换手成本、容量、稳定性与组合独立性综合评分</p>
           </div>
         </div>
         <div className="tableWrap">
@@ -721,8 +703,16 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
               <tr>
                 <th>策略</th>
                 <th>建议</th>
+                <th>准入分</th>
                 <th>状态</th>
                 <th>启用</th>
+                <th>收益分</th>
+                <th>风调分</th>
+                <th>回撤分</th>
+                <th>成本分</th>
+                <th>容量分</th>
+                <th>稳定分</th>
+                <th>独立分</th>
                 <th>总收益</th>
                 <th>年化</th>
                 <th>最大回撤</th>
@@ -732,6 +722,8 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
                 <th>持仓</th>
                 <th>平均市值</th>
                 <th>平均成交额</th>
+                <th>月胜率</th>
+                <th>最差月</th>
                 <th>重合度</th>
                 <th>相关性</th>
               </tr>
@@ -745,8 +737,16 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
                       {String(row.admission || '—')}
                     </span>
                   </td>
+                  <td>{scoreText(row.admission_score)}</td>
                   <td><span className={`badge ${String(row.status)}`}>{String(row.status || '-')}</span></td>
                   <td>{row.enabled ? '是' : '否'}</td>
+                  <td>{scoreText(row.return_score)}</td>
+                  <td>{scoreText(row.risk_adjusted_score)}</td>
+                  <td>{scoreText(row.drawdown_score)}</td>
+                  <td>{scoreText(row.cost_score)}</td>
+                  <td>{scoreText(row.capacity_score)}</td>
+                  <td>{scoreText(row.stability_score)}</td>
+                  <td>{scoreText(row.independence_score)}</td>
                   <td className={toneOf(numberOf(row.total_return, 0))}>{percent(numberOf(row.total_return, 0), true)}</td>
                   <td className={toneOf(numberOf(row.annual_return, 0))}>{percent(numberOf(row.annual_return, 0), true)}</td>
                   <td className="negative">{percent(numberOf(row.max_drawdown, 0))}</td>
@@ -756,12 +756,14 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
                   <td>{numberOf(row.avg_holdings, 0).toFixed(1)}</td>
                   <td>{money(numberOf(row.avg_total_mv, 0) / 100000000, 1)}亿</td>
                   <td>{money(numberOf(row.avg_amount, 0) / 100000000, 1)}亿</td>
+                  <td>{row.monthly_win_rate == null ? '—' : percent(numberOf(row.monthly_win_rate, 0))}</td>
+                  <td>{row.worst_month_return == null ? '—' : percent(numberOf(row.worst_month_return, 0), true)}</td>
                   <td>{row.overlap_with_baseline == null ? '—' : percent(numberOf(row.overlap_with_baseline, 0))}</td>
                   <td>{row.corr_with_baseline == null ? '—' : numberOf(row.corr_with_baseline, 0).toFixed(2)}</td>
                 </tr>
               ))}
-              {!isRunning && rows.length === 0 && <tr><td colSpan={15} className="emptyCell">暂无评估结果，启动任务后生成准入表</td></tr>}
-              {isRunning && rows.length === 0 && <tr><td colSpan={15} className="emptyCell">评估运行中...</td></tr>}
+              {!isRunning && rows.length === 0 && <tr><td colSpan={25} className="emptyCell">暂无评估结果，启动任务后生成准入表</td></tr>}
+              {isRunning && rows.length === 0 && <tr><td colSpan={25} className="emptyCell">评估运行中...</td></tr>}
             </tbody>
           </table>
         </div>
@@ -770,12 +772,17 @@ function StrategyEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }
   )
 }
 
-function PortfolioOptimizationDetail({ task, onBack, onRefresh, onStart, onCancel, onApply, onReview }: {
+function PortfolioOptimizationDetail({ task, childTasks, onBack, onRefresh, onStart, onCancel, onAnalyze, aiAnalyzing, onCreateNext, nextEvalCreating, onApply, onReview }: {
   task: TaskDTO
+  childTasks: TaskDTO[]
   onBack: () => void
   onRefresh: () => void
   onStart: () => void
   onCancel: () => void
+  onAnalyze: () => void
+  aiAnalyzing: boolean
+  onCreateNext: () => void
+  nextEvalCreating: boolean
   onApply: (row: Record<string, unknown>) => void
   onReview: (row: Record<string, unknown>) => void
 }) {
@@ -788,30 +795,44 @@ function PortfolioOptimizationDetail({ task, onBack, onRefresh, onStart, onCance
   const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
   const isRunning = task.status === 'running'
   const isRunnable = task.status !== 'running' && task.status !== 'success'
+  const [schemeSort, setSchemeSort] = useState('sequence')
+  const canAnalyze = task.status === 'success' && rows.length > 0
+  const aiAnalysis = String(task.summary.ai_analysis || '')
+  const aiAnalysisError = String(task.summary.ai_analysis_error || '')
+  const aiRecommendation = asRecord(task.summary.ai_recommendation) || {}
+  const nextEvalConfig = asRecord(task.summary.ai_next_eval_config) || asRecord(aiRecommendation.next_eval_config)
+  const nextParams = asRecord(nextEvalConfig?.params) || {}
+  const hasNextEvalConfig = Boolean(nextEvalConfig && Object.keys(nextParams).length > 0)
+  const schemeRows = buildSchemeRows(childTasks, rows, schemeSort)
 
   return (
     <div className="taskDetailPage strategyEvalDetail">
       <div className="detailHero">
         <div>
-          <div className="sectionLabel">PORTFOLIO OPTIMIZATION</div>
+          <div className="sectionLabel">TRADING SCHEME EVALUATION</div>
           <h2>{task.name}</h2>
           <p>{task.params.start_date as string} - {task.params.end_date as string} · {String(task.summary.objective || task.params.objective || '平衡')} · {statusText(task.status)}</p>
         </div>
         <div className="detailHeroActions">
           <button className="secondaryButton quietButton" onClick={onBack}><ArrowLeft size={15} />返回</button>
           <button className="secondaryButton quietButton" onClick={onRefresh}><RefreshCw size={15} />刷新</button>
+          <button className="secondaryButton startButton" onClick={onAnalyze} disabled={aiAnalyzing || !canAnalyze}>
+            <Sparkles size={15} />{aiAnalyzing ? '分析中' : 'AI 分析'}
+          </button>
           {isRunnable && <button className="secondaryButton startButton" onClick={onStart}><Play size={15} />启动</button>}
           {isRunning && <button className="secondaryButton dangerButton" onClick={onCancel}><Square size={15} />取消</button>}
         </div>
       </div>
 
       {task.error_message && <div className="errorBox">{task.error_message}</div>}
+      {aiAnalysisError && <div className="errorBox">{aiAnalysisError}</div>}
 
       <div className="metricGrid">
-        <Metric label="候选组合" value={`${numberOf(task.summary.candidate_count, rows.length)}`} />
-        <Metric label="可用策略" value={`${numberOf(task.summary.viable_count, 0)}`} />
-        <Metric label="策略池" value={`${numberOf(task.summary.strategy_count, 0)}`} />
-        <Metric label="最佳组合" value={String(task.summary.best_name || '—')} />
+        <Metric label="候选方案" value={`${numberOf(task.summary.candidate_count, childTasks.length || rows.length)}`} />
+        <Metric label="已完成" value={`${numberOf(task.summary.completed_count, childTasks.filter((item) => item.status === 'success').length)}`} tone="positive" />
+        <Metric label="失败/中断" value={`${numberOf(task.summary.failed_count, childTasks.filter((item) => ['failed', 'cancelled', 'interrupted'].includes(item.status)).length)}`} tone="negative" />
+        <Metric label="入场策略池" value={`${numberOf(task.summary.strategy_count, 0)}`} />
+        <Metric label="最佳方案" value={String(task.summary.best_name || '—')} />
         <Metric label="最佳评分" value={numberOf(task.summary.best_score, 0).toFixed(3)} tone="positive" />
         <Metric label="最佳年化" value={percent(numberOf(task.summary.best_annual_return, 0), true)} tone={toneOf(numberOf(task.summary.best_annual_return, 0))} />
         <Metric label="最佳回撤" value={percent(numberOf(task.summary.best_max_drawdown, 0))} tone="negative" />
@@ -821,56 +842,130 @@ function PortfolioOptimizationDetail({ task, onBack, onRefresh, onStart, onCance
       <div className="detailCard">
         <div className="tableHeader">
           <div>
-            <div className="formTitle">推荐组合 Top {rows.length || ''}</div>
-            <p className="recommendationMeta">自动生成候选组合，按收益、回撤、夏普、Calmar、换手与持仓分散度评分</p>
+            <div className="formTitle">AI 实验迭代</div>
+            <p className="recommendationMeta">把本轮方案结果、子任务状态、入场策略和出场架构发给 DeepSeek，生成下一轮可回测配置</p>
           </div>
+          <button className="secondaryButton startButton" onClick={onCreateNext} disabled={!hasNextEvalConfig || nextEvalCreating}>
+            {nextEvalCreating ? '创建中' : '创建下一轮评估'}
+          </button>
+        </div>
+        {aiAnalysis ? (
+          <div className="aiLoopPanel">
+            <pre className="aiAnalysisBox">{aiAnalysis}</pre>
+            <div className="aiLoopGrid">
+              <AISuggestionList title="诊断" items={asStringArray(aiRecommendation.diagnosis)} />
+              <AISuggestionList title="保留" items={asStringArray(aiRecommendation.keep)} />
+              <AISuggestionList title="调整" items={asStringArray(aiRecommendation.change)} />
+              <AISuggestionList title="剔除/降权" items={asStringArray(aiRecommendation.remove)} />
+              <AISuggestionList title="验证计划" items={asStringArray(aiRecommendation.validation_plan)} wide />
+              <div className="aiNextEvalCard">
+                <div className="miniCardTitle">下一轮评估配置</div>
+                {hasNextEvalConfig ? (
+                  <div className="configDiffGrid">
+                    <div><span>名称</span><b>{String(nextEvalConfig?.name || `${task.name} - 下一轮`)}</b></div>
+                    <div><span>区间</span><b>{String(nextParams.start_date || task.params.start_date)} - {String(nextParams.end_date || task.params.end_date)}</b></div>
+                    <div><span>目标</span><b>{String(nextParams.objective || task.params.objective || '平衡')}</b></div>
+                    <div><span>候选/Top</span><b>全量 / {String(nextParams.top_n || task.params.top_n || 40)}</b></div>
+                    <div><span>策略</span><b>{formatStrategies(nextParams.strategies || task.params.strategies)}</b></div>
+                    <div><span>滑点</span><b>{percent(numberOf(nextParams.slippage, numberOf(task.params.slippage, 0.003)))}</b></div>
+                  </div>
+                ) : (
+                  <div className="emptyCell compactEmpty">AI 返回了分析，但没有可创建的下一轮配置</div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : <div className="emptyCell">暂无 AI 分析，时光机成功并产生结果后点击 AI 分析</div>}
+      </div>
+
+      <div className="detailCard">
+        <div className="tableHeader">
+          <div>
+            <div className="formTitle">方案列表</div>
+            <p className="recommendationMeta">每一行对应一个交易方案，Go 负责编排，Python 实时写回进度和指标；完成后可按评分、收益、回撤等排序</p>
+          </div>
+          <select className="selectInput schemeSortSelect" value={schemeSort} onChange={(event) => setSchemeSort(event.target.value)}>
+            <option value="sequence">按执行顺序</option>
+            <option value="status">按运行状态</option>
+            <option value="score">按评分</option>
+            <option value="annual_return">按年化</option>
+            <option value="total_return">按累计收益</option>
+            <option value="excess_annual_return">按超额年化</option>
+            <option value="max_drawdown">按回撤</option>
+            <option value="sharpe">按夏普</option>
+          </select>
         </div>
         <div className="tableWrap">
           <table>
             <thead>
               <tr>
+                <th>序号</th>
                 <th>排名</th>
-                <th>组合</th>
+                <th>方案</th>
+                <th>状态</th>
+                <th>进度</th>
                 <th>评分</th>
                 <th>策略权重</th>
+                <th>出场架构</th>
+                <th>调仓</th>
+                <th>累计收益</th>
                 <th>年化</th>
-                <th>最大回撤</th>
+                <th>超额年化</th>
+                <th>胜率</th>
+                <th>回撤</th>
                 <th>夏普</th>
                 <th>Calmar</th>
+                <th>年化波动</th>
+                <th>平均持仓</th>
+                <th>卖出分布</th>
                 <th>换手</th>
                 <th>持仓</th>
                 <th>平均市值</th>
-                <th>平均成交额</th>
                 <th>原因</th>
+                <th>尝试</th>
+                <th>错误</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={String(row.candidate_id || row.rank)}>
-                  <td>{numberOf(row.rank, 0)}</td>
-                  <td>{String(row.name || '—')}</td>
-                  <td>{numberOf(row.score, 0).toFixed(3)}</td>
-                  <td className="mono">{formatWeights(row.weights)}</td>
-                  <td className={toneOf(numberOf(row.annual_return, 0))}>{percent(numberOf(row.annual_return, 0), true)}</td>
-                  <td className="negative">{percent(numberOf(row.max_drawdown, 0))}</td>
-                  <td>{numberOf(row.sharpe, 0).toFixed(2)}</td>
-                  <td>{numberOf(row.calmar, 0).toFixed(2)}</td>
-                  <td>{percent(numberOf(row.avg_turnover, 0))}</td>
-                  <td>{numberOf(row.avg_holdings, 0).toFixed(1)}</td>
-                  <td>{money(numberOf(row.avg_total_mv, 0) / 100000000, 1)}亿</td>
-                  <td>{money(numberOf(row.avg_amount, 0) / 100000000, 1)}亿</td>
-                  <td>{String(row.reason || '')}</td>
+              {schemeRows.map((item) => (
+                <tr key={item.key}>
+                  <td>{item.sequence}/{item.total}</td>
+                  <td>{item.rank > 0 ? item.rank : '—'}</td>
+                  <td>{item.name}</td>
+                  <td><span className={`badge ${item.status}`}>{item.status}</span></td>
+                  <td>{Math.round(item.progress * 100)}%</td>
+                  <td>{Number.isFinite(item.score) ? item.score.toFixed(3) : '—'}</td>
+                  <td className="mono">{formatWeights(item.weights)}</td>
+                  <td>{item.exitLabel}</td>
+                  <td>{rebalanceLabel(item.rebalanceFreq)}</td>
+                  <td className={toneOf(item.totalReturn)}>{Number.isFinite(item.totalReturn) ? percent(item.totalReturn, true) : '—'}</td>
+                  <td className={toneOf(item.annualReturn)}>{Number.isFinite(item.annualReturn) ? percent(item.annualReturn, true) : '—'}</td>
+                  <td className={toneOf(item.excessAnnualReturn)}>{Number.isFinite(item.excessAnnualReturn) ? percent(item.excessAnnualReturn, true) : '—'}</td>
+                  <td>{Number.isFinite(item.winRate) ? percent(item.winRate) : '—'}</td>
+                  <td className="negative">{Number.isFinite(item.maxDrawdown) ? percent(item.maxDrawdown) : '—'}</td>
+                  <td>{Number.isFinite(item.sharpe) ? item.sharpe.toFixed(2) : '—'}</td>
+                  <td>{Number.isFinite(item.calmar) ? item.calmar.toFixed(2) : '—'}</td>
+                  <td>{Number.isFinite(item.annualVolatility) ? percent(item.annualVolatility) : '—'}</td>
+                  <td>{Number.isFinite(item.avgHoldingDays) ? `${item.avgHoldingDays.toFixed(1)} 天` : '—'}</td>
+                  <td>{formatExitDistribution(item.exitDistribution)}</td>
+                  <td>{Number.isFinite(item.avgTurnover) ? percent(item.avgTurnover) : '—'}</td>
+                  <td>{Number.isFinite(item.avgHoldings) ? item.avgHoldings.toFixed(1) : '—'}</td>
+                  <td>{Number.isFinite(item.avgTotalMV) ? `${money(item.avgTotalMV / 100000000, 1)}亿` : '—'}</td>
+                  <td>{item.reason}</td>
+                  <td>{item.attempt}/{item.maxAttempts}</td>
+                  <td>{item.error || '—'}</td>
                   <td>
-                    <div className="taskActions compactActions">
-                      <button className="secondaryButton quietButton" onClick={() => onApply(row)}>应用</button>
-                      <button className="secondaryButton startButton" onClick={() => onReview(row)}>复核</button>
-                    </div>
+                    {item.result ? (
+                      <div className="taskActions compactActions">
+                        <button className="secondaryButton quietButton" onClick={() => onApply(item.result as Record<string, unknown>)}>应用入场</button>
+                        <button className="secondaryButton startButton" onClick={() => onReview(item.result as Record<string, unknown>)}>复核</button>
+                      </div>
+                    ) : '—'}
                   </td>
                 </tr>
               ))}
-              {!isRunning && rows.length === 0 && <tr><td colSpan={14} className="emptyCell">暂无组合优化结果，启动任务后生成推荐组合</td></tr>}
-              {isRunning && rows.length === 0 && <tr><td colSpan={14} className="emptyCell">组合优化运行中...</td></tr>}
+              {schemeRows.length === 0 && <tr><td colSpan={26} className="emptyCell">暂无方案，创建时光机后会初始化候选方案</td></tr>}
             </tbody>
           </table>
         </div>
@@ -888,6 +983,89 @@ function Pager({ page, pageCount, onPageChange }: { page: number; pageCount: num
       <button className="secondaryButton quietButton" disabled={current >= pageCount} onClick={() => onPageChange(current + 1)}>下一页</button>
     </div>
   )
+}
+
+function AISuggestionList({ title, items, wide = false }: { title: string; items: string[]; wide?: boolean }) {
+  return (
+    <div className={`aiSuggestionCard ${wide ? 'wide' : ''}`}>
+      <div className="miniCardTitle">{title}</div>
+      {items.length > 0 ? (
+        <ul>
+          {items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}
+        </ul>
+      ) : <div className="mutedText">暂无</div>}
+    </div>
+  )
+}
+
+function buildSchemeRows(childTasks: TaskDTO[], resultRows: Array<Record<string, unknown>>, sortKey: string) {
+  const resultByID = new Map<string, Record<string, unknown>>()
+  for (const row of resultRows) {
+    const id = String(row.candidate_id || '')
+    if (id) resultByID.set(id, row)
+  }
+  const rows = childTasks.map((child) => {
+    const candidateID = String(child.params.candidate_id || child.subtask_key || '')
+    const result = resultByID.get(candidateID) || null
+    const merged = { ...child.params, ...child.summary, ...(result || {}) } as Record<string, unknown>
+    const exitArchitecture = asRecord(merged.exit_architecture) || asRecord(child.params.exit_architecture) || {}
+    return {
+      key: child.id,
+      candidateID,
+      result,
+      sequence: child.sequence,
+      total: child.total,
+      rank: numberOf(merged.rank, 0),
+      name: String(merged.name || child.subtask_name || child.name || '—'),
+      status: child.status,
+      progress: child.progress,
+      score: numberOf(merged.score, NaN),
+      weights: merged.weights,
+      exitLabel: String(merged.exit_architecture_label || exitArchitecture.label || '—'),
+      rebalanceFreq: numberOf(merged.rebalance_freq, numberOf(child.params.rebalance_freq, 5)),
+      totalReturn: numberOf(merged.total_return, NaN),
+      annualReturn: numberOf(merged.annual_return, NaN),
+      excessAnnualReturn: numberOf(merged.excess_annual_return, NaN),
+      winRate: numberOf(merged.win_rate, NaN),
+      maxDrawdown: numberOf(merged.max_drawdown, NaN),
+      sharpe: numberOf(merged.sharpe, NaN),
+      calmar: numberOf(merged.calmar, NaN),
+      annualVolatility: numberOf(merged.annual_volatility, NaN),
+      avgHoldingDays: numberOf(merged.avg_holding_days, NaN),
+      exitDistribution: merged.exit_reason_distribution,
+      avgTurnover: numberOf(merged.avg_turnover, NaN),
+      avgHoldings: numberOf(merged.avg_holdings, NaN),
+      avgTotalMV: numberOf(merged.avg_total_mv, NaN),
+      reason: String(merged.reason || ''),
+      attempt: child.attempt,
+      maxAttempts: child.max_attempts || 1,
+      error: child.error_message
+    }
+  })
+  const statusOrder = { running: 0, queued: 1, created: 2, failed: 3, interrupted: 4, cancelled: 5, success: 6 } as Record<string, number>
+  const sorted = rows.slice()
+  sorted.sort((left, right) => {
+    if (sortKey === 'sequence') return left.sequence - right.sequence
+    if (sortKey === 'status') {
+      const statusDiff = (statusOrder[left.status] ?? 9) - (statusOrder[right.status] ?? 9)
+      return statusDiff || left.sequence - right.sequence
+    }
+    const accessors = {
+      score: (row: typeof left) => row.score,
+      annual_return: (row: typeof left) => row.annualReturn,
+      total_return: (row: typeof left) => row.totalReturn,
+      excess_annual_return: (row: typeof left) => row.excessAnnualReturn,
+      max_drawdown: (row: typeof left) => row.maxDrawdown,
+      sharpe: (row: typeof left) => row.sharpe
+    } as Record<string, (row: typeof left) => number>
+    const accessor = accessors[sortKey] || accessors.score
+    const leftValue = accessor(left)
+    const rightValue = accessor(right)
+    const leftRank = Number.isFinite(leftValue) ? leftValue : -Infinity
+    const rightRank = Number.isFinite(rightValue) ? rightValue : -Infinity
+    return rightRank - leftRank || left.sequence - right.sequence
+  })
+  return sorted
 }
 
 function TimeMachineCharts({ snapshots, initialCash }: { snapshots: TimeMachineDetail['snapshots']; initialCash: number }) {
@@ -1067,9 +1245,15 @@ function toneOf(value: number) {
 
 function admissionClass(value: string) {
   if (value === '可启用') return 'admit'
+  if (value === '限制启用') return 'limited'
   if (value === '暂不启用') return 'reject'
   if (value === '继续观察') return 'watch'
   return ''
+}
+
+function scoreText(value: unknown) {
+  const score = numberOf(value, NaN)
+  return Number.isFinite(score) ? score.toFixed(1) : '—'
 }
 
 function formatWeights(value: unknown) {
@@ -1077,6 +1261,86 @@ function formatWeights(value: unknown) {
   return Object.entries(value as Record<string, unknown>)
     .map(([name, weight]) => `${name}:${percent(numberOf(weight, 0))}`)
     .join(' · ')
+}
+
+function formatStrategies(value: unknown) {
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean).join(' · ') || '—'
+  if (typeof value === 'string' && value.trim()) return value
+  return '—'
+}
+
+function formatExitDistribution(value: unknown) {
+  const record = asRecord(value)
+  if (!record) return '—'
+  const text = Object.entries(record)
+    .filter(([, count]) => numberOf(count, 0) > 0)
+    .map(([reason, count]) => `${exitReasonLabel(reason)} ${numberOf(count, 0)}`)
+    .join(' · ')
+  return text || '—'
+}
+
+function exitReasonLabel(reason: string) {
+  return ({
+    signal_rebalance: '调仓',
+    stop_loss: '止损',
+    trailing_stop: '移动止盈',
+    stop_loss_trailing: '止损/止盈',
+    tight_risk: '稳健风控',
+    wide_risk: '进攻风控'
+  } as Record<string, string>)[reason] || reason
+}
+
+function rebalanceLabel(freq: number) {
+  if (freq === 1) return '日调仓'
+  if (freq === 20) return '月调仓'
+  return '周调仓'
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function asStringArray(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => String(item).trim()).filter(Boolean)
+}
+
+function taskProgressLabel(task: TaskDTO) {
+  if (task.parent_id) return `${task.sequence}/${task.total} · ${Math.round(task.progress * 100)}%`
+  if (task.task_type === 'portfolio_optimization' && task.total) {
+    const done = numberOf(task.summary.completed_count, 0)
+    const failed = numberOf(task.summary.failed_count, 0)
+    return `${done}/${task.total}${failed ? ` · 异常 ${failed}` : ''}`
+  }
+  return `${Math.round(task.progress * 100)}%`
+}
+
+function taskMetric(task: TaskDTO, key: string) {
+  if (task.task_type === 'portfolio_optimization' && !task.parent_id) {
+    if (key === 'annual_return') return numberOf(task.summary.best_annual_return, NaN)
+    if (key === 'max_drawdown') return numberOf(task.summary.best_max_drawdown, NaN)
+    const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
+    const top = rows[0] || {}
+    return numberOf(top[key], NaN)
+  }
+  return numberOf(task.summary[key], NaN)
+}
+
+function metricPercent(task: TaskDTO, key: string, signed = false) {
+  const value = taskMetric(task, key)
+  return Number.isFinite(value) ? percent(value, signed) : '—'
+}
+
+function metricNumber(task: TaskDTO, key: string) {
+  const value = taskMetric(task, key)
+  return Number.isFinite(value) ? value.toFixed(2) : '—'
+}
+
+function taskTypeLabel(task: TaskDTO) {
+  if (task.task_type === 'portfolio_optimization') return task.parent_id ? '方案子任务' : '时光机'
+  if (task.task_type === 'strategy_evaluation') return '策略准入'
+  if (task.task_type === 'evaluation_time_machine') return '时光机'
+  return task.task_type
 }
 
 function statusText(status: string) {
@@ -1118,10 +1382,6 @@ function progressOf(summary: Record<string, unknown>) {
     eta_sec: numberOf(raw.eta_sec, 0),
     date: String(raw.date || '')
   }
-}
-
-function sameSet(left: string[], right: string[]) {
-  return left.length === right.length && left.every((item) => right.includes(item))
 }
 
 function addYears(date: Date, years: number) {

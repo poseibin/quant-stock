@@ -38,6 +38,14 @@ type Task struct {
 	WorkerPID     int       `json:"worker_pid"`
 	ExternalRunID string    `json:"external_run_id"`
 	ErrorMessage  string    `json:"error_message"`
+	ParentID      string    `json:"parent_id"`
+	GroupRunID    string    `json:"group_run_id"`
+	SubtaskKey    string    `json:"subtask_key"`
+	SubtaskName   string    `json:"subtask_name"`
+	Sequence      int       `json:"sequence"`
+	Total         int       `json:"total"`
+	Attempt       int       `json:"attempt"`
+	MaxAttempts   int       `json:"max_attempts"`
 	CreatedAt     time.Time `json:"created_at"`
 	QueuedAt      time.Time `json:"queued_at"`
 	StartedAt     time.Time `json:"started_at"`
@@ -70,6 +78,14 @@ type DTO struct {
 	WorkerPID     int            `json:"worker_pid"`
 	ExternalRunID string         `json:"external_run_id"`
 	ErrorMessage  string         `json:"error_message"`
+	ParentID      string         `json:"parent_id"`
+	GroupRunID    string         `json:"group_run_id"`
+	SubtaskKey    string         `json:"subtask_key"`
+	SubtaskName   string         `json:"subtask_name"`
+	Sequence      int            `json:"sequence"`
+	Total         int            `json:"total"`
+	Attempt       int            `json:"attempt"`
+	MaxAttempts   int            `json:"max_attempts"`
 	CreatedAt     string         `json:"created_at"`
 	QueuedAt      string         `json:"queued_at"`
 	StartedAt     string         `json:"started_at"`

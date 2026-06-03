@@ -84,11 +84,13 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
     }).catch(() => {})
   }, [])
 
-  const activeTasks = tasks.filter((task) => task.status === 'running' || task.status === 'queued' || task.status === 'created')
+  const topLevelTasks = tasks.filter((task) => !task.parent_id)
+  const activeTasks = topLevelTasks.filter((task) => task.status === 'running' || task.status === 'queued')
+  const pendingTasks = topLevelTasks.filter((task) => task.status === 'created')
   const runningTask = activeTasks.find((task) => task.status === 'running') || activeTasks[0]
-  const completedTasks = tasks.filter((task) => task.status === 'success')
-  const failedTasks = tasks.filter((task) => task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled')
-  const evaluations = tasks.filter((task) => evaluationTaskTypes.has(task.task_type))
+  const completedTasks = topLevelTasks.filter((task) => task.status === 'success')
+  const failedTasks = topLevelTasks.filter((task) => task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled')
+  const evaluations = topLevelTasks.filter((task) => evaluationTaskTypes.has(task.task_type))
   const completedEvaluations = evaluations.filter((task) => task.status === 'success')
   const dataFinished = datasetStatus.filter((item) => item.state === 'done' || item.state === 'success').length
   const dataFailed = datasetStatus.filter((item) => item.state === 'failed' || item.state === 'error').length
@@ -97,7 +99,7 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
   const risk = buildRisk(summary)
   const returnStats = useMemo(() => buildReturnStats(history, summary), [history, summary])
   const signalStats = buildSignalStats(recommendation)
-  const events = buildEvents({ recommendation, summary, tasks, dataStatus, datasetStatus })
+  const events = buildEvents({ recommendation, summary, tasks: topLevelTasks, dataStatus, datasetStatus })
   const currentTaskLabel = runningTask ? `${runningTask.name} · ${Math.round(runningTask.progress * 100)}%` : '无'
 
   return (
@@ -150,7 +152,7 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
           <div className="dashboardPanelTitle">系统任务</div>
           <div className="dashboardRows">
             <Row label="当前运行" value={currentTaskLabel} />
-            <Row label="待处理任务" value={`${activeTasks.length} 个`} />
+            <Row label="待处理任务" value={`${activeTasks.length + pendingTasks.length} 个`} />
             <Row label="今日完成" value={`${completedTasks.length} 个`} />
             <Row label="异常 / 取消" value={`${failedTasks.length} 个`} tone={failedTasks.length ? 'negative' : ''} />
             <Row label="评估任务" value={`${completedEvaluations.length}/${evaluations.length}`} />

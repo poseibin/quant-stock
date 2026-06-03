@@ -17,8 +17,9 @@ func (repo *Repository) Create(task Task) error {
 	_, err := repo.db.Exec(`INSERT INTO evaluation_tasks (
 		id, name, task_type, status, progress, params_json, summary_json, result_path,
 		log_path, worker_type, worker_pid, external_run_id, error_message,
+		parent_id, group_run_id, subtask_key, subtask_name, sequence, total, attempt, max_attempts,
 		created_at, queued_at, started_at, finished_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID,
 		task.Name,
 		string(task.TaskType),
@@ -32,6 +33,14 @@ func (repo *Repository) Create(task Task) error {
 		nullInt(task.WorkerPID),
 		nullString(task.ExternalRunID),
 		nullString(task.ErrorMessage),
+		nullString(task.ParentID),
+		nullString(task.GroupRunID),
+		nullString(task.SubtaskKey),
+		nullString(task.SubtaskName),
+		task.Sequence,
+		task.Total,
+		task.Attempt,
+		task.MaxAttempts,
 		formatTime(task.CreatedAt),
 		nullTime(task.QueuedAt),
 		nullTime(task.StartedAt),
@@ -45,6 +54,8 @@ func (repo *Repository) Get(id string) (Task, error) {
 	row := repo.db.QueryRow(`SELECT id, name, task_type, status, progress, params_json,
 		COALESCE(summary_json, ''), COALESCE(result_path, ''), COALESCE(log_path, ''),
 		worker_type, COALESCE(worker_pid, 0), COALESCE(external_run_id, ''), COALESCE(error_message, ''),
+		COALESCE(parent_id, ''), COALESCE(group_run_id, ''), COALESCE(subtask_key, ''), COALESCE(subtask_name, ''),
+		COALESCE(sequence, 0), COALESCE(total, 0), COALESCE(attempt, 0), COALESCE(max_attempts, 1),
 		created_at, COALESCE(queued_at, ''), COALESCE(started_at, ''), COALESCE(finished_at, ''), updated_at
 		FROM evaluation_tasks WHERE id = ?`, id)
 	return scanTask(row)
@@ -61,14 +72,18 @@ func (repo *Repository) List(query Query) ([]Task, error) {
 		rows, err = repo.db.Query(`SELECT id, name, task_type, status, progress, params_json,
 			COALESCE(summary_json, ''), COALESCE(result_path, ''), COALESCE(log_path, ''),
 			worker_type, COALESCE(worker_pid, 0), COALESCE(external_run_id, ''), COALESCE(error_message, ''),
+			COALESCE(parent_id, ''), COALESCE(group_run_id, ''), COALESCE(subtask_key, ''), COALESCE(subtask_name, ''),
+			COALESCE(sequence, 0), COALESCE(total, 0), COALESCE(attempt, 0), COALESCE(max_attempts, 1),
 			created_at, COALESCE(queued_at, ''), COALESCE(started_at, ''), COALESCE(finished_at, ''), updated_at
-			FROM evaluation_tasks WHERE status = ? ORDER BY created_at DESC LIMIT ?`, query.Status, limit)
+			FROM evaluation_tasks WHERE status = ? ORDER BY COALESCE(parent_id, id) DESC, sequence ASC, created_at DESC LIMIT ?`, query.Status, limit)
 	} else {
 		rows, err = repo.db.Query(`SELECT id, name, task_type, status, progress, params_json,
 			COALESCE(summary_json, ''), COALESCE(result_path, ''), COALESCE(log_path, ''),
 			worker_type, COALESCE(worker_pid, 0), COALESCE(external_run_id, ''), COALESCE(error_message, ''),
+			COALESCE(parent_id, ''), COALESCE(group_run_id, ''), COALESCE(subtask_key, ''), COALESCE(subtask_name, ''),
+			COALESCE(sequence, 0), COALESCE(total, 0), COALESCE(attempt, 0), COALESCE(max_attempts, 1),
 			created_at, COALESCE(queued_at, ''), COALESCE(started_at, ''), COALESCE(finished_at, ''), updated_at
-			FROM evaluation_tasks ORDER BY created_at DESC LIMIT ?`, limit)
+			FROM evaluation_tasks ORDER BY COALESCE(parent_id, id) DESC, sequence ASC, created_at DESC LIMIT ?`, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -97,10 +112,33 @@ func (repo *Repository) HasRunningEvaluation(excludeID string) (bool, error) {
 	return count > 0, nil
 }
 
+func (repo *Repository) ListChildren(parentID string) ([]Task, error) {
+	rows, err := repo.db.Query(`SELECT id, name, task_type, status, progress, params_json,
+		COALESCE(summary_json, ''), COALESCE(result_path, ''), COALESCE(log_path, ''),
+		worker_type, COALESCE(worker_pid, 0), COALESCE(external_run_id, ''), COALESCE(error_message, ''),
+		COALESCE(parent_id, ''), COALESCE(group_run_id, ''), COALESCE(subtask_key, ''), COALESCE(subtask_name, ''),
+		COALESCE(sequence, 0), COALESCE(total, 0), COALESCE(attempt, 0), COALESCE(max_attempts, 1),
+		created_at, COALESCE(queued_at, ''), COALESCE(started_at, ''), COALESCE(finished_at, ''), updated_at
+		FROM evaluation_tasks WHERE parent_id = ? ORDER BY sequence ASC, created_at ASC`, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tasks := make([]Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, rows.Err()
+}
+
 func (repo *Repository) UpdateRuntime(task Task) error {
 	_, err := repo.db.Exec(`UPDATE evaluation_tasks SET
 		status = ?, progress = ?, result_path = ?, log_path = ?, worker_pid = ?, external_run_id = ?, error_message = ?,
-		queued_at = ?, started_at = ?, finished_at = ?, updated_at = ?
+		attempt = ?, total = ?, queued_at = ?, started_at = ?, finished_at = ?, updated_at = ?
 		WHERE id = ?`,
 		string(task.Status),
 		task.Progress,
@@ -109,6 +147,8 @@ func (repo *Repository) UpdateRuntime(task Task) error {
 		nullInt(task.WorkerPID),
 		nullString(task.ExternalRunID),
 		nullString(task.ErrorMessage),
+		task.Attempt,
+		task.Total,
 		nullTime(task.QueuedAt),
 		nullTime(task.StartedAt),
 		nullTime(task.FinishedAt),
@@ -134,7 +174,7 @@ func (repo *Repository) UpdateStatus(task Task) error {
 }
 
 func (repo *Repository) Delete(id string) error {
-	_, err := repo.db.Exec(`DELETE FROM evaluation_tasks WHERE id = ?`, id)
+	_, err := repo.db.Exec(`DELETE FROM evaluation_tasks WHERE id = ? OR parent_id = ?`, id, id)
 	return err
 }
 
@@ -161,6 +201,14 @@ func scanTask(scanner interface{ Scan(dest ...any) error }) (Task, error) {
 		&task.WorkerPID,
 		&task.ExternalRunID,
 		&task.ErrorMessage,
+		&task.ParentID,
+		&task.GroupRunID,
+		&task.SubtaskKey,
+		&task.SubtaskName,
+		&task.Sequence,
+		&task.Total,
+		&task.Attempt,
+		&task.MaxAttempts,
 		&createdAt,
 		&queuedAt,
 		&startedAt,

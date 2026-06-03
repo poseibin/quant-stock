@@ -15,6 +15,10 @@ env/
 # Go / Wails
 .gocache/
 bin/
+/dist/
+/quant_stock_core/build/
+/quant_stock_core/dist/
+/quant_stock_desktop/build/bin/
 
 # Frontend
 node_modules/
