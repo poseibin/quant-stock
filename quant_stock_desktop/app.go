@@ -1101,6 +1101,19 @@ type portfolioBaseGroup struct {
 	Items []portfolioCandidatePlan
 }
 
+var researchStrategyUniverse = []string{
+	"market_regime_timing",
+	"multi_factor_composite",
+	"small_cap_quality",
+	"trend_pullback",
+	"dividend_quality",
+	"earnings_revision",
+	"industry_prosperity",
+	"low_crowding_reversal",
+	"event_enhanced",
+	"beijing_satellite",
+}
+
 func (app *App) initializePortfolioEvaluation(parent task.Task) error {
 	if app.database == nil {
 		if err := app.ensureDatabase(); err != nil {
@@ -1319,9 +1332,9 @@ func (app *App) generatePortfolioCandidatesFromNames(names []string, objective s
 		}
 	}
 	objectiveSets := map[string][]string{
-		"稳健": {"dividend_low_vol", "garp_quality", "forecast_revision"},
-		"进攻": {"forecast_revision", "trend_quality", "moneyflow_pullback", "small_cap_quality"},
-		"平衡": {"small_cap_quality", "forecast_revision", "garp_quality", "dividend_low_vol"},
+		"稳健": {"market_regime_timing", "dividend_quality", "multi_factor_composite", "small_cap_quality"},
+		"进攻": {"trend_pullback", "earnings_revision", "industry_prosperity", "low_crowding_reversal"},
+		"平衡": {"multi_factor_composite", "small_cap_quality", "trend_pullback", "dividend_quality"},
 	}
 	if preferred, ok := objectiveSets[objective]; ok {
 		weights := map[string]float64{}
@@ -1334,33 +1347,34 @@ func (app *App) generatePortfolioCandidatesFromNames(names []string, objective s
 	}
 	baseCandidates := interleaveBaseGroups(baseGroups)
 	exitPlans := app.portfolioExitPlans(objective)
-	rebalanceFreqs := []int{5}
-	if objective == "稳健" {
-		rebalanceFreqs = []int{5, 20}
-	} else if objective == "进攻" {
-		rebalanceFreqs = []int{1, 5}
-	}
+	rebalanceFreqs := []int{1, 5, 20}
+	riskPlans := app.portfolioRiskPlans(objective)
+	positionPlans := app.portfolioPositionPlans(objective)
 	seenScheme := map[string]bool{}
 	for _, exitPlan := range exitPlans {
 		for _, rebalanceFreq := range rebalanceFreqs {
-			for _, base := range baseCandidates {
-				if maxCandidates > 0 && len(candidates) >= maxCandidates {
-					return candidates
+			for _, riskPlan := range riskPlans {
+				for _, positionPlan := range positionPlans {
+					for _, base := range baseCandidates {
+						if maxCandidates > 0 && len(candidates) >= maxCandidates {
+							return candidates
+						}
+						candidate := base
+						candidate.RebalanceFreq = rebalanceFreq
+						candidate.ExitArchitecture = cloneMap(exitPlan)
+						candidate.PositionRule = cloneMap(positionPlan)
+						candidate.RiskRule = cloneMap(riskPlan)
+						keyData, _ := json.Marshal(candidate.toSchemePayload())
+						key := string(keyData)
+						if seenScheme[key] {
+							continue
+						}
+						seenScheme[key] = true
+						candidate.ID = fmt.Sprintf("scheme_%03d", len(candidates)+1)
+						candidate.Name = fmt.Sprintf("%s / %s / %s / %s / %s", base.Name, rebalanceLabel(rebalanceFreq), exitLabel(exitPlan), riskLabel(riskPlan), positionLabel(positionPlan))
+						candidates = append(candidates, candidate)
+					}
 				}
-				candidate := base
-				candidate.RebalanceFreq = rebalanceFreq
-				candidate.ExitArchitecture = cloneMap(exitPlan)
-				candidate.PositionRule = map[string]any{"type": "score_weighted_equal_cap", "max_weight": 0.1, "min_position_count": 3}
-				candidate.RiskRule = map[string]any{"portfolio_risk": app.settings.PortfolioRisk}
-				keyData, _ := json.Marshal(candidate.toSchemePayload())
-				key := string(keyData)
-				if seenScheme[key] {
-					continue
-				}
-				seenScheme[key] = true
-				candidate.ID = fmt.Sprintf("scheme_%03d", len(candidates)+1)
-				candidate.Name = fmt.Sprintf("%s / %s / %s", base.Name, rebalanceLabel(rebalanceFreq), exitLabel(exitPlan))
-				candidates = append(candidates, candidate)
 			}
 		}
 	}
@@ -1394,6 +1408,25 @@ func (candidate portfolioCandidatePlan) toSchemePayload() map[string]any {
 		"position_rule":     candidate.PositionRule,
 		"rebalance_freq":    candidate.RebalanceFreq,
 		"risk_rule":         candidate.RiskRule,
+		"research_space":    portfolioResearchSpace(),
+	}
+}
+
+func portfolioResearchSpace() map[string]any {
+	return map[string]any{
+		"strategy":            researchStrategyUniverse,
+		"exit_rule":           []string{"rebalance_only", "stop_loss", "trailing_stop", "stop_loss_trailing"},
+		"rebalance_freq":      []int{1, 5, 20},
+		"market_regime":       []string{"off", "breadth_trend_filter"},
+		"position_max_weight": []float64{0.05, 0.08, 0.10},
+		"parameter_ranges": map[string]any{
+			"max_20d_return": []float64{0.20, 0.25, 0.30, 0.35},
+			"min_roe":        []float64{0.05, 0.06, 0.07, 0.08, 0.10},
+			"holding_days":   []int{7, 10, 20, 35, 60},
+			"max_total_mv":   []float64{50000000000, 80000000000, 120000000000},
+			"stop_loss":      []float64{-0.08, -0.10, -0.12, -0.16},
+			"trailing_stop":  []float64{-0.06, -0.08, -0.10},
+		},
 	}
 }
 
@@ -1415,6 +1448,42 @@ func (app *App) portfolioExitPlans(objective string) []map[string]any {
 		plans = append(plans, map[string]any{"type": "wide_risk", "label": "进攻宽止损+移动止盈", "enabled": true, "stop_loss": -0.16, "trailing_stop": -0.1, "trailing_exec": "next_open", "slippage": baseSlippage})
 	}
 	return plans
+}
+
+func (app *App) portfolioRiskPlans(objective string) []map[string]any {
+	base := cloneMap(app.settings.PortfolioRisk)
+	plain := map[string]any{"label": "无市场过滤", "portfolio_risk": base}
+	filteredRisk := cloneMap(app.settings.PortfolioRisk)
+	filteredRisk["market_regime"] = map[string]any{
+		"enabled":         true,
+		"trend_window":    60,
+		"breadth_window":  20,
+		"min_breadth":     0.45,
+		"normal_exposure": 1.0,
+		"weak_exposure":   0.50,
+		"bear_exposure":   0.25,
+	}
+	if objective == "进攻" {
+		filteredRisk["market_regime"] = map[string]any{"enabled": true, "trend_window": 60, "breadth_window": 20, "min_breadth": 0.40, "normal_exposure": 1.0, "weak_exposure": 0.65, "bear_exposure": 0.35}
+	}
+	return []map[string]any{
+		plain,
+		{"label": "市场状态过滤", "portfolio_risk": filteredRisk},
+	}
+}
+
+func (app *App) portfolioPositionPlans(objective string) []map[string]any {
+	if objective == "稳健" {
+		return []map[string]any{
+			{"type": "score_weighted_equal_cap", "label": "单票5%", "max_weight": 0.05, "min_position_count": 5},
+			{"type": "score_weighted_equal_cap", "label": "单票8%", "max_weight": 0.08, "min_position_count": 4},
+		}
+	}
+	return []map[string]any{
+		{"type": "score_weighted_equal_cap", "label": "单票5%", "max_weight": 0.05, "min_position_count": 5},
+		{"type": "score_weighted_equal_cap", "label": "单票8%", "max_weight": 0.08, "min_position_count": 4},
+		{"type": "score_weighted_equal_cap", "label": "单票10%", "max_weight": 0.10, "min_position_count": 3},
+	}
 }
 
 func cloneMap(value map[string]any) map[string]any {
@@ -1443,11 +1512,32 @@ func exitLabel(plan map[string]any) string {
 	return strings.TrimSpace(fmt.Sprint(plan["type"]))
 }
 
+func riskLabel(plan map[string]any) string {
+	if label := strings.TrimSpace(fmt.Sprint(plan["label"])); label != "" && label != "<nil>" {
+		return label
+	}
+	return "风险默认"
+}
+
+func positionLabel(plan map[string]any) string {
+	if label := strings.TrimSpace(fmt.Sprint(plan["label"])); label != "" && label != "<nil>" {
+		return label
+	}
+	if value, ok := plan["max_weight"]; ok {
+		return fmt.Sprintf("单票%.0f%%", numberParam(map[string]any{"v": value}, "v", 0.1)*100)
+	}
+	return "仓位默认"
+}
+
 func (app *App) resolvePortfolioStrategyNames(value any) []string {
 	selected := strategyParam(value)
 	names := make([]string, 0)
 	if selected == "all" || selected == "enabled" {
-		for name, strategy := range app.settings.Strategies {
+		for _, name := range researchStrategyUniverse {
+			strategy, ok := app.settings.Strategies[name]
+			if !ok {
+				continue
+			}
 			if selected == "all" || strategy.Enabled {
 				names = append(names, name)
 			}

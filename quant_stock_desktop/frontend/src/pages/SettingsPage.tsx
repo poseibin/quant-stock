@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { getSettings, saveSettings, type Settings, type StrategySettings, type ValidationIssue } from '../services/app'
 import { Field } from '../components/Field'
 
-const strategyOrder = ['forecast_revision', 'dividend_low_vol', 'trend_quality', 'garp_quality', 'moneyflow_pullback', 'small_cap_quality', 'reversal', 'insider_buy', 'lhb_follow', 'industry_rotation', 'beijing_se']
+const strategyOrder = ['market_regime_timing', 'multi_factor_composite', 'small_cap_quality', 'trend_pullback', 'dividend_quality', 'earnings_revision', 'industry_prosperity', 'low_crowding_reversal', 'event_enhanced', 'beijing_satellite']
 
 type JsonDrafts = Record<string, string>
 
@@ -91,9 +91,7 @@ export function SettingsPage() {
     setSaved(true)
   }
 
-  const strategyNames = strategyOrder.filter((name) => settings.strategies?.[name]).concat(
-    Object.keys(settings.strategies || {}).filter((name) => !strategyOrder.includes(name))
-  )
+  const strategyNames = strategyOrder.filter((name) => settings.strategies?.[name])
 
   return (
     <div className="settingsPage">

@@ -65,7 +65,7 @@ def main() -> None:
         exit_architecture = _safe_json_object(scheme.get("exit_architecture"))
 
     emit({"type": "progress", "stage": "load", "progress": 0.03, "message": "加载策略与风控配置"})
-    risk = load_portfolio_risk()
+    risk = _candidate_risk(scheme, load_portfolio_risk())
     panels: dict[str, pd.DataFrame] = {}
 
     for idx, name in enumerate(weights.keys(), start=1):
@@ -200,6 +200,20 @@ def _safe_json_object(value: Any) -> dict[str, Any]:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _candidate_risk(scheme: dict[str, Any], default_risk: dict[str, Any]) -> dict[str, Any]:
+    risk_rule = _safe_json_object(scheme.get("risk_rule"))
+    risk = _safe_json_object(risk_rule.get("portfolio_risk")) or dict(default_risk or {})
+    position_rule = _safe_json_object(scheme.get("position_rule"))
+    if position_rule:
+        max_weight = position_rule.get("max_weight")
+        if max_weight is not None:
+            risk["max_single_weight"] = float(max_weight)
+        max_holdings = position_rule.get("max_holdings")
+        if max_holdings is not None:
+            risk["max_holdings"] = int(max_holdings)
+    return risk
 
 
 def _apply_rebalance_freq(weights: pd.DataFrame, rebalance_freq: int) -> pd.DataFrame:

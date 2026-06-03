@@ -18,6 +18,19 @@ from typing import Callable
 _REGISTRY: dict[str, dict] = {}
 _DISCOVERED = False
 
+ACTIVE_UNIVERSE = [
+    "market_regime_timing",
+    "multi_factor_composite",
+    "small_cap_quality",
+    "trend_pullback",
+    "dividend_quality",
+    "earnings_revision",
+    "industry_prosperity",
+    "low_crowding_reversal",
+    "event_enhanced",
+    "beijing_satellite",
+]
+
 
 def register(name: str, label: str | None = None):
     """装饰器：把策略工厂函数登记到注册中心。
@@ -57,6 +70,8 @@ def _discover() -> None:
 def all_names() -> list[str]:
     """返回所有已注册的策略名。"""
     _discover()
+    if all(name in _REGISTRY for name in ACTIVE_UNIVERSE):
+        return list(ACTIVE_UNIVERSE)
     return list(_REGISTRY.keys())
 
 

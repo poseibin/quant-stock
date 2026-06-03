@@ -18,6 +18,16 @@ from .settings import DATA_ROOT
 def _default_settings() -> dict[str, Any]:
     return {
         "strategies": {
+            "market_regime_timing": {
+                "label": "市场状态择时", "enabled": True, "weight": 0.10, "rebalance": "weekly",
+                "filters": {"market_regime": {"trend_window": 60, "breadth_window": 20, "min_breadth": 0.45, "normal_exposure": 1.0, "weak_exposure": 0.50, "bear_exposure": 0.25}},
+                "position": {"n_holdings": 25, "max_single_weight": 0.05},
+            },
+            "multi_factor_composite": {
+                "label": "多因子综合", "enabled": True, "weight": 0.18, "rebalance": "monthly",
+                "selection": {"component_weights": {"small_cap_quality": 0.30, "trend_pullback": 0.25, "dividend_quality": 0.20, "earnings_revision": 0.15, "industry_prosperity": 0.10}},
+                "position": {"n_holdings": 30, "max_single_weight": 0.05},
+            },
             "small_cap_quality": {
                 "label": "小盘质量", "enabled": True, "weight": 0.30, "rebalance": "monthly",
                 "universe": {"profile": "retail_edge", "min_circ_mv": 2_000_000_000, "max_circ_mv": 5_000_000_000, "max_total_mv": 50_000_000_000, "min_listed_days": 250, "min_avg_amount": 20_000_000, "max_20d_return": 0.35, "max_amount_spike": 5.0},
@@ -27,6 +37,45 @@ def _default_settings() -> dict[str, Any]:
                     "score_weights": {"small_size": 0.45, "low_pb": 0.25, "momentum_20d": 0.20, "low_vol_20d": 0.10},
                 },
                 "position": {"n_holdings": 25, "max_single_weight": 0.05},
+            },
+            "trend_pullback": {
+                "label": "趋势回撤", "enabled": True, "weight": 0.12, "rebalance": "weekly",
+                "universe": {"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 50_000_000, "avg_amount_window": 20, "max_total_mv": 80_000_000_000, "max_20d_return": 0.30, "max_amount_spike": 4.0},
+                "filters": {"exclude_st": True, "long_window": 120, "mid_window": 60, "short_window": 20, "min_mid_return": 0.06, "max_short_return": 0.18, "min_roe": 0.06, "max_debt_ratio": 0.75, "score_weights": {"trend": 0.38, "breakout": 0.17, "liquidity": 0.15, "low_vol": 0.15, "quality": 0.15}},
+                "position": {"n_holdings": 18, "max_single_weight": 0.05, "max_industry_weight": 0.30},
+            },
+            "dividend_quality": {
+                "label": "红利质量", "enabled": True, "weight": 0.10, "rebalance": "monthly",
+                "universe": {"profile": "retail_edge", "min_listed_days": 730, "min_avg_amount": 30_000_000, "avg_amount_window": 20, "min_total_mv": 5_000_000_000, "max_total_mv": 120_000_000_000, "max_20d_return": 0.25, "max_amount_spike": 4.0},
+                "filters": {"exclude_st": True, "min_total_mv": 8_000_000_000, "min_dv_ttm": 2.0, "max_pb": 3.0, "vol_window": 60, "min_roe": 0.07, "max_debt_ratio": 0.70, "score_weights": {"dividend": 0.35, "low_vol": 0.25, "low_pb": 0.15, "quality": 0.20, "liquidity": 0.05}},
+                "position": {"n_holdings": 20, "max_single_weight": 0.05, "max_industry_weight": 0.25},
+            },
+            "earnings_revision": {
+                "label": "盈利预期修正", "enabled": True, "weight": 0.10, "rebalance": "event",
+                "filters": {"min_profit_growth": 25.0, "min_turnaround_profit": 20_000_000, "max_post_ann_return": 0.15, "max_pe_ttm": 70.0, "max_pb": 7.0, "min_total_mv": 2_000_000_000, "max_total_mv": 80_000_000_000, "min_avg_amount": 20_000_000, "lookback_days": 20, "holding_days": 35},
+                "position": {"max_single_weight": 0.04, "max_active_events": 20},
+            },
+            "industry_prosperity": {
+                "label": "行业景气", "enabled": True, "weight": 0.10, "rebalance": "monthly",
+                "universe": {"profile": "retail_edge", "min_listed_days": 250, "min_avg_amount": 30_000_000, "max_total_mv": 120_000_000_000, "max_20d_return": 0.30, "max_amount_spike": 4.0},
+                "selection": {"top_n_industries": 4, "momentum_window": 20, "rank_within_industry": [3, 10], "stocks_per_industry": 3, "min_industry_size": 5},
+                "position": {"n_holdings": 12, "max_single_weight": 0.05},
+            },
+            "low_crowding_reversal": {
+                "label": "低拥挤反转", "enabled": True, "weight": 0.10, "rebalance": "quarterly",
+                "filters": {"exclude_st": True, "universe_profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 20_000_000, "max_total_mv": 80_000_000_000, "max_20d_return": 0.25, "min_yoy_revenue": 0.0, "min_quarter_profit_yoy": 0.20, "last_year_negative_or_decline": 0.50, "min_cfo_to_ni_ratio": 0.50, "industry_60d_return_min": -0.05},
+                "position": {"n_holdings": 15, "max_single_weight": 0.06, "max_industry_weight": 0.30},
+            },
+            "event_enhanced": {
+                "label": "事件增强", "enabled": False, "weight": 0.06, "rebalance": "event",
+                "filters": {"min_profit_growth": 25.0, "min_turnaround_profit": 20_000_000, "min_net_amount": 30_000_000, "min_amount_rate": 1.0, "min_inst_net_buy": 50_000_000, "min_increase_amount": 10_000_000, "min_avg_to_current_price_ratio": 0.95, "max_post_ann_return": 0.15, "max_event_day_return": 6.0, "max_event_day_return_cap": 6.0, "min_total_mv": 2_000_000_000, "max_total_mv": 80_000_000_000, "min_avg_amount": 20_000_000, "entry_wait_days": 5, "max_pullback_from_event_close": -0.03, "min_60d_return": 0.10, "holding_days": 10},
+                "position": {"max_single_weight": 0.03, "max_active_events": 20},
+            },
+            "beijing_satellite": {
+                "label": "北交所卫星", "enabled": False, "weight": 0.04, "rebalance": "monthly",
+                "universe": {"market": "BJ", "min_avg_amount": 5_000_000},
+                "filters": {"min_yoy_profit": 0.0, "max_60d_return": 0.25},
+                "position": {"n_holdings": 10, "max_single_weight": 0.06},
             },
             "reversal": {
                 "label": "业绩反转", "enabled": True, "weight": 0.25, "rebalance": "quarterly",

@@ -404,7 +404,16 @@ export async function getSettings(): Promise<SettingsResponse> {
 
 function defaultStrategies(): Record<string, StrategySettings> {
   return {
+    market_regime_timing: { label: '市场状态择时', enabled: true, weight: 0.1, rebalance: 'weekly', filters: { market_regime: { trend_window: 60, breadth_window: 20, min_breadth: 0.45, normal_exposure: 1, weak_exposure: 0.5, bear_exposure: 0.25 } }, position: { n_holdings: 25, max_single_weight: 0.05 } },
+    multi_factor_composite: { label: '多因子综合', enabled: true, weight: 0.18, rebalance: 'monthly', selection: { component_weights: { small_cap_quality: 0.3, trend_pullback: 0.25, dividend_quality: 0.2, earnings_revision: 0.15, industry_prosperity: 0.1 } }, position: { n_holdings: 30, max_single_weight: 0.05 } },
     small_cap_quality: { label: '小盘质量', enabled: true, weight: 0.3, rebalance: 'monthly', filters: {}, universe: {}, position: {} },
+    trend_pullback: { label: '趋势回撤', enabled: true, weight: 0.12, rebalance: 'weekly', filters: {}, universe: {}, position: {} },
+    dividend_quality: { label: '红利质量', enabled: true, weight: 0.1, rebalance: 'monthly', filters: {}, universe: {}, position: {} },
+    earnings_revision: { label: '盈利预期修正', enabled: true, weight: 0.1, rebalance: 'event', filters: {}, position: {} },
+    industry_prosperity: { label: '行业景气', enabled: true, weight: 0.1, rebalance: 'monthly', selection: {}, universe: {}, position: {} },
+    low_crowding_reversal: { label: '低拥挤反转', enabled: true, weight: 0.1, rebalance: 'quarterly', filters: {}, position: {} },
+    event_enhanced: { label: '事件增强', enabled: false, weight: 0.06, rebalance: 'event', filters: {}, position: {} },
+    beijing_satellite: { label: '北交所卫星', enabled: false, weight: 0.04, rebalance: 'monthly', filters: {}, universe: {}, position: {} },
     reversal: { label: '业绩反转', enabled: true, weight: 0.25, rebalance: 'quarterly', filters: {}, position: {} },
     insider_buy: { label: '高管增持', enabled: true, weight: 0.2, rebalance: 'event', filters: {}, position: {} },
     lhb_follow: { label: '龙虎榜', enabled: true, weight: 0.1, rebalance: 'event', filters: {}, position: {} },
