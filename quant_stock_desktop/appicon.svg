@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a2030"/>
+      <stop offset="1" stop-color="#0a0d14"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffdf7e"/>
+      <stop offset="1" stop-color="#ffb000"/>
+    </linearGradient>
+    <linearGradient id="up" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff7a7a"/>
+      <stop offset="1" stop-color="#ef5350"/>
+    </linearGradient>
+    <linearGradient id="down" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26c281"/>
+      <stop offset="1" stop-color="#0f9f70"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.3" cy="0.15" r="0.9">
+      <stop offset="0" stop-color="#ffb000" stop-opacity="0.32"/>
+      <stop offset="0.55" stop-color="#ffb000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="232" ry="232" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="232" ry="232" fill="url(#glow)"/>
+  <rect x="2" y="2" width="1020" height="1020" rx="231" ry="231" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+
+  <g>
+    <line x1="220" y1="430" x2="220" y2="700" stroke="#26c281" stroke-width="6"/>
+    <rect x="190" y="500" width="60" height="160" fill="url(#down)" rx="6"/>
+
+    <line x1="350" y1="350" x2="350" y2="640" stroke="#ef5350" stroke-width="6"/>
+    <rect x="320" y="400" width="60" height="200" fill="url(#up)" rx="6"/>
+
+    <line x1="480" y1="260" x2="480" y2="600" stroke="#ef5350" stroke-width="6"/>
+    <rect x="450" y="300" width="60" height="260" fill="url(#up)" rx="6"/>
+
+    <line x1="610" y1="320" x2="610" y2="610" stroke="#26c281" stroke-width="6"/>
+    <rect x="580" y="370" width="60" height="180" fill="url(#down)" rx="6"/>
+
+    <line x1="740" y1="190" x2="740" y2="560" stroke="#ffb000" stroke-width="6"/>
+    <rect x="710" y="230" width="60" height="290" fill="url(#gold)" rx="6"/>
+  </g>
+
+  <path d="M 180 740 L 360 660 L 500 540 L 640 580 L 820 360"
+        fill="none" stroke="url(#gold)" stroke-width="14"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+  <path d="M 760 365 L 820 360 L 815 420"
+        fill="none" stroke="url(#gold)" stroke-width="14"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text x="512" y="900"
+        font-family="-apple-system, 'SF Pro Display', 'Inter', sans-serif"
+        font-size="160" font-weight="800"
+        fill="url(#gold)" text-anchor="middle" letter-spacing="-4">Q</text>
+</svg>

@@ -1,0 +1,51 @@
+/.verdent/
+/__ext__/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+
+# Go / Wails
+.gocache/
+bin/
+
+# Frontend
+node_modules/
+frontend/node_modules/
+frontend/.vite/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Env
+.env
+.env.local
+
+# 数据与日志
+data_store/
+logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 回测产物
+backtest_results/
+factor_cache/
+*.parquet
+!tests/**/*.parquet
+/quant_stock_desktop/build/

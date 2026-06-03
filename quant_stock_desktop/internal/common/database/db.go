@@ -1,0 +1,432 @@
+package database
+
+import (
+	"database/sql"
+	"os"
+	"path/filepath"
+	"strings"
+
+	_ "modernc.org/sqlite"
+)
+
+type DB struct {
+	conn *sql.DB
+}
+
+func Open(path string) (*DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+	db := &DB{conn: conn}
+	if err := db.Migrate(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func (db *DB) Conn() *sql.DB {
+	return db.conn
+}
+
+func (db *DB) Close() error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	return db.conn.Close()
+}
+
+func (db *DB) Migrate() error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS evaluation_tasks (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			task_type TEXT NOT NULL,
+			status TEXT NOT NULL,
+			progress REAL NOT NULL DEFAULT 0,
+			params_json TEXT NOT NULL,
+			summary_json TEXT,
+			result_path TEXT,
+			log_path TEXT,
+			worker_type TEXT NOT NULL DEFAULT 'python',
+			worker_pid INTEGER,
+			external_run_id TEXT,
+			error_message TEXT,
+			created_at TEXT NOT NULL,
+			queued_at TEXT,
+			started_at TEXT,
+			finished_at TEXT,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_status ON evaluation_tasks(status);`,
+		`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_type ON evaluation_tasks(task_type);`,
+		`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_created_at ON evaluation_tasks(created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_external_run_id ON evaluation_tasks(external_run_id);`,
+		`CREATE TABLE IF NOT EXISTS time_machine_snapshots (
+			run_id TEXT NOT NULL,
+			trade_date TEXT NOT NULL,
+			cash REAL NOT NULL DEFAULT 0,
+			market_value REAL NOT NULL DEFAULT 0,
+			equity REAL NOT NULL DEFAULT 0,
+			n_holdings INTEGER NOT NULL DEFAULT 0,
+			unrealized_pnl REAL NOT NULL DEFAULT 0,
+			realized_pnl REAL NOT NULL DEFAULT 0,
+			cum_return REAL NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(run_id, trade_date)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_time_machine_snapshots_date ON time_machine_snapshots(run_id, trade_date);`,
+		`CREATE TABLE IF NOT EXISTS time_machine_trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id TEXT NOT NULL,
+			trade_date TEXT NOT NULL,
+			ts_code TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL,
+			shares INTEGER NOT NULL DEFAULT 0,
+			price REAL NOT NULL DEFAULT 0,
+			amount REAL NOT NULL DEFAULT 0,
+			hold_days INTEGER NOT NULL DEFAULT 0,
+			realized_pnl REAL NOT NULL DEFAULT 0,
+			exit_reason TEXT NOT NULL DEFAULT '',
+			exec_date TEXT NOT NULL DEFAULT '',
+			is_new INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_time_machine_trades_unique ON time_machine_trades(run_id, trade_date, ts_code, action, shares, price, amount, exit_reason);`,
+		`CREATE INDEX IF NOT EXISTS idx_time_machine_trades_run_date ON time_machine_trades(run_id, trade_date);`,
+		`CREATE TABLE IF NOT EXISTS time_machine_positions (
+			run_id TEXT NOT NULL,
+			trade_date TEXT NOT NULL,
+			ts_code TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			shares INTEGER NOT NULL DEFAULT 0,
+			avg_cost REAL NOT NULL DEFAULT 0,
+			price REAL NOT NULL DEFAULT 0,
+			market_value REAL NOT NULL DEFAULT 0,
+			unrealized_pnl REAL NOT NULL DEFAULT 0,
+			unrealized_pct REAL NOT NULL DEFAULT 0,
+			today_pnl REAL NOT NULL DEFAULT 0,
+			today_pct REAL NOT NULL DEFAULT 0,
+			weight REAL NOT NULL DEFAULT 0,
+			hold_days INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(run_id, trade_date, ts_code)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_time_machine_positions_run_date ON time_machine_positions(run_id, trade_date);`,
+		`CREATE TABLE IF NOT EXISTS market_data_files (
+			id TEXT PRIMARY KEY,
+			data_type TEXT NOT NULL,
+			partition_name TEXT NOT NULL,
+			file_path TEXT NOT NULL,
+			row_count INTEGER NOT NULL DEFAULT 0,
+			file_size INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_market_data_files_path ON market_data_files(file_path);`,
+		`CREATE INDEX IF NOT EXISTS idx_market_data_files_type ON market_data_files(data_type);`,
+		`CREATE TABLE IF NOT EXISTS limit_breakout_cache (
+			cache_key TEXT NOT NULL,
+			rank INTEGER NOT NULL DEFAULT 0,
+			ts_code TEXT NOT NULL,
+			latest_date TEXT NOT NULL DEFAULT '',
+			score REAL NOT NULL DEFAULT 0,
+			payload_json TEXT NOT NULL,
+			generated_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(cache_key, ts_code)
+		);`,
+		`CREATE TABLE IF NOT EXISTS limit_breakout_cache_meta (
+			cache_key TEXT PRIMARY KEY,
+			item_count INTEGER NOT NULL DEFAULT 0,
+			generated_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_limit_breakout_cache_rank ON limit_breakout_cache(cache_key, rank);`,
+		`CREATE INDEX IF NOT EXISTS idx_limit_breakout_cache_date ON limit_breakout_cache(latest_date);`,
+		`CREATE TABLE IF NOT EXISTS limit_up_momentum_cache (
+			cache_key TEXT NOT NULL,
+			rank INTEGER NOT NULL DEFAULT 0,
+			ts_code TEXT NOT NULL,
+			trade_date TEXT NOT NULL DEFAULT '',
+			score REAL NOT NULL DEFAULT 0,
+			payload_json TEXT NOT NULL,
+			generated_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(cache_key, ts_code)
+		);`,
+		`CREATE TABLE IF NOT EXISTS limit_up_momentum_cache_meta (
+			cache_key TEXT PRIMARY KEY,
+			item_count INTEGER NOT NULL DEFAULT 0,
+			generated_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_limit_up_momentum_cache_rank ON limit_up_momentum_cache(cache_key, rank);`,
+		`CREATE INDEX IF NOT EXISTS idx_limit_up_momentum_cache_date ON limit_up_momentum_cache(trade_date);`,
+		`CREATE TABLE IF NOT EXISTS daily_recommendation (
+			date TEXT PRIMARY KEY,
+			generated_at TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_daily_recommendation_date ON daily_recommendation(date);`,
+		`CREATE TABLE IF NOT EXISTS strategy_evaluation (
+			run_id TEXT NOT NULL,
+			strategy TEXT NOT NULL,
+			label TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT '',
+			admission TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			start_date TEXT NOT NULL,
+			end_date TEXT NOT NULL,
+			benchmark TEXT NOT NULL DEFAULT '',
+			baseline TEXT NOT NULL DEFAULT '',
+			total_return REAL,
+			annual_return REAL,
+			annual_volatility REAL,
+			sharpe REAL,
+			max_drawdown REAL,
+			calmar REAL,
+			win_rate REAL,
+			n_days INTEGER,
+			avg_turnover REAL,
+			avg_holdings REAL,
+			avg_total_mv REAL,
+			avg_amount REAL,
+			overlap_with_baseline REAL,
+			corr_with_baseline REAL,
+			error TEXT NOT NULL DEFAULT '',
+			generated_at TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(run_id, strategy)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_run ON strategy_evaluation(run_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_date ON strategy_evaluation(start_date, end_date);`,
+		`CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_strategy ON strategy_evaluation(strategy);`,
+		`CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_admission ON strategy_evaluation(admission);`,
+		`CREATE TABLE IF NOT EXISTS portfolio_optimization_runs (
+			run_id TEXT PRIMARY KEY,
+			start_date TEXT NOT NULL,
+			end_date TEXT NOT NULL,
+			objective TEXT NOT NULL,
+			benchmark TEXT NOT NULL DEFAULT '',
+			strategy_count INTEGER NOT NULL DEFAULT 0,
+			viable_count INTEGER NOT NULL DEFAULT 0,
+			candidate_count INTEGER NOT NULL DEFAULT 0,
+			top_n INTEGER NOT NULL DEFAULT 0,
+			generated_at TEXT NOT NULL,
+			summary_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS portfolio_optimization_candidates (
+			run_id TEXT NOT NULL,
+			candidate_id TEXT NOT NULL,
+			rank INTEGER NOT NULL DEFAULT 0,
+			name TEXT NOT NULL DEFAULT '',
+			objective TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			score REAL NOT NULL DEFAULT 0,
+			strategies TEXT NOT NULL DEFAULT '',
+			weights_json TEXT NOT NULL DEFAULT '{}',
+			annual_return REAL,
+			max_drawdown REAL,
+			sharpe REAL,
+			calmar REAL,
+			avg_turnover REAL,
+			avg_holdings REAL,
+			avg_total_mv REAL,
+			avg_amount REAL,
+			reason TEXT NOT NULL DEFAULT '',
+			payload_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(run_id, candidate_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_portfolio_optimization_candidates_run_rank ON portfolio_optimization_candidates(run_id, rank);`,
+		`CREATE TABLE IF NOT EXISTS py_run_lock (
+			name TEXT PRIMARY KEY,
+			pid INTEGER NOT NULL,
+			hostname TEXT NOT NULL,
+			acquired_at TEXT NOT NULL,
+			heartbeat TEXT NOT NULL,
+			task TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS py_run_status (
+			task TEXT PRIMARY KEY,
+			state TEXT NOT NULL,
+			idx INTEGER NOT NULL DEFAULT 0,
+			total INTEGER NOT NULL DEFAULT 0,
+			stage TEXT,
+			name TEXT,
+			message TEXT,
+			started_at TEXT,
+			updated_at TEXT NOT NULL,
+			finished_at TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS dataset_update_status (
+			dataset TEXT PRIMARY KEY,
+			category TEXT NOT NULL,
+			state TEXT NOT NULL,
+			progress_done INTEGER NOT NULL DEFAULT 0,
+			progress_total INTEGER NOT NULL DEFAULT 0,
+			message TEXT NOT NULL DEFAULT '',
+			rows_written INTEGER NOT NULL DEFAULT 0,
+			error_message TEXT NOT NULL DEFAULT '',
+			started_at TEXT NOT NULL DEFAULT '',
+			finished_at TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_dataset_update_status_category ON dataset_update_status(category);`,
+		`CREATE TABLE IF NOT EXISTS pool_summary (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			initial_cash REAL NOT NULL DEFAULT 500000,
+			current_cash REAL NOT NULL DEFAULT 500000,
+			market_value REAL NOT NULL DEFAULT 0,
+			total_assets REAL NOT NULL DEFAULT 500000,
+			total_cost REAL NOT NULL DEFAULT 0,
+			total_pnl REAL NOT NULL DEFAULT 0,
+			today_pnl REAL NOT NULL DEFAULT 0,
+			today_pct REAL NOT NULL DEFAULT 0,
+			unrealized_pnl REAL NOT NULL DEFAULT 0,
+			unrealized_pct REAL NOT NULL DEFAULT 0,
+			realized_pnl REAL NOT NULL DEFAULT 0,
+			cum_return REAL NOT NULL DEFAULT 0,
+			n_closed INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL DEFAULT ''
+		);`,
+		`INSERT OR IGNORE INTO pool_summary (id, initial_cash, current_cash, total_assets, updated_at) VALUES (1, 500000, 500000, 500000, '');`,
+		`CREATE TABLE IF NOT EXISTS pool_holdings (
+			ts_code TEXT PRIMARY KEY,
+			name TEXT NOT NULL DEFAULT '',
+			industry TEXT NOT NULL DEFAULT '',
+			shares INTEGER NOT NULL DEFAULT 0,
+			avg_cost REAL NOT NULL DEFAULT 0,
+			last_price REAL NOT NULL DEFAULT 0,
+			market_value REAL NOT NULL DEFAULT 0,
+			weight REAL NOT NULL DEFAULT 0,
+			pnl REAL NOT NULL DEFAULT 0,
+			pnl_pct REAL NOT NULL DEFAULT 0,
+			open_date TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE TABLE IF NOT EXISTS pool_trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts_code TEXT NOT NULL,
+			side TEXT NOT NULL,
+			shares INTEGER NOT NULL,
+			price REAL NOT NULL,
+			amount REAL NOT NULL,
+			trade_date TEXT NOT NULL,
+			pnl REAL NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_pool_trades_date ON pool_trades(trade_date);`,
+		`CREATE INDEX IF NOT EXISTS idx_pool_trades_ts ON pool_trades(ts_code);`,
+	}
+	for _, statement := range statements {
+		if _, err := db.conn.Exec(statement); err != nil {
+			return err
+		}
+	}
+	alterStatements := []string{
+		`ALTER TABLE pool_summary ADD COLUMN total_cost REAL NOT NULL DEFAULT 0;`,
+		`ALTER TABLE pool_summary ADD COLUMN today_pct REAL NOT NULL DEFAULT 0;`,
+		`ALTER TABLE pool_summary ADD COLUMN unrealized_pnl REAL NOT NULL DEFAULT 0;`,
+		`ALTER TABLE pool_summary ADD COLUMN unrealized_pct REAL NOT NULL DEFAULT 0;`,
+		`ALTER TABLE pool_summary ADD COLUMN realized_pnl REAL NOT NULL DEFAULT 0;`,
+		`ALTER TABLE pool_summary ADD COLUMN cum_return REAL NOT NULL DEFAULT 0;`,
+		`ALTER TABLE pool_summary ADD COLUMN n_closed INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE time_machine_trades ADD COLUMN is_new INTEGER NOT NULL DEFAULT 0;`,
+	}
+	for _, statement := range alterStatements {
+		_, _ = db.conn.Exec(statement)
+	}
+	return db.migrateStrategyEvaluationSchema()
+}
+
+func (db *DB) migrateStrategyEvaluationSchema() error {
+	rows, err := db.conn.Query(`PRAGMA table_info(strategy_evaluation)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		columns[strings.ToLower(name)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if columns["run_id"] {
+		return nil
+	}
+
+	_, err = db.conn.Exec(`
+		ALTER TABLE strategy_evaluation RENAME TO strategy_evaluation_legacy;
+		CREATE TABLE strategy_evaluation (
+			run_id TEXT NOT NULL,
+			strategy TEXT NOT NULL,
+			label TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT '',
+			admission TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			start_date TEXT NOT NULL,
+			end_date TEXT NOT NULL,
+			benchmark TEXT NOT NULL DEFAULT '',
+			baseline TEXT NOT NULL DEFAULT '',
+			total_return REAL,
+			annual_return REAL,
+			annual_volatility REAL,
+			sharpe REAL,
+			max_drawdown REAL,
+			calmar REAL,
+			win_rate REAL,
+			n_days INTEGER,
+			avg_turnover REAL,
+			avg_holdings REAL,
+			avg_total_mv REAL,
+			avg_amount REAL,
+			overlap_with_baseline REAL,
+			corr_with_baseline REAL,
+			error TEXT NOT NULL DEFAULT '',
+			generated_at TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(run_id, strategy)
+		);
+		CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_run ON strategy_evaluation(run_id);
+		CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_date ON strategy_evaluation(start_date, end_date);
+		CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_strategy ON strategy_evaluation(strategy);
+		CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_admission ON strategy_evaluation(admission);
+	`)
+	return err
+}

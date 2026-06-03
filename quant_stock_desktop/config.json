@@ -1,0 +1,6 @@
+{
+  "workspace_path": "/Users/tiger/GolandProjects/lh/quant_stock_desktop",
+  "data_path": "/Users/tiger/GolandProjects/lh/data_store",
+  "default_initial_cash": 500000,
+  "default_rebalance_freq": 5
+}
