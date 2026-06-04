@@ -5,7 +5,7 @@ import * as echarts from 'echarts/core'
 import { DataZoomComponent, GridComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import { LineChart } from 'echarts/charts'
 import { CanvasRenderer } from 'echarts/renderers'
-import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getTimeMachineDetail, listTasks, refreshTaskStatus, startTask, type TaskDTO, type TimeMachineDetail } from '../services/app'
+import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getTimeMachineDetail, listTasks, listValidationEvidence, refreshTaskStatus, startTask, type TaskDTO, type TimeMachineDetail, type ValidationEvidence } from '../services/app'
 import { Field } from '../components/Field'
 import { formatDate } from '../components/format'
 
@@ -645,11 +645,23 @@ function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart
   onStart: () => void
   onCancel: () => void
 }) {
+  const [evidence, setEvidence] = useState<ValidationEvidence>({ reviews: [], reports: [], snapshots: [] })
+
   useEffect(() => {
     if (task.status !== 'running') return
     const timer = window.setInterval(onRefresh, 3000)
     return () => window.clearInterval(timer)
   }, [task.status, onRefresh])
+
+  useEffect(() => {
+    if (!task.external_run_id) {
+      setEvidence({ reviews: [], reports: [], snapshots: [] })
+      return
+    }
+    listValidationEvidence({ source_run_id: task.external_run_id, limit: 120 })
+      .then(setEvidence)
+      .catch(() => setEvidence({ reviews: [], reports: [], snapshots: [] }))
+  }, [task.external_run_id, task.updated_at])
 
   const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
   const strategyRows = buildStrategyAdmissionRows(childTasks, rows)
@@ -696,6 +708,8 @@ function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart
         <Metric label="暂不启用" value={`${rejectCount}`} tone={rejectCount > 0 ? 'negative' : ''} />
         <Metric label="结果目录" value={resultPathText(task)} hint={task.result_path} />
       </div>
+
+      <ValidationEvidencePanel evidence={evidence} title="策略可信度证据" emptyText="暂无策略版本复核记录，完成策略准入后可在设置页复核版本" />
 
       <div className="detailCard">
         <div className="tableHeader">
@@ -803,11 +817,23 @@ function PortfolioOptimizationDetail({ task, childTasks, onBack, onRefresh, onSt
   onApply: (row: Record<string, unknown>) => void
   onReview: (row: Record<string, unknown>) => void
 }) {
+  const [evidence, setEvidence] = useState<ValidationEvidence>({ reviews: [], reports: [], snapshots: [] })
+
   useEffect(() => {
     if (task.status !== 'running') return
     const timer = window.setInterval(onRefresh, 3000)
     return () => window.clearInterval(timer)
   }, [task.status, onRefresh])
+
+  useEffect(() => {
+    if (!task.external_run_id) {
+      setEvidence({ reviews: [], reports: [], snapshots: [] })
+      return
+    }
+    listValidationEvidence({ subject_type: 'portfolio_optimization', subject_id: task.external_run_id, limit: 80 })
+      .then(setEvidence)
+      .catch(() => setEvidence({ reviews: [], reports: [], snapshots: [] }))
+  }, [task.external_run_id, task.updated_at])
 
   const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
   const isRunning = task.status === 'running'
@@ -855,6 +881,8 @@ function PortfolioOptimizationDetail({ task, childTasks, onBack, onRefresh, onSt
         <Metric label="最佳回撤" value={percent(numberOf(task.summary.best_max_drawdown, 0))} tone="negative" />
         <Metric label="结果目录" value={resultPathText(task)} hint={task.result_path} />
       </div>
+
+      <ValidationEvidencePanel evidence={evidence} title="方案可信度证据" emptyText="暂无方案分析报告，任务成功后点击量化优化生成" />
 
       <div className="detailCard">
         <div className="tableHeader">
@@ -1011,6 +1039,63 @@ function AISuggestionList({ title, items, wide = false }: { title: string; items
           {items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}
         </ul>
       ) : <div className="mutedText">暂无</div>}
+    </div>
+  )
+}
+
+function ValidationEvidencePanel({ evidence, title, emptyText }: { evidence: ValidationEvidence; title: string; emptyText: string }) {
+  const latestSnapshot = evidence.snapshots[0]
+  const latestReport = evidence.reports[0]
+  const hasEvidence = evidence.reviews.length > 0 || evidence.reports.length > 0 || evidence.snapshots.length > 0
+  return (
+    <div className="detailCard evidencePanel">
+      <div className="tableHeader">
+        <div>
+          <div className="formTitle">{title}</div>
+          <p className="recommendationMeta">复核记录、研究报告和数据快照都来自 SQLite，用来判断结论是否能进入模拟盘或下一轮评估</p>
+        </div>
+      </div>
+      {!hasEvidence ? <div className="emptyCell compactEmpty">{emptyText}</div> : null}
+      {hasEvidence ? (
+        <div className="evidenceGrid">
+          <div className="evidenceBlock">
+            <div className="miniCardTitle">复核记录</div>
+            {evidence.reviews.length ? evidence.reviews.slice(0, 6).map((review) => (
+              <div className="evidenceRow" key={review.id}>
+                <div>
+                  <b>{review.strategy || review.subject_id}</b>
+                  <span>{review.recommendation || review.status}</span>
+                </div>
+                <strong className={review.status === 'promotable' ? 'positive' : review.status === 'rejected' ? 'negative' : ''}>{statusText(review.status)} · {scoreText(review.score)}</strong>
+              </div>
+            )) : <div className="mutedText">暂无复核</div>}
+          </div>
+          <div className="evidenceBlock">
+            <div className="miniCardTitle">研究报告</div>
+            {latestReport ? (
+              <div className="evidenceReport">
+                <b>{latestReport.title || latestReport.report_type}</b>
+                <span>{latestReport.model || 'quant'} · {latestReport.created_at}</span>
+                <p>{truncateText(latestReport.content_md || latestReport.report_type, 180)}</p>
+              </div>
+            ) : <div className="mutedText">暂无报告</div>}
+          </div>
+          <div className="evidenceBlock">
+            <div className="miniCardTitle">数据快照</div>
+            {latestSnapshot ? (
+              <div className="snapshotSummary">
+                <span>{latestSnapshot.created_at}</span>
+                {snapshotDataTypes(latestSnapshot.snapshot).slice(0, 6).map((item) => (
+                  <div key={item.name}>
+                    <b>{item.name}</b>
+                    <em>{item.files} 文件 · {item.rows.toLocaleString('zh-CN')} 行</em>
+                  </div>
+                ))}
+              </div>
+            ) : <div className="mutedText">暂无快照</div>}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -1384,6 +1469,23 @@ function asStringArray(value: unknown) {
   return value.map((item) => String(item).trim()).filter(Boolean)
 }
 
+function truncateText(value: string, maxLength: number) {
+  const text = value.replace(/\s+/g, ' ').trim()
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
+}
+
+function snapshotDataTypes(snapshot: Record<string, unknown>) {
+  const files = asRecord(snapshot.market_data_files) || {}
+  return Object.entries(files).map(([name, raw]) => {
+    const item = asRecord(raw) || {}
+    return {
+      name,
+      files: numberOf(item.files, 0),
+      rows: numberOf(item.rows, 0)
+    }
+  }).filter((item) => item.files > 0 || item.rows > 0)
+}
+
 function taskProgressLabel(task: TaskDTO) {
   if (task.parent_id) return `${task.sequence}/${task.total} · ${Math.round(task.progress * 100)}%`
   if (task.task_type === 'portfolio_optimization' && task.total) {
@@ -1423,7 +1525,7 @@ function taskTypeLabel(task: TaskDTO) {
 }
 
 function statusText(status: string) {
-  return ({ created: '待启动', queued: '排队中', running: '评估中', success: '已完成', failed: '失败', cancelled: '已取消', interrupted: '异常中断' } as Record<string, string>)[status] || status
+  return ({ created: '待启动', queued: '排队中', running: '评估中', success: '已完成', failed: '失败', cancelled: '已取消', interrupted: '异常中断', promotable: '可模拟', research: '研究中', rejected: '拒绝', paper: '模拟中', active: '生效' } as Record<string, string>)[status] || status
 }
 
 function resultPathText(task: TaskDTO) {

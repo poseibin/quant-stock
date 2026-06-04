@@ -11,6 +11,7 @@ declare global {
           ActivateStrategyVersion: (request: StrategyVersionActivateRequest) => Promise<SettingsResponse>
           SetStrategyVersionStatus: (request: StrategyVersionStatusRequest) => Promise<StrategyVersion[]>
           ReviewStrategyVersion: (request: StrategyVersionActivateRequest) => Promise<ValidationReview>
+          ListValidationEvidence: (query: ValidationEvidenceQuery) => Promise<ValidationEvidence>
           RefreshRecommendationHindsight: () => Promise<RecommendationHindsight[]>
           ListRecommendationHindsight: () => Promise<RecommendationHindsight[]>
           AnalyzePortfolioTask: (id: string) => Promise<TaskDTO>
@@ -116,6 +117,39 @@ export interface ValidationReview {
   recommendation: string
   created_at: string
   updated_at: string
+}
+
+export interface ResearchReport {
+  id: string
+  subject_type: string
+  subject_id: string
+  report_type: string
+  title: string
+  model: string
+  content_md: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface DataSnapshot {
+  id: string
+  subject_type: string
+  subject_id: string
+  snapshot: Record<string, unknown>
+  created_at: string
+}
+
+export interface ValidationEvidenceQuery {
+  subject_type?: string
+  subject_id?: string
+  source_run_id?: string
+  limit?: number
+}
+
+export interface ValidationEvidence {
+  reviews: ValidationReview[]
+  reports: ResearchReport[]
+  snapshots: DataSnapshot[]
 }
 
 export interface RecommendationHindsight {
@@ -531,6 +565,13 @@ export async function reviewStrategyVersion(request: StrategyVersionActivateRequ
     return window.go.main.App.ReviewStrategyVersion(request)
   }
   return { id: '', subject_type: 'strategy_version', subject_id: `${request.strategy}@${request.version}`, strategy: request.strategy, strategy_version: request.version, source_run_id: '', status: 'research', score: 0, gates: {}, metrics: {}, recommendation: '开发模式占位', created_at: '', updated_at: '' }
+}
+
+export async function listValidationEvidence(query: ValidationEvidenceQuery): Promise<ValidationEvidence> {
+  if (window.go?.main?.App?.ListValidationEvidence) {
+    return window.go.main.App.ListValidationEvidence(query)
+  }
+  return { reviews: [], reports: [], snapshots: [] }
 }
 
 export async function refreshRecommendationHindsight(): Promise<RecommendationHindsight[]> {

@@ -3479,6 +3479,93 @@ th {
   padding: 12px;
 }
 
+.evidencePanel {
+  overflow: visible;
+}
+
+.evidenceGrid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 12px;
+}
+
+.evidenceBlock {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(3, 8, 18, 0.28);
+}
+
+.evidenceRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.evidenceRow:first-of-type {
+  border-top: 0;
+}
+
+.evidenceRow div {
+  min-width: 0;
+}
+
+.evidenceRow b,
+.evidenceReport b {
+  display: block;
+  overflow: hidden;
+  color: #eef2ff;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidenceRow span,
+.evidenceReport span,
+.snapshotSummary span,
+.snapshotSummary em {
+  display: block;
+  overflow: hidden;
+  color: #8f9ab3;
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidenceRow strong {
+  flex: 0 0 auto;
+  color: #d9e1f2;
+  font-size: 12px;
+}
+
+.evidenceReport p {
+  margin: 8px 0 0;
+  color: #cfd7e7;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.snapshotSummary {
+  display: grid;
+  gap: 8px;
+}
+
+.snapshotSummary div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.snapshotSummary b {
+  color: #eef2ff;
+  font-size: 12px;
+}
+
 @media (max-width: 1320px) {
   .main {
     padding: 24px;

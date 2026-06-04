@@ -124,6 +124,39 @@ type ValidationReviewDTO struct {
 	UpdatedAt       string         `json:"updated_at"`
 }
 
+type ResearchReportDTO struct {
+	ID          string         `json:"id"`
+	SubjectType string         `json:"subject_type"`
+	SubjectID   string         `json:"subject_id"`
+	ReportType  string         `json:"report_type"`
+	Title       string         `json:"title"`
+	Model       string         `json:"model"`
+	ContentMD   string         `json:"content_md"`
+	Payload     map[string]any `json:"payload"`
+	CreatedAt   string         `json:"created_at"`
+}
+
+type DataSnapshotDTO struct {
+	ID          string         `json:"id"`
+	SubjectType string         `json:"subject_type"`
+	SubjectID   string         `json:"subject_id"`
+	Snapshot    map[string]any `json:"snapshot"`
+	CreatedAt   string         `json:"created_at"`
+}
+
+type ValidationEvidenceQuery struct {
+	SubjectType string `json:"subject_type"`
+	SubjectID   string `json:"subject_id"`
+	SourceRunID string `json:"source_run_id"`
+	Limit       int    `json:"limit"`
+}
+
+type ValidationEvidenceDTO struct {
+	Reviews   []ValidationReviewDTO `json:"reviews"`
+	Reports   []ResearchReportDTO   `json:"reports"`
+	Snapshots []DataSnapshotDTO     `json:"snapshots"`
+}
+
 type RecommendationHindsightDTO struct {
 	ID                 string         `json:"id"`
 	RecommendationDate string         `json:"recommendation_date"`
@@ -2216,6 +2249,116 @@ func (app *App) ListRecommendationHindsight() ([]RecommendationHindsightDTO, err
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (app *App) ListValidationEvidence(query ValidationEvidenceQuery) (ValidationEvidenceDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return ValidationEvidenceDTO{}, err
+	}
+	limit := query.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 80
+	}
+	subjectType := strings.TrimSpace(query.SubjectType)
+	subjectID := strings.TrimSpace(query.SubjectID)
+	sourceRunID := strings.TrimSpace(query.SourceRunID)
+	out := ValidationEvidenceDTO{
+		Reviews:   []ValidationReviewDTO{},
+		Reports:   []ResearchReportDTO{},
+		Snapshots: []DataSnapshotDTO{},
+	}
+	reviewSQL := `SELECT id, subject_type, subject_id, strategy, COALESCE(strategy_version, 0), source_run_id, status, score, COALESCE(gates_json, '{}'), COALESCE(metrics_json, '{}'), recommendation, created_at, updated_at
+		FROM strategy_validation_reviews`
+	reviewWhere := []string{}
+	args := []any{}
+	if subjectType != "" {
+		reviewWhere = append(reviewWhere, "subject_type = ?")
+		args = append(args, subjectType)
+	}
+	if subjectID != "" {
+		reviewWhere = append(reviewWhere, "subject_id = ?")
+		args = append(args, subjectID)
+	}
+	if sourceRunID != "" {
+		reviewWhere = append(reviewWhere, "source_run_id = ?")
+		args = append(args, sourceRunID)
+	}
+	if len(reviewWhere) > 0 {
+		reviewSQL += " WHERE " + strings.Join(reviewWhere, " AND ")
+	}
+	reviewSQL += " ORDER BY datetime(updated_at) DESC LIMIT ?"
+	args = append(args, limit)
+	if rows, err := app.database.Conn().Query(reviewSQL, args...); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var item ValidationReviewDTO
+			var gatesJSON, metricsJSON string
+			if err := rows.Scan(&item.ID, &item.SubjectType, &item.SubjectID, &item.Strategy, &item.StrategyVersion, &item.SourceRunID, &item.Status, &item.Score, &gatesJSON, &metricsJSON, &item.Recommendation, &item.CreatedAt, &item.UpdatedAt); err == nil {
+				item.Gates = map[string]any{}
+				item.Metrics = map[string]any{}
+				_ = json.Unmarshal([]byte(gatesJSON), &item.Gates)
+				_ = json.Unmarshal([]byte(metricsJSON), &item.Metrics)
+				out.Reviews = append(out.Reviews, item)
+			}
+		}
+	}
+	reportSQL := `SELECT id, subject_type, subject_id, report_type, title, model, content_md, COALESCE(payload_json, '{}'), created_at FROM research_reports`
+	reportWhere := []string{}
+	args = []any{}
+	if subjectType != "" {
+		reportWhere = append(reportWhere, "subject_type = ?")
+		args = append(args, subjectType)
+	}
+	if subjectID != "" {
+		reportWhere = append(reportWhere, "subject_id = ?")
+		args = append(args, subjectID)
+	}
+	if len(reportWhere) > 0 {
+		reportSQL += " WHERE " + strings.Join(reportWhere, " AND ")
+	}
+	reportSQL += " ORDER BY datetime(created_at) DESC LIMIT ?"
+	args = append(args, limit)
+	if rows, err := app.database.Conn().Query(reportSQL, args...); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var item ResearchReportDTO
+			var payloadJSON string
+			if err := rows.Scan(&item.ID, &item.SubjectType, &item.SubjectID, &item.ReportType, &item.Title, &item.Model, &item.ContentMD, &payloadJSON, &item.CreatedAt); err == nil {
+				item.Payload = map[string]any{}
+				_ = json.Unmarshal([]byte(payloadJSON), &item.Payload)
+				out.Reports = append(out.Reports, item)
+			}
+		}
+	}
+	snapshotSQL := `SELECT id, subject_type, subject_id, COALESCE(snapshot_json, '{}'), created_at FROM evaluation_data_snapshots`
+	snapshotWhere := []string{}
+	args = []any{}
+	if subjectType != "" {
+		snapshotWhere = append(snapshotWhere, "subject_type = ?")
+		args = append(args, subjectType)
+	}
+	if subjectID != "" {
+		snapshotWhere = append(snapshotWhere, "subject_id = ?")
+		args = append(args, subjectID)
+	}
+	if len(snapshotWhere) > 0 {
+		snapshotSQL += " WHERE " + strings.Join(snapshotWhere, " AND ")
+	}
+	snapshotSQL += " ORDER BY datetime(created_at) DESC LIMIT ?"
+	args = append(args, limit)
+	if rows, err := app.database.Conn().Query(snapshotSQL, args...); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var item DataSnapshotDTO
+			var snapshotJSON string
+			if err := rows.Scan(&item.ID, &item.SubjectType, &item.SubjectID, &snapshotJSON, &item.CreatedAt); err == nil {
+				item.Snapshot = map[string]any{}
+				_ = json.Unmarshal([]byte(snapshotJSON), &item.Snapshot)
+				out.Snapshots = append(out.Snapshots, item)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (app *App) persistValidationReview(review ValidationReviewDTO) (ValidationReviewDTO, error) {
