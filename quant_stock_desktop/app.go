@@ -837,6 +837,19 @@ func numberParam(params map[string]any, key string, fallback float64) float64 {
 	}
 }
 
+func boolParam(params map[string]any, key string, fallback bool) bool {
+	switch value := params[key].(type) {
+	case bool:
+		return value
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
 func mapParam(params map[string]any, key string) map[string]any {
 	value, ok := params[key]
 	if !ok || value == nil {
@@ -1973,6 +1986,33 @@ func cloneAnyMap(value map[string]any) map[string]any {
 	return out
 }
 
+func (app *App) governanceRules() map[string]any {
+	rules := defaultGovernanceRules()
+	for key, value := range app.settings.GovernanceRules {
+		rules[key] = value
+	}
+	return rules
+}
+
+func defaultGovernanceRules() map[string]any {
+	return map[string]any{
+		"min_promotable_score":          0.85,
+		"min_research_score":            0.55,
+		"min_paper_score":               0.85,
+		"min_active_candidate_score":    0.85,
+		"max_drawdown":                  0.22,
+		"min_sharpe":                    0.30,
+		"min_calmar":                    0.25,
+		"max_turnover":                  0.45,
+		"min_stability_rate":            0.45,
+		"min_walk_forward_pass_rate":    0.50,
+		"min_walk_forward_windows":      1,
+		"min_parameter_stable_rate":     0.50,
+		"require_positive_return":       true,
+		"allow_missing_parameter_tests": true,
+	}
+}
+
 func rebalanceLabel(freq int) string {
 	switch freq {
 	case 1:
@@ -2406,16 +2446,17 @@ func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (Valid
 	metrics["parameter_neighborhood"] = neighborhood
 	metrics["multiple_test_penalty"] = app.multipleTestPenalty(review.SourceRunID)
 	metrics["data_snapshot"] = app.captureDataSnapshot("strategy_version", review.SubjectID)
+	rules := app.governanceRules()
 	review.Metrics = metrics
 	review.Gates = map[string]any{
-		"annual_return_positive": floatValue(metrics["annual_return"], 0) > 0,
-		"drawdown_control":       absFloat(floatValue(metrics["max_drawdown"], 0)) <= 0.22,
-		"sharpe_positive":        floatValue(metrics["sharpe"], 0) >= 0.3,
-		"calmar_positive":        floatValue(metrics["calmar"], 0) >= 0.25,
-		"turnover_acceptable":    floatValue(metrics["avg_turnover"], 0) <= 0.45,
-		"stability_acceptable":   floatValue(metrics["monthly_win_rate"], 0) >= 0.45 || floatValue(metrics["positive_3m_rate"], 0) >= 0.45,
-		"walk_forward_ok":        floatValue(walkForward["pass_rate"], 0) >= 0.50 && floatValue(walkForward["window_count"], 0) >= 1,
-		"neighborhood_stable":    floatValue(neighborhood["checked_versions"], 0) == 0 || floatValue(neighborhood["pass_rate"], 0) >= 0.50,
+		"annual_return_positive": !boolParam(rules, "require_positive_return", true) || floatValue(metrics["annual_return"], 0) > 0,
+		"drawdown_control":       absFloat(floatValue(metrics["max_drawdown"], 0)) <= numberParam(rules, "max_drawdown", 0.22),
+		"sharpe_positive":        floatValue(metrics["sharpe"], 0) >= numberParam(rules, "min_sharpe", 0.30),
+		"calmar_positive":        floatValue(metrics["calmar"], 0) >= numberParam(rules, "min_calmar", 0.25),
+		"turnover_acceptable":    floatValue(metrics["avg_turnover"], 0) <= numberParam(rules, "max_turnover", 0.45),
+		"stability_acceptable":   floatValue(metrics["monthly_win_rate"], 0) >= numberParam(rules, "min_stability_rate", 0.45) || floatValue(metrics["positive_3m_rate"], 0) >= numberParam(rules, "min_stability_rate", 0.45),
+		"walk_forward_ok":        floatValue(walkForward["pass_rate"], 0) >= numberParam(rules, "min_walk_forward_pass_rate", 0.50) && floatValue(walkForward["window_count"], 0) >= numberParam(rules, "min_walk_forward_windows", 1),
+		"neighborhood_stable":    (boolParam(rules, "allow_missing_parameter_tests", true) && floatValue(neighborhood["checked_versions"], 0) == 0) || floatValue(neighborhood["pass_rate"], 0) >= numberParam(rules, "min_parameter_stable_rate", 0.50),
 	}
 	passed := 0
 	for _, value := range review.Gates {
@@ -2427,10 +2468,11 @@ func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (Valid
 	if review.Score < 0 {
 		review.Score = 0
 	}
-	if review.Score >= 0.85 {
+	metrics["governance_rules"] = rules
+	if review.Score >= numberParam(rules, "min_promotable_score", 0.85) {
 		review.Status = "promotable"
 		review.Recommendation = "通过主要晋级门槛，可进入模拟盘；模拟盘稳定后再设为生效版本"
-	} else if review.Score >= 0.55 {
+	} else if review.Score >= numberParam(rules, "min_research_score", 0.55) {
 		review.Status = "research"
 		review.Recommendation = "部分指标通过，建议继续 walk-forward 或参数邻域验证"
 	} else {
@@ -2779,6 +2821,7 @@ func (app *App) refreshPromotionDecisions() error {
 		return err
 	}
 	defer rows.Close()
+	rules := app.governanceRules()
 	now := time.Now().Format(time.RFC3339)
 	for rows.Next() {
 		var strategy, status, validationJSON string
@@ -2791,19 +2834,19 @@ func (app *App) refreshPromotionDecisions() error {
 		score := floatValue(validation["score"], 0)
 		recommended := "research"
 		reason := "缺少足够复核证据，保持研究状态"
-		if score >= 0.85 {
+		if score >= numberParam(rules, "min_paper_score", 0.85) {
 			recommended = "paper"
 			reason = "可信度分数达到模拟盘门槛，建议进入 paper trading"
 		}
-		if status == "paper" && score >= 0.85 {
+		if status == "paper" && score >= numberParam(rules, "min_active_candidate_score", 0.85) {
 			recommended = "active_candidate"
 			reason = "已处于模拟盘且可信度达标，可人工确认后生效"
 		}
-		if score > 0 && score < 0.55 {
+		if score > 0 && score < numberParam(rules, "min_research_score", 0.55) {
 			recommended = "rejected"
 			reason = "可信度不足，不建议启用"
 		}
-		payloadJSON, _ := json.Marshal(map[string]any{"validation": validation})
+		payloadJSON, _ := json.Marshal(map[string]any{"validation": validation, "governance_rules": rules})
 		_, _ = app.database.Conn().Exec(`INSERT INTO promotion_decisions(
 			id, strategy, strategy_version, current_status, recommended_status, score, reason, payload_json, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

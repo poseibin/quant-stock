@@ -60,7 +60,8 @@ export function SettingsPage() {
       ...settings,
       strategies: { ...settings.strategies },
       portfolio_risk: settings.portfolio_risk || {},
-      exit_rules: settings.exit_rules || {}
+      exit_rules: settings.exit_rules || {},
+      governance_rules: settings.governance_rules || {}
     }
     const errors: Record<string, string> = {}
 
@@ -75,6 +76,8 @@ export function SettingsPage() {
           next.portfolio_risk = parsed
         } else if (path === 'exit_rules') {
           next.exit_rules = parsed
+        } else if (path === 'governance_rules') {
+          next.governance_rules = parsed
         }
       } catch {
         errors[path] = 'JSON 格式有误'
@@ -273,10 +276,11 @@ export function SettingsPage() {
       </div>
 
       <div className="formCard">
-        <div className="formTitle">组合风控与卖出规则</div>
+        <div className="formTitle">组合风控、卖出与治理规则</div>
         <div className="configJsonGrid">
           <JsonField label="portfolio_risk" path="portfolio_risk" drafts={jsonDrafts} errors={jsonErrors} onChange={updateJsonDraft} />
           <JsonField label="exit_rules" path="exit_rules" drafts={jsonDrafts} errors={jsonErrors} onChange={updateJsonDraft} />
+          <JsonField label="governance_rules" path="governance_rules" drafts={jsonDrafts} errors={jsonErrors} onChange={updateJsonDraft} />
         </div>
         <button className="primaryButton" onClick={onSave}>保存配置</button>
         {saved && <div className="saveHint">配置已保存到 SQLite，Python 策略会直接读取配置表。</div>}
@@ -310,7 +314,8 @@ function JsonField({
 function makeDrafts(settings: Settings): JsonDrafts {
   const drafts: JsonDrafts = {
     portfolio_risk: pretty(settings.portfolio_risk || {}),
-    exit_rules: pretty(settings.exit_rules || {})
+    exit_rules: pretty(settings.exit_rules || {}),
+    governance_rules: pretty(settings.governance_rules || {})
   }
   for (const [name, strategy] of Object.entries(settings.strategies || {})) {
     drafts[`strategies.${name}.universe`] = pretty(strategy.universe || {})

@@ -10,6 +10,7 @@ type Settings struct {
 	Strategies           map[string]StrategySettings `json:"strategies"`
 	PortfolioRisk        map[string]any              `json:"portfolio_risk"`
 	ExitRules            map[string]any              `json:"exit_rules"`
+	GovernanceRules      map[string]any              `json:"governance_rules"`
 }
 
 type StrategySettings struct {

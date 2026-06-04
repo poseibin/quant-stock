@@ -31,6 +31,7 @@ func DefaultSettings(homeDir string) Settings {
 		Strategies:           defaultStrategies(),
 		PortfolioRisk:        defaultPortfolioRisk(),
 		ExitRules:            defaultExitRules(),
+		GovernanceRules:      defaultGovernanceRules(),
 	})
 }
 
@@ -251,6 +252,7 @@ func normalize(settings Settings) Settings {
 	if settings.ExitRules == nil {
 		settings.ExitRules = defaultExitRules()
 	}
+	settings.GovernanceRules = mergeAnyMap(defaultGovernanceRules(), settings.GovernanceRules)
 	return settings
 }
 
@@ -270,7 +272,16 @@ func cloneSettings(settings Settings) Settings {
 	settings.Strategies = cloneStrategies(settings.Strategies)
 	settings.PortfolioRisk = cloneAnyMap(settings.PortfolioRisk)
 	settings.ExitRules = cloneAnyMap(settings.ExitRules)
+	settings.GovernanceRules = cloneAnyMap(settings.GovernanceRules)
 	return settings
+}
+
+func mergeAnyMap(defaults map[string]any, current map[string]any) map[string]any {
+	merged := cloneAnyMap(defaults)
+	for key, value := range current {
+		merged[key] = cloneAnyValue(value)
+	}
+	return merged
 }
 
 func cloneStrategies(strategies map[string]StrategySettings) map[string]StrategySettings {
@@ -361,6 +372,25 @@ func cloneAnyValue(value any) any {
 		return out
 	default:
 		return typed
+	}
+}
+
+func defaultGovernanceRules() map[string]any {
+	return map[string]any{
+		"min_promotable_score":          0.85,
+		"min_research_score":            0.55,
+		"min_paper_score":               0.85,
+		"min_active_candidate_score":    0.85,
+		"max_drawdown":                  0.22,
+		"min_sharpe":                    0.30,
+		"min_calmar":                    0.25,
+		"max_turnover":                  0.45,
+		"min_stability_rate":            0.45,
+		"min_walk_forward_pass_rate":    0.50,
+		"min_walk_forward_windows":      1,
+		"min_parameter_stable_rate":     0.50,
+		"require_positive_return":       true,
+		"allow_missing_parameter_tests": true,
 	}
 }
 

@@ -69,6 +69,7 @@ export interface Settings {
   strategies: Record<string, StrategySettings>
   portfolio_risk: Record<string, unknown>
   exit_rules: Record<string, unknown>
+  governance_rules: Record<string, unknown>
 }
 
 export interface StrategySettings {
@@ -571,9 +572,29 @@ export async function getSettings(): Promise<SettingsResponse> {
         blacklist: [],
         market_regime: { enabled: false, trend_window: 60, breadth_window: 20, min_breadth: 0.45, normal_exposure: 1, weak_exposure: 0.5, bear_exposure: 0.3 }
       },
-      exit_rules: { enabled: true, stop_loss: -0.12, trailing_stop: -0.08, trailing_exec: 'next_open', slippage: 0.003 }
+      exit_rules: { enabled: true, stop_loss: -0.12, trailing_stop: -0.08, trailing_exec: 'next_open', slippage: 0.003 },
+      governance_rules: defaultGovernanceRules()
     },
     issues: []
+  }
+}
+
+function defaultGovernanceRules(): Record<string, unknown> {
+  return {
+    min_promotable_score: 0.85,
+    min_research_score: 0.55,
+    min_paper_score: 0.85,
+    min_active_candidate_score: 0.85,
+    max_drawdown: 0.22,
+    min_sharpe: 0.3,
+    min_calmar: 0.25,
+    max_turnover: 0.45,
+    min_stability_rate: 0.45,
+    min_walk_forward_pass_rate: 0.5,
+    min_walk_forward_windows: 1,
+    min_parameter_stable_rate: 0.5,
+    require_positive_return: true,
+    allow_missing_parameter_tests: true
   }
 }
 
