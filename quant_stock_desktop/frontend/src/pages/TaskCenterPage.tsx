@@ -9,7 +9,7 @@ import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, 
 import { Field } from '../components/Field'
 import { formatDate } from '../components/format'
 
-const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization'])
+const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
 
 echarts.use([CanvasRenderer, DataZoomComponent, GridComponent, LineChart, TitleComponent, TooltipComponent])
 
@@ -45,7 +45,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
 
   const showDetail = async (id: string) => {
     const task = await refreshTaskStatus(id)
-    const tm = task.task_type === 'strategy_evaluation' || task.task_type === 'portfolio_optimization' ? null : await getTimeMachineDetail(id).catch(() => null)
+    const tm = task.task_type === 'strategy_evaluation' || task.task_type === 'portfolio_optimization' || task.task_type === 'walk_forward_evaluation' || task.task_type === 'parameter_experiment' ? null : await getTimeMachineDetail(id).catch(() => null)
     setSelectedTask(task)
     setDetail(tm)
     await refresh()
@@ -103,6 +103,53 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
       })
       await refresh()
       setNotice('已创建策略准入评估，运行完成后会影响下一次时光机策略池')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const onCreateWalkForward = async () => {
+    setError('')
+    try {
+      await createTask({
+        name: `Walk-forward-${startDate}-${endDate}`,
+        task_type: 'walk_forward_evaluation',
+        params: {
+          start_date: startDate,
+          end_date: endDate,
+          strategies: 'all',
+          baseline: 'small_cap_quality',
+          benchmark: '000905.SH',
+          slippage: slippageBp / 10000,
+          window_count: 4,
+          strategy_version_mode: 'latest'
+        }
+      })
+      await refresh()
+      setNotice('已创建 Walk-forward 样本外稳定性评估')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const onCreateParameterExperiment = async () => {
+    setError('')
+    try {
+      await createTask({
+        name: `参数实验-${startDate}-${endDate}`,
+        task_type: 'parameter_experiment',
+        params: {
+          start_date: startDate,
+          end_date: endDate,
+          strategies: 'all',
+          baseline: 'small_cap_quality',
+          benchmark: '000905.SH',
+          slippage: slippageBp / 10000,
+          strategy_version_mode: 'latest'
+        }
+      })
+      await refresh()
+      setNotice('已创建策略参数网格实验，结果会写入治理表')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -308,7 +355,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
         />
       )
     }
-    if (selectedTask.task_type === 'strategy_evaluation') {
+    if (selectedTask.task_type === 'strategy_evaluation' || selectedTask.task_type === 'walk_forward_evaluation' || selectedTask.task_type === 'parameter_experiment') {
       return (
         <StrategyEvaluationDetail
           task={selectedTask}
@@ -363,6 +410,8 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
           <Field label="AI / 展示 Top N"><input type="number" value={topN} onChange={(event) => setTopN(Number(event.target.value))} /></Field>
           <div className="formActionsBottom taskActionsField">
             <button className="secondaryButton quietButton" onClick={onCreateStrategyAdmission}>创建策略准入</button>
+            <button className="secondaryButton quietButton" onClick={onCreateWalkForward}>创建 Walk-forward</button>
+            <button className="secondaryButton quietButton" onClick={onCreateParameterExperiment}>创建参数实验</button>
             <button className="primaryButton" onClick={onCreate}>创建时光机</button>
           </div>
         </div>
@@ -678,12 +727,13 @@ function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart
   const rejectCount = numberOf(task.summary.reject_count, strategyRows.filter((row) => row.admission === '暂不启用').length)
   const isRunning = task.status === 'running'
   const isRunnable = task.status !== 'running' && task.status !== 'success'
+  const mode = strategyDetailMode(task)
 
   return (
     <div className="taskDetailPage strategyEvalDetail">
       <div className="detailHero">
         <div>
-          <div className="sectionLabel">STRATEGY ADMISSION</div>
+          <div className="sectionLabel">{mode.kicker}</div>
           <h2>{task.name}</h2>
           <p>{task.params.start_date as string} - {task.params.end_date as string} · {statusText(task.status)}</p>
         </div>
@@ -698,24 +748,24 @@ function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart
       {task.error_message && <div className="errorBox">{task.error_message}</div>}
 
       <div className="metricGrid">
-        <Metric label="策略数" value={`${numberOf(task.summary.strategy_count, strategyRows.length)}`} />
+        <Metric label={mode.countLabel} value={`${numberOf(task.summary.planned_count, numberOf(task.summary.strategy_count, strategyRows.length))}`} />
         <Metric label="成功" value={`${successCount}`} />
         <Metric label="空仓" value={`${emptyCount}`} />
         <Metric label="失败" value={`${failedCount}`} tone={failedCount > 0 ? 'negative' : ''} />
-        <Metric label="可启用" value={`${admitCount}`} tone={admitCount > 0 ? 'positive' : ''} />
-        <Metric label="限制启用" value={`${limitedCount}`} />
-        <Metric label="观察" value={`${watchCount}`} />
-        <Metric label="暂不启用" value={`${rejectCount}`} tone={rejectCount > 0 ? 'negative' : ''} />
+        <Metric label={mode.passLabel} value={`${admitCount}`} tone={admitCount > 0 ? 'positive' : ''} />
+        <Metric label={mode.limitedLabel} value={`${limitedCount}`} />
+        <Metric label={mode.watchLabel} value={`${watchCount}`} />
+        <Metric label={mode.rejectLabel} value={`${rejectCount}`} tone={rejectCount > 0 ? 'negative' : ''} />
         <Metric label="结果目录" value={resultPathText(task)} hint={task.result_path} />
       </div>
 
-      <ValidationEvidencePanel evidence={evidence} title="策略可信度证据" emptyText="暂无策略版本复核记录，完成策略准入后可在设置页复核版本" />
+      <ValidationEvidencePanel evidence={evidence} title={mode.evidenceTitle} emptyText={mode.evidenceEmpty} />
 
       <div className="detailCard">
         <div className="tableHeader">
           <div>
-            <div className="formTitle">策略准入表</div>
-            <p className="recommendationMeta">按收益质量、风险调整、回撤控制、换手成本、容量、稳定性与组合独立性综合评分</p>
+            <div className="formTitle">{mode.tableTitle}</div>
+            <p className="recommendationMeta">{mode.tableHint}</p>
           </div>
         </div>
         <div className="tableWrap">
@@ -723,7 +773,7 @@ function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart
             <thead>
               <tr>
                 <th>序号</th>
-                <th>策略</th>
+                <th>{mode.rowLabel}</th>
                 <th>建议</th>
                 <th>准入分</th>
                 <th>任务</th>
@@ -793,7 +843,7 @@ function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart
                   <td>{row.error || '—'}</td>
                 </tr>
               ))}
-              {!isRunning && strategyRows.length === 0 && <tr><td colSpan={30} className="emptyCell">暂无策略子任务，创建策略准入后会初始化候选策略</td></tr>}
+              {!isRunning && strategyRows.length === 0 && <tr><td colSpan={30} className="emptyCell">{mode.emptyText}</td></tr>}
               {isRunning && strategyRows.length === 0 && <tr><td colSpan={30} className="emptyCell">评估运行中...</td></tr>}
             </tbody>
           </table>
@@ -1135,13 +1185,23 @@ function buildStrategyAdmissionRows(childTasks: TaskDTO[], resultRows: Array<Rec
     }))
   }
   const resultByStrategy = new Map<string, Record<string, unknown>>()
+  const resultByCompound = new Map<string, Record<string, unknown>>()
   for (const row of resultRows) {
     const strategy = String(row.strategy || '')
     if (strategy) resultByStrategy.set(strategy, row)
+    const windowName = String(row.walk_window || row.window_name || '')
+    const paramSet = String(row.param_set || '')
+    if (strategy && windowName) resultByCompound.set(`${strategy}:${windowName}`, row)
+    if (strategy && paramSet) resultByCompound.set(`${strategy}:${paramSet}`, row)
   }
   return childTasks.map((child) => {
-    const strategy = String(child.params.strategy || child.subtask_key || '')
-    const result = resultByStrategy.get(strategy) || child.summary || {}
+    const strategy = String(child.params.strategy || String(child.subtask_key || '').split(':')[0] || '')
+    const walkWindow = String(child.params.walk_window || '')
+    const paramSet = String(child.params.param_set || '')
+    const compoundKey = walkWindow ? `${strategy}:${walkWindow}` : paramSet ? `${strategy}:${paramSet}` : ''
+    const result = child.summary && Object.keys(child.summary).length > 0
+      ? child.summary
+      : (compoundKey ? resultByCompound.get(compoundKey) : null) || resultByStrategy.get(strategy) || {}
     return {
       ...result,
       key: child.id,
@@ -1519,9 +1579,60 @@ function metricNumber(task: TaskDTO, key: string) {
 
 function taskTypeLabel(task: TaskDTO) {
   if (task.task_type === 'portfolio_optimization') return task.parent_id ? '方案子任务' : '时光机'
+  if (task.task_type === 'walk_forward_evaluation') return task.parent_id ? '窗口子任务' : 'Walk-forward'
+  if (task.task_type === 'parameter_experiment') return task.parent_id ? '参数子任务' : '参数实验'
   if (task.task_type === 'strategy_evaluation') return '策略准入'
   if (task.task_type === 'evaluation_time_machine') return '时光机'
   return task.task_type
+}
+
+function strategyDetailMode(task: TaskDTO) {
+  if (task.task_type === 'walk_forward_evaluation') {
+    return {
+      kicker: 'WALK-FORWARD',
+      countLabel: '窗口任务',
+      passLabel: '通过',
+      limitedLabel: '边界',
+      watchLabel: '观察',
+      rejectLabel: '失败',
+      evidenceTitle: '样本外稳定性证据',
+      evidenceEmpty: '暂无 Walk-forward 复核证据，运行完成后会写入治理面板',
+      tableTitle: '窗口评估表',
+      tableHint: '按策略在多个时间窗口的收益、回撤、夏普、换手和容量表现跟踪样本外稳定性',
+      rowLabel: '策略 / 窗口',
+      emptyText: '暂无窗口子任务，创建 Walk-forward 后会初始化策略 × 时间窗口'
+    }
+  }
+  if (task.task_type === 'parameter_experiment') {
+    return {
+      kicker: 'PARAMETER EXPERIMENT',
+      countLabel: '参数任务',
+      passLabel: '稳定',
+      limitedLabel: '研究',
+      watchLabel: '观察',
+      rejectLabel: '不稳定',
+      evidenceTitle: '参数稳健性证据',
+      evidenceEmpty: '暂无参数实验复核证据，运行完成后会写入治理面板',
+      tableTitle: '参数实验表',
+      tableHint: '按策略 × 参数组回测，观察硬阈值附近是否存在稳定区间，而不是只保留单点参数',
+      rowLabel: '策略 / 参数组',
+      emptyText: '暂无参数子任务，创建参数实验后会初始化策略 × 参数网格'
+    }
+  }
+  return {
+    kicker: 'STRATEGY ADMISSION',
+    countLabel: '策略数',
+    passLabel: '可启用',
+    limitedLabel: '限制启用',
+    watchLabel: '观察',
+    rejectLabel: '暂不启用',
+    evidenceTitle: '策略可信度证据',
+    evidenceEmpty: '暂无策略版本复核记录，完成策略准入后可在设置页复核版本',
+    tableTitle: '策略准入表',
+    tableHint: '按收益质量、风险调整、回撤控制、换手成本、容量、稳定性与组合独立性综合评分',
+    rowLabel: '策略',
+    emptyText: '暂无策略子任务，创建策略准入后会初始化候选策略'
+  }
 }
 
 function statusText(status: string) {

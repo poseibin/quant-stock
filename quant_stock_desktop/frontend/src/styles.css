@@ -978,6 +978,7 @@ h1 {
 
 .formActionsBottom {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   justify-content: flex-end;
   margin-top: 18px;
@@ -999,7 +1000,7 @@ h1 {
 }
 
 .formActionsBottom .secondaryButton {
-  min-width: 140px;
+  min-width: 128px;
   color: #dbe5f8;
   border-color: rgba(132, 150, 178, 0.28);
   background: linear-gradient(180deg, rgba(27, 35, 50, 0.92), rgba(12, 18, 30, 0.94));
@@ -1012,7 +1013,7 @@ h1 {
 }
 
 .formActionsBottom .primaryButton {
-  min-width: 180px;
+  min-width: 156px;
   color: #17110a;
   border-color: rgba(255, 211, 106, 0.68);
   background: linear-gradient(180deg, #ffd36a 0%, #ffb000 100%);
@@ -3637,7 +3638,7 @@ th {
   }
 
   .taskActionsField {
-    grid-column: 2 / 4;
+    grid-column: 1 / -1;
   }
 
   .dashboardMetricGrid {
@@ -3680,6 +3681,10 @@ th {
 }
 
 @media (max-width: 900px) {
+  body {
+    min-width: 0;
+  }
+
   .shell {
     min-width: 0;
   }
@@ -3736,7 +3741,7 @@ th {
 
   .taskActionsField .secondaryButton,
   .taskActionsField .primaryButton {
-    flex: 1;
+    flex: 1 1 calc(50% - 7px);
     min-width: 0;
   }
 

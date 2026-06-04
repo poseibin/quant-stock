@@ -23,6 +23,10 @@ func NewRunID(req CreateRequest) string {
 		prefix = "se"
 	} else if req.TaskType == TypePortfolioOptimization {
 		prefix = "po"
+	} else if req.TaskType == TypeWalkForwardEvaluation {
+		prefix = "wf"
+	} else if req.TaskType == TypeParameterExperiment {
+		prefix = "px"
 	}
 	return fmt.Sprintf("%s_%s_%s_%s_%s", prefix, strategies, start, end, time.Now().Format("150405"))
 }

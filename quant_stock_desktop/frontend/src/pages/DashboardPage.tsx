@@ -22,7 +22,7 @@ import { formatDate } from '../components/format'
 
 echarts.use([CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
-const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization'])
+const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
 
 function money(value: number) {
   return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })

@@ -1280,6 +1280,34 @@ func (app *App) CreateTask(req task.CreateRequest) (task.DTO, error) {
 		}
 		return task.ToDTO(parent), nil
 	}
+	if req.TaskType == task.TypeWalkForwardEvaluation {
+		parent, err := app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		if err := app.initializeWalkForwardEvaluation(parent); err != nil {
+			return task.DTO{}, err
+		}
+		parent, err = app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		return task.ToDTO(parent), nil
+	}
+	if req.TaskType == task.TypeParameterExperiment {
+		parent, err := app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		if err := app.initializeParameterExperiment(parent); err != nil {
+			return task.DTO{}, err
+		}
+		parent, err = app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		return task.ToDTO(parent), nil
+	}
 	return dto, nil
 }
 
@@ -1375,6 +1403,138 @@ func (app *App) initializeStrategyEvaluation(parent task.Task) error {
 		}
 		if err := app.taskService.Repository().Create(child); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (app *App) initializeWalkForwardEvaluation(parent task.Task) error {
+	if app.database == nil {
+		if err := app.ensureDatabase(); err != nil {
+			return err
+		}
+	}
+	params := task.ToDTO(parent).Params
+	startDate := stringParam(params, "start_date", "")
+	endDate := stringParam(params, "end_date", "")
+	if startDate == "" || endDate == "" {
+		return errors.New("walk-forward requires start_date and end_date")
+	}
+	strategyNames := app.resolveStrategyAdmissionNames(params["strategies"])
+	if len(strategyNames) == 0 {
+		return errors.New("no strategy candidates generated")
+	}
+	windows := walkForwardWindows(startDate, endDate, int(numberParam(params, "window_count", 4)))
+	if len(windows) == 0 {
+		return errors.New("no walk-forward windows generated")
+	}
+	children, err := app.taskService.Repository().ListChildren(parent.ID)
+	if err != nil {
+		return err
+	}
+	if len(children) > 0 {
+		return nil
+	}
+	now := time.Now()
+	runID := parent.ExternalRunID
+	if runID == "" {
+		runID = "wf_" + strings.ReplaceAll(parent.ID, "-", "")
+	}
+	parent.ExternalRunID = runID
+	parent.Total = len(strategyNames) * len(windows)
+	parent.Progress = 0
+	parent.ResultPath = filepath.Join(app.settings.DataPath, "backtest_results", runID)
+	parent.SummaryJSON = mustJSON(map[string]any{"start": startDate, "end": endDate, "windows": windows, "strategy_count": len(strategyNames), "planned_count": parent.Total, "rows": []any{}})
+	parent.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(parent); err != nil {
+		return err
+	}
+	seq := 0
+	for _, window := range windows {
+		for _, strategyName := range strategyNames {
+			seq++
+			childParams := map[string]any{
+				"start_date":            window["start_date"],
+				"end_date":              window["end_date"],
+				"strategies":            strategyName,
+				"strategy":              strategyName,
+				"baseline":              stringParam(params, "baseline", "small_cap_quality"),
+				"benchmark":             stringParam(params, "benchmark", "000905.SH"),
+				"slippage":              numberParam(params, "slippage", 0.002),
+				"strategy_version_mode": stringParam(params, "strategy_version_mode", "latest"),
+				"walk_window":           window["name"],
+			}
+			paramsData, _ := json.Marshal(childParams)
+			childRunID := fmt.Sprintf("%s_%s_%03d", runID, strings.ToLower(fmt.Sprint(window["name"])), seq)
+			child := task.Task{ID: task.NewID(), Name: fmt.Sprintf("%s %s", app.strategyDisplayName(strategyName), window["name"]), TaskType: task.TypeStrategyEvaluation, Status: task.StatusCreated, ParamsJSON: string(paramsData), WorkerType: "python", ExternalRunID: childRunID, ParentID: parent.ID, GroupRunID: runID, SubtaskKey: fmt.Sprintf("%s:%s", strategyName, window["name"]), SubtaskName: fmt.Sprintf("%s %s", app.strategyDisplayName(strategyName), window["name"]), Sequence: seq, Total: parent.Total, MaxAttempts: 2, CreatedAt: now.Add(time.Duration(seq) * time.Millisecond), UpdatedAt: now}
+			if err := app.taskService.Repository().Create(child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (app *App) initializeParameterExperiment(parent task.Task) error {
+	if app.database == nil {
+		if err := app.ensureDatabase(); err != nil {
+			return err
+		}
+	}
+	params := task.ToDTO(parent).Params
+	startDate := stringParam(params, "start_date", "")
+	endDate := stringParam(params, "end_date", "")
+	if startDate == "" || endDate == "" {
+		return errors.New("parameter experiment requires start_date and end_date")
+	}
+	strategyNames := app.resolveStrategyAdmissionNames(params["strategies"])
+	if len(strategyNames) == 0 {
+		return errors.New("no strategy candidates generated")
+	}
+	experiments := parameterExperimentGrid()
+	children, err := app.taskService.Repository().ListChildren(parent.ID)
+	if err != nil {
+		return err
+	}
+	if len(children) > 0 {
+		return nil
+	}
+	now := time.Now()
+	runID := parent.ExternalRunID
+	if runID == "" {
+		runID = "px_" + strings.ReplaceAll(parent.ID, "-", "")
+	}
+	parent.ExternalRunID = runID
+	parent.Total = len(strategyNames) * len(experiments)
+	parent.Progress = 0
+	parent.ResultPath = filepath.Join(app.settings.DataPath, "backtest_results", runID)
+	parent.SummaryJSON = mustJSON(map[string]any{"start": startDate, "end": endDate, "experiments": experiments, "strategy_count": len(strategyNames), "planned_count": parent.Total, "rows": []any{}})
+	parent.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(parent); err != nil {
+		return err
+	}
+	seq := 0
+	for _, strategyName := range strategyNames {
+		for _, experiment := range experiments {
+			seq++
+			childParams := map[string]any{
+				"start_date":            startDate,
+				"end_date":              endDate,
+				"strategies":            strategyName,
+				"strategy":              strategyName,
+				"baseline":              stringParam(params, "baseline", "small_cap_quality"),
+				"benchmark":             stringParam(params, "benchmark", "000905.SH"),
+				"slippage":              numberParam(params, "slippage", 0.002),
+				"strategy_version_mode": stringParam(params, "strategy_version_mode", "latest"),
+				"strategy_overrides":    map[string]any{strategyName: experiment["override"]},
+				"param_set":             experiment["name"],
+			}
+			paramsData, _ := json.Marshal(childParams)
+			childRunID := fmt.Sprintf("%s_px_%03d", runID, seq)
+			child := task.Task{ID: task.NewID(), Name: fmt.Sprintf("%s %s", app.strategyDisplayName(strategyName), experiment["name"]), TaskType: task.TypeStrategyEvaluation, Status: task.StatusCreated, ParamsJSON: string(paramsData), WorkerType: "python", ExternalRunID: childRunID, ParentID: parent.ID, GroupRunID: runID, SubtaskKey: fmt.Sprintf("%s:%s", strategyName, experiment["name"]), SubtaskName: fmt.Sprintf("%s %s", app.strategyDisplayName(strategyName), experiment["name"]), Sequence: seq, Total: parent.Total, MaxAttempts: 2, CreatedAt: now.Add(time.Duration(seq) * time.Millisecond), UpdatedAt: now}
+			if err := app.taskService.Repository().Create(child); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -3096,6 +3256,57 @@ func jsonRawMap(data string) map[string]any {
 	return out
 }
 
+func walkForwardWindows(startDate string, endDate string, count int) []map[string]any {
+	if count <= 0 {
+		count = 4
+	}
+	start, okStart := parseYYYYMMDD(startDate)
+	end, okEnd := parseYYYYMMDD(endDate)
+	if !okStart || !okEnd || !end.After(start) {
+		return nil
+	}
+	totalDays := int(end.Sub(start).Hours() / 24)
+	if totalDays < count {
+		count = 1
+	}
+	step := totalDays / count
+	if step <= 0 {
+		step = totalDays
+	}
+	out := []map[string]any{}
+	for idx := 0; idx < count; idx++ {
+		wStart := start.AddDate(0, 0, idx*step)
+		wEnd := start.AddDate(0, 0, (idx+1)*step-1)
+		if idx == count-1 || wEnd.After(end) {
+			wEnd = end
+		}
+		if !wEnd.Before(wStart) {
+			out = append(out, map[string]any{"name": fmt.Sprintf("WF%02d", idx+1), "start_date": wStart.Format("20060102"), "end_date": wEnd.Format("20060102")})
+		}
+	}
+	return out
+}
+
+func parameterExperimentGrid() []map[string]any {
+	return []map[string]any{
+		{"name": "base", "override": map[string]any{}},
+		{"name": "risk_tight", "override": map[string]any{"filters": map[string]any{"max_20d_return": 0.20, "max_short_return": 0.10}, "position": map[string]any{"max_single_weight": 0.035}}},
+		{"name": "risk_mid", "override": map[string]any{"filters": map[string]any{"max_20d_return": 0.28, "max_short_return": 0.15}, "position": map[string]any{"max_single_weight": 0.045}}},
+		{"name": "risk_loose", "override": map[string]any{"filters": map[string]any{"max_20d_return": 0.35, "max_short_return": 0.20}, "position": map[string]any{"max_single_weight": 0.055}}},
+		{"name": "hold_short", "override": map[string]any{"filters": map[string]any{"holding_days": 20}}},
+		{"name": "hold_mid", "override": map[string]any{"filters": map[string]any{"holding_days": 45}}},
+		{"name": "quality_strict", "override": map[string]any{"filters": map[string]any{"min_roe": 0.08, "min_gross_margin": 0.20}}},
+	}
+}
+
+func parseYYYYMMDD(value string) (time.Time, bool) {
+	t, err := time.Parse("20060102", strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
 func (app *App) buildPortfolioAnalysisContext(parent task.Task, children []task.Task) (map[string]any, error) {
 	params := task.ToDTO(parent).Params
 	runID := parent.ExternalRunID
@@ -3971,7 +4182,7 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	if t.Status != task.StatusCreated && t.Status != task.StatusQueued && t.Status != task.StatusInterrupted && t.Status != task.StatusFailed && t.Status != task.StatusCancelled {
 		return task.DTO{}, errors.New("task cannot be started in current status")
 	}
-	if t.TaskType != task.TypeEvaluationTimeMachine && t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypePortfolioOptimization {
+	if t.TaskType != task.TypeEvaluationTimeMachine && t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment {
 		return task.DTO{}, errors.New("only evaluation tasks can be started")
 	}
 	running, err := app.taskService.Repository().HasRunningEvaluation(t.ID)
@@ -3982,6 +4193,9 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 		return task.DTO{}, errors.New("已有评估任务正在运行，同一时间只能运行一个评估")
 	}
 	if t.TaskType == task.TypeStrategyEvaluation {
+		return app.startStrategyEvaluationTask(t)
+	}
+	if t.TaskType == task.TypeWalkForwardEvaluation || t.TaskType == task.TypeParameterExperiment {
 		return app.startStrategyEvaluationTask(t)
 	}
 	if t.TaskType == task.TypePortfolioOptimization {
@@ -4065,8 +4279,17 @@ func (app *App) startStrategyEvaluationTask(t task.Task) (task.DTO, error) {
 		return task.DTO{}, err
 	}
 	if len(children) == 0 {
-		if err := app.initializeStrategyEvaluation(t); err != nil {
-			return task.DTO{}, err
+		var initErr error
+		switch t.TaskType {
+		case task.TypeWalkForwardEvaluation:
+			initErr = app.initializeWalkForwardEvaluation(t)
+		case task.TypeParameterExperiment:
+			initErr = app.initializeParameterExperiment(t)
+		default:
+			initErr = app.initializeStrategyEvaluation(t)
+		}
+		if initErr != nil {
+			return task.DTO{}, initErr
 		}
 		children, err = app.taskService.Repository().ListChildren(t.ID)
 		if err != nil {
@@ -4151,12 +4374,16 @@ func (app *App) runStrategyEvaluationChildren(parent task.Task) {
 }
 
 func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, error) {
-	runID := t.GroupRunID
+	runID := t.ExternalRunID
 	if runID == "" {
-		runID = t.ExternalRunID
+		runID = t.GroupRunID
+	}
+	groupRunID := t.GroupRunID
+	if groupRunID == "" {
+		groupRunID = runID
 	}
 	if runID == "" {
-		return t, errors.New("strategy evaluation child requires group run id")
+		return t, errors.New("strategy evaluation child requires run id")
 	}
 	params := task.ToDTO(t).Params
 	startDate := stringParam(params, "start_date", "")
@@ -4201,6 +4428,11 @@ func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, er
 		"DESKTOP_DB_PATH="+filepath.Join(app.settings.DataPath, "meta.db"),
 		"DESKTOP_CONFIG_DB_PATH="+filepath.Join(app.settings.DataPath, "meta.db"),
 	)
+	if overrides := mapParam(params, "strategy_overrides"); len(overrides) > 0 {
+		if data, err := json.Marshal(overrides); err == nil {
+			cmd.Env = append(cmd.Env, "QUANT_STRATEGY_OVERRIDES_JSON="+string(data))
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return t, err
@@ -4212,7 +4444,7 @@ func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, er
 	t.LogPath = logPath
 	t.WorkerPID = cmd.Process.Pid
 	t.ExternalRunID = runID
-	t.GroupRunID = runID
+	t.GroupRunID = groupRunID
 	t.ErrorMessage = ""
 	t.Attempt++
 	t.StartedAt = now
@@ -4241,6 +4473,7 @@ func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, er
 	}
 	t.Status = task.StatusSuccess
 	t.SummaryJSON = readStrategyEvaluationRowSummaryFromDB(app.database.Conn(), runID, strategyName)
+	app.persistStrategyExperimentArtifacts(t, strategyName)
 	_ = app.taskService.Repository().UpdateRuntime(t)
 	if t.SummaryJSON != "" {
 		_ = app.taskService.Repository().UpdateStatus(t)
@@ -4264,6 +4497,55 @@ func (app *App) finishStrategyEvaluationParent(parent task.Task, status task.Sta
 	_ = app.taskService.Repository().UpdateRuntime(parent)
 }
 
+func (app *App) persistStrategyExperimentArtifacts(child task.Task, strategyName string) {
+	params := task.ToDTO(child).Params
+	summary := map[string]any{}
+	if child.SummaryJSON != "" {
+		_ = json.Unmarshal([]byte(child.SummaryJSON), &summary)
+	}
+	score := strategyWindowScore(floatValue(summary["annual_return"], 0), floatValue(summary["max_drawdown"], 0), floatValue(summary["sharpe"], 0), floatValue(summary["calmar"], 0), floatValue(summary["avg_turnover"], 0))
+	status := "research"
+	if score >= 0.75 {
+		status = "pass"
+	} else if score < 0.45 {
+		status = "fail"
+	}
+	now := time.Now().Format(time.RFC3339)
+	if windowName := strings.TrimSpace(fmt.Sprint(params["walk_window"])); windowName != "" && windowName != "<nil>" {
+		metricsJSON, _ := json.Marshal(summary)
+		subjectID := fmt.Sprintf("%s@%d", strategyName, int(numberParam(params, "strategy_version", 0)))
+		_, _ = app.database.Conn().Exec(`INSERT INTO walk_forward_windows(
+			id, subject_type, subject_id, window_name, start_date, end_date, status, score, metrics_json, created_at, updated_at
+		) VALUES (?, 'strategy', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(subject_type, subject_id, window_name) DO UPDATE SET
+			status = excluded.status,
+			score = excluded.score,
+			metrics_json = excluded.metrics_json,
+			updated_at = excluded.updated_at`,
+			"wfw_"+strings.ReplaceAll(task.NewID(), "-", ""), subjectID, windowName, stringParam(params, "start_date", ""), stringParam(params, "end_date", ""), status, score, string(metricsJSON), now, now)
+	}
+	if paramSet := strings.TrimSpace(fmt.Sprint(params["param_set"])); paramSet != "" && paramSet != "<nil>" {
+		metricsJSON, _ := json.Marshal(summary)
+		overridesJSON, _ := json.Marshal(mapParam(params, "strategy_overrides"))
+		expStatus := "research"
+		if score >= 0.75 {
+			expStatus = "stable"
+		} else if score < 0.45 {
+			expStatus = "unstable"
+		}
+		_, _ = app.database.Conn().Exec(`INSERT INTO parameter_experiments(
+			id, strategy, strategy_version, param_set, status, score, params_json, metrics_json, created_at, updated_at
+		) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(strategy, strategy_version, param_set) DO UPDATE SET
+			status = excluded.status,
+			score = excluded.score,
+			params_json = excluded.params_json,
+			metrics_json = excluded.metrics_json,
+			updated_at = excluded.updated_at`,
+			"pe_"+strings.ReplaceAll(task.NewID(), "-", ""), strategyName, paramSet, expStatus, score, string(overridesJSON), string(metricsJSON), now, now)
+	}
+}
+
 func (app *App) strategyEvaluationSummaryForParent(parent task.Task, children []task.Task) string {
 	summary := readStrategyEvaluationSummaryFromDB(app.database.Conn(), parent.ExternalRunID)
 	payload := map[string]any{}
@@ -4271,6 +4553,33 @@ func (app *App) strategyEvaluationSummaryForParent(parent task.Task, children []
 		_ = json.Unmarshal([]byte(summary), &payload)
 	} else if parent.SummaryJSON != "" {
 		_ = json.Unmarshal([]byte(parent.SummaryJSON), &payload)
+	}
+	if rows, ok := payload["rows"].([]any); !ok || len(rows) == 0 {
+		childRows := make([]any, 0, len(children))
+		for _, child := range children {
+			if child.SummaryJSON == "" {
+				continue
+			}
+			var row map[string]any
+			if err := json.Unmarshal([]byte(child.SummaryJSON), &row); err != nil {
+				continue
+			}
+			params := task.ToDTO(child).Params
+			if windowName := stringParam(params, "walk_window", ""); windowName != "" {
+				row["walk_window"] = windowName
+				row["window_name"] = windowName
+			}
+			if paramSet := stringParam(params, "param_set", ""); paramSet != "" {
+				row["param_set"] = paramSet
+			}
+			row["subtask_key"] = child.SubtaskKey
+			row["subtask_name"] = child.SubtaskName
+			childRows = append(childRows, row)
+		}
+		if len(childRows) > 0 {
+			payload["rows"] = childRows
+			enrichStrategyEvaluationSummary(payload)
+		}
 	}
 	successChildren := 0
 	failedChildren := 0
