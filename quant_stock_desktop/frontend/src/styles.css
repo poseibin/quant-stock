@@ -1326,22 +1326,6 @@ h1 {
   white-space: pre-wrap;
 }
 
-.signalVersionPills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.signalVersionPills span {
-  padding: 4px 8px;
-  color: #aeb7cb;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
-  background: rgba(8, 11, 18, 0.5);
-  font-size: 12px;
-}
-
 .configJsonGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1742,6 +1726,8 @@ h1 {
 .tableHeaderRight {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
+  justify-content: flex-end;
   gap: 12px;
 }
 
@@ -1764,6 +1750,7 @@ h1 {
 
 .tableHeaderRight .primaryButton,
 .tableHeaderRight .secondaryButton {
+  min-width: 118px;
   min-height: 42px;
   margin-top: 0;
   padding: 0 18px;
