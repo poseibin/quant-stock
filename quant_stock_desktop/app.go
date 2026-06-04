@@ -3099,7 +3099,7 @@ func (app *App) dataQualitySummary() (map[string]any, error) {
 	missing := []string{}
 	for _, name := range required {
 		item, ok := datasets[name].(map[string]any)
-		if !ok || int64(floatValue(item["rows"], 0)) <= 0 {
+		if !ok || (int64(floatValue(item["rows"], 0)) <= 0 && int(floatValue(item["files"], 0)) <= 0) {
 			missing = append(missing, name)
 		}
 	}

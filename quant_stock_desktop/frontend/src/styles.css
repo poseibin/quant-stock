@@ -956,6 +956,13 @@ h1 {
   padding: 22px 24px;
 }
 
+.taskAutoPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: end;
+}
+
 .taskFormGrid {
   grid-template-columns:
     minmax(180px, 1.15fr)
@@ -3635,6 +3642,10 @@ th {
   .taskFormGrid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     row-gap: 16px;
+  }
+
+  .taskAutoPanel {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .taskActionsField {

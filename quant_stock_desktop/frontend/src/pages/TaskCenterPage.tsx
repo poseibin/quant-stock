@@ -6,7 +6,6 @@ import { DataZoomComponent, GridComponent, TitleComponent, TooltipComponent } fr
 import { LineChart } from 'echarts/charts'
 import { CanvasRenderer } from 'echarts/renderers'
 import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getTimeMachineDetail, listTasks, listValidationEvidence, refreshTaskStatus, startTask, type TaskDTO, type TimeMachineDetail, type ValidationEvidence } from '../services/app'
-import { Field } from '../components/Field'
 import { formatDate } from '../components/format'
 
 const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
@@ -21,18 +20,18 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   const [notice, setNotice] = useState('')
   const [aiAnalyzing, setAiAnalyzing] = useState(false)
   const [nextEvalCreating, setNextEvalCreating] = useState(false)
-  const [name, setName] = useState('时光机')
-  const [startDate, setStartDate] = useState(() => formatYYYYMMDD(addYears(new Date(), -1)))
-  const [endDate, setEndDate] = useState(() => formatYYYYMMDD(new Date()))
-  const [initialCash, setInitialCash] = useState(500000)
-  const [rebalanceFreq, setRebalanceFreq] = useState(5)
+  const name = '时光机'
+  const startDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -3)), [])
+  const endDate = useMemo(() => formatYYYYMMDD(new Date()), [])
+  const initialCash = 500000
+  const rebalanceFreq = 5
   const [exitEnabled, setExitEnabled] = useState(false)
   const [stopLossPct, setStopLossPct] = useState(-12)
   const [trailingStopPct, setTrailingStopPct] = useState(-8)
   const [trailingExec, setTrailingExec] = useState('next_open')
   const [slippageBp, setSlippageBp] = useState(30)
-  const [optimizationObjective, setOptimizationObjective] = useState('平衡')
-  const [topN, setTopN] = useState(40)
+  const optimizationObjective = '平衡'
+  const topN = 40
 
   const refresh = async () => {
     const items = (await listTasks({ limit: 500 })).filter((item) => evaluationTaskTypes.has(item.task_type))
@@ -392,22 +391,14 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   return (
     <div className="taskPage">
       <div className="taskModeTabs">
-        <button className="active" onClick={() => setName('时光机')}>时光机</button>
+        <button className="active">时光机</button>
       </div>
       <div className="formCard taskFormCard">
-        <div className="formGrid taskFormGrid">
-          <Field label="评估名称"><input value={name} onChange={(event) => setName(event.target.value)} /></Field>
-          <Field label="开始日期"><input value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
-          <Field label="结束日期"><input value={endDate} onChange={(event) => setEndDate(event.target.value)} /></Field>
-          <Field label="滑点 bp"><input type="number" value={slippageBp} onChange={(event) => setSlippageBp(Number(event.target.value))} /></Field>
-          <Field label="优化目标">
-            <select value={optimizationObjective} onChange={(event) => setOptimizationObjective(event.target.value)}>
-              <option value="稳健">稳健</option>
-              <option value="平衡">平衡</option>
-              <option value="进攻">进攻</option>
-            </select>
-          </Field>
-          <Field label="AI / 展示 Top N"><input type="number" value={topN} onChange={(event) => setTopN(Number(event.target.value))} /></Field>
+        <div className="taskAutoPanel">
+          <div>
+            <div className="formTitle">一键研究评估</div>
+            <p className="recommendationMeta">系统自动选择评估区间、交易成本、样本外验证和推荐规模，先跑策略准入，再进入时光机闭环。</p>
+          </div>
           <div className="formActionsBottom taskActionsField">
             <button className="secondaryButton quietButton" onClick={onCreateStrategyAdmission}>创建策略准入</button>
             <button className="secondaryButton quietButton" onClick={onCreateWalkForward}>创建 Walk-forward</button>

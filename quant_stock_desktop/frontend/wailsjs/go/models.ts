@@ -36,6 +36,7 @@ export namespace config {
 	    strategies: Record<string, StrategySettings>;
 	    portfolio_risk: Record<string, any>;
 	    exit_rules: Record<string, any>;
+	    governance_rules: Record<string, any>;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -52,6 +53,7 @@ export namespace config {
 	        this.strategies = this.convertValues(source["strategies"], StrategySettings, true);
 	        this.portfolio_risk = source["portfolio_risk"];
 	        this.exit_rules = source["exit_rules"];
+	        this.governance_rules = source["governance_rules"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -217,6 +219,306 @@ export namespace main {
 	        this.category = source["category"];
 	    }
 	}
+	export class DataSnapshotDTO {
+	    id: string;
+	    subject_type: string;
+	    subject_id: string;
+	    snapshot: Record<string, any>;
+	    created_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DataSnapshotDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.subject_type = source["subject_type"];
+	        this.subject_id = source["subject_id"];
+	        this.snapshot = source["snapshot"];
+	        this.created_at = source["created_at"];
+	    }
+	}
+	export class ResearchReportDTO {
+	    id: string;
+	    subject_type: string;
+	    subject_id: string;
+	    report_type: string;
+	    title: string;
+	    model: string;
+	    content_md: string;
+	    payload: Record<string, any>;
+	    created_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResearchReportDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.subject_type = source["subject_type"];
+	        this.subject_id = source["subject_id"];
+	        this.report_type = source["report_type"];
+	        this.title = source["title"];
+	        this.model = source["model"];
+	        this.content_md = source["content_md"];
+	        this.payload = source["payload"];
+	        this.created_at = source["created_at"];
+	    }
+	}
+	export class ParameterExperimentDTO {
+	    id: string;
+	    strategy: string;
+	    strategy_version: number;
+	    param_set: string;
+	    status: string;
+	    score: number;
+	    params: Record<string, any>;
+	    metrics: Record<string, any>;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ParameterExperimentDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.strategy = source["strategy"];
+	        this.strategy_version = source["strategy_version"];
+	        this.param_set = source["param_set"];
+	        this.status = source["status"];
+	        this.score = source["score"];
+	        this.params = source["params"];
+	        this.metrics = source["metrics"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class WalkForwardWindowDTO {
+	    id: string;
+	    subject_type: string;
+	    subject_id: string;
+	    window_name: string;
+	    start_date: string;
+	    end_date: string;
+	    status: string;
+	    score: number;
+	    metrics: Record<string, any>;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WalkForwardWindowDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.subject_type = source["subject_type"];
+	        this.subject_id = source["subject_id"];
+	        this.window_name = source["window_name"];
+	        this.start_date = source["start_date"];
+	        this.end_date = source["end_date"];
+	        this.status = source["status"];
+	        this.score = source["score"];
+	        this.metrics = source["metrics"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class PromotionDecisionDTO {
+	    id: string;
+	    strategy: string;
+	    strategy_version: number;
+	    current_status: string;
+	    recommended_status: string;
+	    score: number;
+	    reason: string;
+	    payload: Record<string, any>;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PromotionDecisionDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.strategy = source["strategy"];
+	        this.strategy_version = source["strategy_version"];
+	        this.current_status = source["current_status"];
+	        this.recommended_status = source["recommended_status"];
+	        this.score = source["score"];
+	        this.reason = source["reason"];
+	        this.payload = source["payload"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class PaperTradingLogDTO {
+	    id: string;
+	    signal_date: string;
+	    ts_code: string;
+	    name: string;
+	    action: string;
+	    target_weight: number;
+	    actual_weight?: number;
+	    status: string;
+	    reason: string;
+	    payload: Record<string, any>;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PaperTradingLogDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.signal_date = source["signal_date"];
+	        this.ts_code = source["ts_code"];
+	        this.name = source["name"];
+	        this.action = source["action"];
+	        this.target_weight = source["target_weight"];
+	        this.actual_weight = source["actual_weight"];
+	        this.status = source["status"];
+	        this.reason = source["reason"];
+	        this.payload = source["payload"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class RiskExposureDTO {
+	    id: string;
+	    subject_type: string;
+	    subject_id: string;
+	    as_of_date: string;
+	    n_holdings: number;
+	    total_weight: number;
+	    max_single_weight: number;
+	    top5_weight: number;
+	    industry: Record<string, any>;
+	    strategy: Record<string, any>;
+	    payload: Record<string, any>;
+	    created_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RiskExposureDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.subject_type = source["subject_type"];
+	        this.subject_id = source["subject_id"];
+	        this.as_of_date = source["as_of_date"];
+	        this.n_holdings = source["n_holdings"];
+	        this.total_weight = source["total_weight"];
+	        this.max_single_weight = source["max_single_weight"];
+	        this.top5_weight = source["top5_weight"];
+	        this.industry = source["industry"];
+	        this.strategy = source["strategy"];
+	        this.payload = source["payload"];
+	        this.created_at = source["created_at"];
+	    }
+	}
+	export class RecommendationHindsightDTO {
+	    id: string;
+	    recommendation_date: string;
+	    horizon_days: number;
+	    next_date: string;
+	    n_holdings: number;
+	    n_eval: number;
+	    weighted_return?: number;
+	    equal_weight_return?: number;
+	    hit_rate?: number;
+	    payload: Record<string, any>;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecommendationHindsightDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.recommendation_date = source["recommendation_date"];
+	        this.horizon_days = source["horizon_days"];
+	        this.next_date = source["next_date"];
+	        this.n_holdings = source["n_holdings"];
+	        this.n_eval = source["n_eval"];
+	        this.weighted_return = source["weighted_return"];
+	        this.equal_weight_return = source["equal_weight_return"];
+	        this.hit_rate = source["hit_rate"];
+	        this.payload = source["payload"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class GovernanceDashboardDTO {
+	    hindsight: RecommendationHindsightDTO[];
+	    risk: RiskExposureDTO[];
+	    paper: PaperTradingLogDTO[];
+	    promotion: PromotionDecisionDTO[];
+	    walk: WalkForwardWindowDTO[];
+	    params: ParameterExperimentDTO[];
+	    data_quality: Record<string, any>;
+	    parameter_recommendations: any[];
+	    retirement: any[];
+	    portfolio_attribution: any[];
+	    recovery: Record<string, any>;
+	    reports: ResearchReportDTO[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GovernanceDashboardDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hindsight = this.convertValues(source["hindsight"], RecommendationHindsightDTO);
+	        this.risk = this.convertValues(source["risk"], RiskExposureDTO);
+	        this.paper = this.convertValues(source["paper"], PaperTradingLogDTO);
+	        this.promotion = this.convertValues(source["promotion"], PromotionDecisionDTO);
+	        this.walk = this.convertValues(source["walk"], WalkForwardWindowDTO);
+	        this.params = this.convertValues(source["params"], ParameterExperimentDTO);
+	        this.data_quality = source["data_quality"];
+	        this.parameter_recommendations = source["parameter_recommendations"];
+	        this.retirement = source["retirement"];
+	        this.portfolio_attribution = source["portfolio_attribution"];
+	        this.recovery = source["recovery"];
+	        this.reports = this.convertValues(source["reports"], ResearchReportDTO);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
+	
+	
+	
 	export class SettingsResponse {
 	    settings: config.Settings;
 	    issues: config.ValidationIssue[];
@@ -249,6 +551,157 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class StrategyVersionActivateRequest {
+	    strategy: string;
+	    version: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StrategyVersionActivateRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.version = source["version"];
+	    }
+	}
+	export class StrategyVersionDTO {
+	    strategy: string;
+	    version: number;
+	    label: string;
+	    config: Record<string, any>;
+	    is_active: boolean;
+	    promotion_status: string;
+	    validation: Record<string, any>;
+	    source: string;
+	    note: string;
+	    created_at: string;
+	    activated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StrategyVersionDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.version = source["version"];
+	        this.label = source["label"];
+	        this.config = source["config"];
+	        this.is_active = source["is_active"];
+	        this.promotion_status = source["promotion_status"];
+	        this.validation = source["validation"];
+	        this.source = source["source"];
+	        this.note = source["note"];
+	        this.created_at = source["created_at"];
+	        this.activated_at = source["activated_at"];
+	    }
+	}
+	export class StrategyVersionStatusRequest {
+	    strategy: string;
+	    version: number;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StrategyVersionStatusRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.version = source["version"];
+	        this.status = source["status"];
+	    }
+	}
+	export class ValidationReviewDTO {
+	    id: string;
+	    subject_type: string;
+	    subject_id: string;
+	    strategy: string;
+	    strategy_version: number;
+	    source_run_id: string;
+	    status: string;
+	    score: number;
+	    gates: Record<string, any>;
+	    metrics: Record<string, any>;
+	    recommendation: string;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ValidationReviewDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.subject_type = source["subject_type"];
+	        this.subject_id = source["subject_id"];
+	        this.strategy = source["strategy"];
+	        this.strategy_version = source["strategy_version"];
+	        this.source_run_id = source["source_run_id"];
+	        this.status = source["status"];
+	        this.score = source["score"];
+	        this.gates = source["gates"];
+	        this.metrics = source["metrics"];
+	        this.recommendation = source["recommendation"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class ValidationEvidenceDTO {
+	    reviews: ValidationReviewDTO[];
+	    reports: ResearchReportDTO[];
+	    snapshots: DataSnapshotDTO[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ValidationEvidenceDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reviews = this.convertValues(source["reviews"], ValidationReviewDTO);
+	        this.reports = this.convertValues(source["reports"], ResearchReportDTO);
+	        this.snapshots = this.convertValues(source["snapshots"], DataSnapshotDTO);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ValidationEvidenceQuery {
+	    subject_type: string;
+	    subject_id: string;
+	    source_run_id: string;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ValidationEvidenceQuery(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.subject_type = source["subject_type"];
+	        this.subject_id = source["subject_id"];
+	        this.source_run_id = source["source_run_id"];
+	        this.limit = source["limit"];
+	    }
+	}
+	
 
 }
 
@@ -953,6 +1406,26 @@ export namespace position {
 		    return a;
 		}
 	}
+	export class RecommendationStrategyVersion {
+	    strategy: string;
+	    label: string;
+	    version: number;
+	    mode: string;
+	    weight: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecommendationStrategyVersion(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.label = source["label"];
+	        this.version = source["version"];
+	        this.mode = source["mode"];
+	        this.weight = source["weight"];
+	    }
+	}
 	export class Recommendation {
 	    date: string;
 	    generated_at: string;
@@ -962,6 +1435,7 @@ export namespace position {
 	    n_sell: number;
 	    rebalanced: boolean;
 	    rebalance_trades: number;
+	    active_strategy_versions: RecommendationStrategyVersion[];
 	    rows: RecommendationItem[];
 	
 	    static createFrom(source: any = {}) {
@@ -978,6 +1452,7 @@ export namespace position {
 	        this.n_sell = source["n_sell"];
 	        this.rebalanced = source["rebalanced"];
 	        this.rebalance_trades = source["rebalance_trades"];
+	        this.active_strategy_versions = this.convertValues(source["active_strategy_versions"], RecommendationStrategyVersion);
 	        this.rows = this.convertValues(source["rows"], RecommendationItem);
 	    }
 	
@@ -999,6 +1474,7 @@ export namespace position {
 		    return a;
 		}
 	}
+	
 	
 	export class RunStatus {
 	    task: string;
