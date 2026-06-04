@@ -21,7 +21,8 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   const [aiAnalyzing, setAiAnalyzing] = useState(false)
   const [nextEvalCreating, setNextEvalCreating] = useState(false)
   const name = '时光机'
-  const startDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -3)), [])
+  const smokeStartDate = useMemo(() => formatYYYYMMDD(addMonths(new Date(), -6)), [])
+  const researchStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -3)), [])
   const endDate = useMemo(() => formatYYYYMMDD(new Date()), [])
   const initialCash = 500000
   const rebalanceFreq = 5
@@ -69,7 +70,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
         name,
         task_type: 'portfolio_optimization',
         params: {
-          start_date: startDate,
+          start_date: researchStartDate,
           end_date: endDate,
           strategies: 'enabled',
           objective: optimizationObjective,
@@ -89,10 +90,10 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     setError('')
     try {
       await createTask({
-        name: `策略准入-${startDate}-${endDate}`,
+        name: `策略准入-${smokeStartDate}-${endDate}`,
         task_type: 'strategy_evaluation',
         params: {
-          start_date: startDate,
+          start_date: smokeStartDate,
           end_date: endDate,
           strategies: 'all',
           baseline: 'small_cap_quality',
@@ -111,10 +112,10 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     setError('')
     try {
       await createTask({
-        name: `Walk-forward-${startDate}-${endDate}`,
+        name: `Walk-forward-${researchStartDate}-${endDate}`,
         task_type: 'walk_forward_evaluation',
         params: {
-          start_date: startDate,
+          start_date: researchStartDate,
           end_date: endDate,
           strategies: 'all',
           baseline: 'small_cap_quality',
@@ -135,10 +136,10 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     setError('')
     try {
       await createTask({
-        name: `参数实验-${startDate}-${endDate}`,
+        name: `参数实验-${researchStartDate}-${endDate}`,
         task_type: 'parameter_experiment',
         params: {
-          start_date: startDate,
+          start_date: researchStartDate,
           end_date: endDate,
           strategies: 'all',
           baseline: 'small_cap_quality',
@@ -1670,6 +1671,12 @@ function progressOf(summary: Record<string, unknown>) {
 function addYears(date: Date, years: number) {
   const copy = new Date(date)
   copy.setFullYear(copy.getFullYear() + years)
+  return copy
+}
+
+function addMonths(date: Date, months: number) {
+  const copy = new Date(date)
+  copy.setMonth(copy.getMonth() + months)
   return copy
 }
 
