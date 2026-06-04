@@ -5,8 +5,11 @@ import {
   getPositionRecommendation,
   getPositionSummary,
   getSignalRunStatus,
+  listRecommendationHindsight,
+  refreshRecommendationHindsight,
   type PositionRecommendation,
   type PositionSummary,
+  type RecommendationHindsight,
   type RunStatus,
   type TradeRequest
 } from '../services/app'
@@ -17,6 +20,11 @@ function money(value: number) {
 
 function percent(value: number) {
   return `${(value * 100).toFixed(2)}%`
+}
+
+function formatNullablePercent(value?: number | null, multiplier = 1) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return `${(value * multiplier).toFixed(2)}%`
 }
 
 function signedClass(value: number) {
@@ -51,16 +59,19 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null)
+  const [hindsight, setHindsight] = useState<RecommendationHindsight[]>([])
+  const [hindsightLoading, setHindsightLoading] = useState(false)
   const [error, setError] = useState('')
   const prevStateRef = useRef<string>('')
 
   const load = () => {
     setLoading(true)
     setError('')
-    Promise.all([getPositionSummary(), getPositionRecommendation()])
-      .then(([nextSummary, nextRecommendation]) => {
+    Promise.all([getPositionSummary(), getPositionRecommendation(), listRecommendationHindsight()])
+      .then(([nextSummary, nextRecommendation, nextHindsight]) => {
         setSummary(nextSummary)
         setRecommendation(nextRecommendation)
+        setHindsight(nextHindsight || [])
       })
       .catch((err: Error) => setError(err.message || '加载持仓失败'))
       .finally(() => setLoading(false))
@@ -69,6 +80,15 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   const generate = () => {
     setError('')
     generatePositionSignal({}).catch((err: Error) => setError(err.message || '触发信号失败'))
+  }
+
+  const refreshHindsight = () => {
+    setHindsightLoading(true)
+    setError('')
+    refreshRecommendationHindsight()
+      .then((rows) => setHindsight(rows || []))
+      .catch((err: Error) => setError(err.message || '刷新推荐回看失败'))
+      .finally(() => setHindsightLoading(false))
   }
 
   const buildRebalanceTrades = (nextRecommendation: PositionRecommendation, nextSummary: PositionSummary): TradeRequest[] => {
@@ -187,6 +207,7 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
       : `信号日 ${recommendation.date} · 目标 ${recommendation.n_holdings} 只 / ${percent(recommendation.total_weight)} · 可执行 ${rebalanceCount} 笔 · 信号买 ${recommendation.n_buy} / 卖 ${recommendation.n_sell}`
     : ''
   const rebalanceDisabled = loading || saving || isRunning || rebalanceCount === 0 || rebalanced
+  const hindsightSummary = summarizeHindsight(hindsight)
 
   return (
     <div className="positionPage">
@@ -216,6 +237,33 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
           <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: total > 0 ? `${pct}%` : '15%' }} /></div>
         </div>
       ) : null}
+
+      <div className="tableCard hindsightCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">SIGNAL HINDSIGHT</div>
+            <p className="recommendationMeta">
+              {hindsight.length
+                ? `已回看 ${hindsight.length} 个信号日 · 加权 ${formatNullablePercent(hindsightSummary.weightedReturn)} · 等权 ${formatNullablePercent(hindsightSummary.equalReturn)} · 命中 ${formatNullablePercent(hindsightSummary.hitRate, 100)}`
+                : '暂无推荐回看，生成过历史信号后可刷新'}
+            </p>
+          </div>
+          <button className="secondaryButton" onClick={refreshHindsight} disabled={hindsightLoading}>
+            {hindsightLoading ? '刷新中...' : '刷新回看'}
+          </button>
+        </div>
+        {hindsight.length ? (
+          <div className="hindsightStrip">
+            {hindsight.slice(0, 8).map((item) => (
+              <div className="hindsightItem" key={`${item.recommendation_date}-${item.horizon_days}`}>
+                <span>{item.recommendation_date} → {item.next_date || '—'}</span>
+                <strong className={signedClass(item.weighted_return || 0)}>{formatNullablePercent(item.weighted_return)}</strong>
+                <em>命中 {formatNullablePercent(item.hit_rate, 100)} · {item.n_eval}/{item.n_holdings}</em>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
 
       <div className="tableCard">
         <div className="tableHeader">
@@ -318,4 +366,32 @@ function actionShortLabel(action: string) {
   if (action === '减仓') return '减'
   if (action === '清仓') return '清'
   return '持'
+}
+
+function summarizeHindsight(rows: RecommendationHindsight[]) {
+  let weightedSum = 0
+  let weightedCount = 0
+  let equalSum = 0
+  let equalCount = 0
+  let hitSum = 0
+  let hitCount = 0
+  for (const row of rows) {
+    if (typeof row.weighted_return === 'number' && Number.isFinite(row.weighted_return)) {
+      weightedSum += row.weighted_return
+      weightedCount += 1
+    }
+    if (typeof row.equal_weight_return === 'number' && Number.isFinite(row.equal_weight_return)) {
+      equalSum += row.equal_weight_return
+      equalCount += 1
+    }
+    if (typeof row.hit_rate === 'number' && Number.isFinite(row.hit_rate)) {
+      hitSum += row.hit_rate
+      hitCount += 1
+    }
+  }
+  return {
+    weightedReturn: weightedCount ? weightedSum / weightedCount : null,
+    equalReturn: equalCount ? equalSum / equalCount : null,
+    hitRate: hitCount ? hitSum / hitCount : null
+  }
 }

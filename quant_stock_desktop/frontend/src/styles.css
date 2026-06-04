@@ -1715,6 +1715,49 @@ h1 {
   box-shadow: 0 10px 22px rgba(32, 211, 153, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 
+.recommendationMeta {
+  margin: 6px 0 0;
+  color: #9aa6bd;
+  font-size: 13px;
+}
+
+.hindsightCard {
+  padding-bottom: 16px;
+}
+
+.hindsightStrip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.hindsightItem {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(8, 11, 18, 0.38);
+}
+
+.hindsightItem span,
+.hindsightItem em {
+  display: block;
+  overflow: hidden;
+  color: #8f9ab3;
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hindsightItem strong {
+  display: block;
+  margin: 6px 0 2px;
+  color: #eef2ff;
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-size: 20px;
+}
+
 .signalProgress {
   background: #1b2236;
   border: 1px solid #2a3450;
