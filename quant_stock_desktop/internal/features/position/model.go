@@ -99,15 +99,24 @@ type SignalTrades struct {
 }
 
 type Recommendation struct {
-	Date            string               `json:"date"`
-	GeneratedAt     string               `json:"generated_at"`
-	TotalWeight     float64              `json:"total_weight"`
-	NHoldings       int                  `json:"n_holdings"`
-	NBuy            int                  `json:"n_buy"`
-	NSell           int                  `json:"n_sell"`
-	Rebalanced      bool                 `json:"rebalanced"`
-	RebalanceTrades int                  `json:"rebalance_trades"`
-	Rows            []RecommendationItem `json:"rows"`
+	Date                   string                          `json:"date"`
+	GeneratedAt            string                          `json:"generated_at"`
+	TotalWeight            float64                         `json:"total_weight"`
+	NHoldings              int                             `json:"n_holdings"`
+	NBuy                   int                             `json:"n_buy"`
+	NSell                  int                             `json:"n_sell"`
+	Rebalanced             bool                            `json:"rebalanced"`
+	RebalanceTrades        int                             `json:"rebalance_trades"`
+	ActiveStrategyVersions []RecommendationStrategyVersion `json:"active_strategy_versions"`
+	Rows                   []RecommendationItem            `json:"rows"`
+}
+
+type RecommendationStrategyVersion struct {
+	Strategy string  `json:"strategy"`
+	Label    string  `json:"label"`
+	Version  int     `json:"version"`
+	Mode     string  `json:"mode"`
+	Weight   float64 `json:"weight"`
 }
 
 type GenerateSignalRequest struct {

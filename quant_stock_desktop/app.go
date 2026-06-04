@@ -82,6 +82,41 @@ type ApplyPortfolioCandidateRequest struct {
 	CandidateID string `json:"candidate_id"`
 }
 
+type StrategyVersionDTO struct {
+	Strategy        string         `json:"strategy"`
+	Version         int            `json:"version"`
+	Label           string         `json:"label"`
+	Config          map[string]any `json:"config"`
+	IsActive        bool           `json:"is_active"`
+	PromotionStatus string         `json:"promotion_status"`
+	Validation      map[string]any `json:"validation"`
+	Source          string         `json:"source"`
+	Note            string         `json:"note"`
+	CreatedAt       string         `json:"created_at"`
+	ActivatedAt     string         `json:"activated_at"`
+}
+
+type StrategyVersionActivateRequest struct {
+	Strategy string `json:"strategy"`
+	Version  int    `json:"version"`
+}
+
+type ValidationReviewDTO struct {
+	ID              string         `json:"id"`
+	SubjectType     string         `json:"subject_type"`
+	SubjectID       string         `json:"subject_id"`
+	Strategy        string         `json:"strategy"`
+	StrategyVersion int            `json:"strategy_version"`
+	SourceRunID     string         `json:"source_run_id"`
+	Status          string         `json:"status"`
+	Score           float64        `json:"score"`
+	Gates           map[string]any `json:"gates"`
+	Metrics         map[string]any `json:"metrics"`
+	Recommendation  string         `json:"recommendation"`
+	CreatedAt       string         `json:"created_at"`
+	UpdatedAt       string         `json:"updated_at"`
+}
+
 func (app *App) GetAppInfo() AppInfo {
 	return AppInfo{
 		Name:    "Quant Stock Desktop",
@@ -138,6 +173,100 @@ func (app *App) SaveSettings(settings config.Settings) SettingsResponse {
 		Settings: app.settings,
 		Issues:   app.configService.Validate(app.settings),
 	}
+}
+
+func (app *App) ListStrategyVersions(strategy string) ([]StrategyVersionDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return nil, err
+	}
+	query := `SELECT strategy, version, label, config_json, is_active, COALESCE(promotion_status,'research'),
+		COALESCE(validation_json,'{}'), COALESCE(source,''), COALESCE(note,''), created_at, COALESCE(activated_at,'')
+		FROM strategy_settings_versions`
+	args := []any{}
+	if strings.TrimSpace(strategy) != "" {
+		query += ` WHERE strategy = ?`
+		args = append(args, strings.TrimSpace(strategy))
+	}
+	query += ` ORDER BY strategy, version DESC`
+	rows, err := app.database.Conn().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []StrategyVersionDTO{}
+	for rows.Next() {
+		var item StrategyVersionDTO
+		var configJSON string
+		var active int
+		var validationJSON string
+		if err := rows.Scan(&item.Strategy, &item.Version, &item.Label, &configJSON, &active, &item.PromotionStatus, &validationJSON, &item.Source, &item.Note, &item.CreatedAt, &item.ActivatedAt); err != nil {
+			return nil, err
+		}
+		item.IsActive = active == 1
+		item.Config = map[string]any{}
+		item.Validation = map[string]any{}
+		_ = json.Unmarshal([]byte(configJSON), &item.Config)
+		_ = json.Unmarshal([]byte(validationJSON), &item.Validation)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ActivateStrategyVersion(req StrategyVersionActivateRequest) (SettingsResponse, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return SettingsResponse{}, err
+	}
+	strategyName := strings.TrimSpace(req.Strategy)
+	if strategyName == "" || req.Version <= 0 {
+		return SettingsResponse{}, errors.New("strategy and version are required")
+	}
+	row := app.database.Conn().QueryRow(`SELECT config_json FROM strategy_settings_versions WHERE strategy = ? AND version = ?`, strategyName, req.Version)
+	var configJSON string
+	if err := row.Scan(&configJSON); err != nil {
+		return SettingsResponse{}, err
+	}
+	var strategyCfg config.StrategySettings
+	if err := json.Unmarshal([]byte(configJSON), &strategyCfg); err != nil {
+		return SettingsResponse{}, err
+	}
+	if app.database != nil {
+		app.configService.WithDB(app.database.Conn())
+	}
+	settings, err := app.configService.Load(app.settings)
+	if err != nil {
+		return SettingsResponse{}, err
+	}
+	if settings.Strategies == nil {
+		settings.Strategies = map[string]config.StrategySettings{}
+	}
+	settings.Strategies[strategyName] = strategyCfg
+	settingsData, err := json.Marshal(settings)
+	if err != nil {
+		return SettingsResponse{}, err
+	}
+	now := time.Now().Format("2006-01-02T15:04:05")
+	tx, err := app.database.Conn().Begin()
+	if err != nil {
+		return SettingsResponse{}, err
+	}
+	if _, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 0 WHERE strategy = ?`, strategyName); err != nil {
+		_ = tx.Rollback()
+		return SettingsResponse{}, err
+	}
+	if _, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 1, promotion_status = 'active', activated_at = ? WHERE strategy = ? AND version = ?`, now, strategyName, req.Version); err != nil {
+		_ = tx.Rollback()
+		return SettingsResponse{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO app_settings(key, value, updated_at) VALUES('settings', ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, string(settingsData), now); err != nil {
+		_ = tx.Rollback()
+		return SettingsResponse{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SettingsResponse{}, err
+	}
+	app.settings = settings
+	return SettingsResponse{Settings: app.settings, Issues: app.configService.Validate(app.settings)}, nil
 }
 
 func (app *App) ApplyPortfolioCandidate(req ApplyPortfolioCandidateRequest) (SettingsResponse, error) {
@@ -1889,6 +2018,121 @@ func portfolioAnalysisCoverage(children []task.Task) (planned int, succeeded int
 		}
 	}
 	return planned, succeeded, running, failed
+}
+
+func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (ValidationReviewDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return ValidationReviewDTO{}, err
+	}
+	strategyName := strings.TrimSpace(req.Strategy)
+	if strategyName == "" {
+		return ValidationReviewDTO{}, errors.New("strategy is required")
+	}
+	version := req.Version
+	if version <= 0 {
+		row := app.database.Conn().QueryRow(`SELECT version FROM strategy_settings_versions WHERE strategy = ? ORDER BY version DESC LIMIT 1`, strategyName)
+		if err := row.Scan(&version); err != nil {
+			return ValidationReviewDTO{}, err
+		}
+	}
+	row := app.database.Conn().QueryRow(`SELECT run_id, annual_return, max_drawdown, sharpe, calmar, avg_turnover, monthly_win_rate, positive_3m_rate, payload_json
+		FROM strategy_evaluation
+		WHERE strategy = ? AND COALESCE(strategy_version, 0) = ?
+		ORDER BY datetime(generated_at) DESC LIMIT 1`, strategyName, version)
+	review := ValidationReviewDTO{
+		ID:              "svr_" + strings.ReplaceAll(task.NewID(), "-", ""),
+		SubjectType:     "strategy_version",
+		SubjectID:       fmt.Sprintf("%s@%d", strategyName, version),
+		Strategy:        strategyName,
+		StrategyVersion: version,
+		CreatedAt:       time.Now().Format(time.RFC3339),
+		UpdatedAt:       time.Now().Format(time.RFC3339),
+	}
+	var payloadJSON string
+	var annual, drawdown, sharpe, calmar, turnover, monthlyWin, positive3m sql.NullFloat64
+	if err := row.Scan(&review.SourceRunID, &annual, &drawdown, &sharpe, &calmar, &turnover, &monthlyWin, &positive3m, &payloadJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			review.Status = "research"
+			review.Recommendation = "暂无对应版本的策略准入结果，先运行策略准入评估"
+			review.Gates = map[string]any{"has_evaluation": false}
+			review.Metrics = map[string]any{}
+			return app.persistValidationReview(review)
+		}
+		return ValidationReviewDTO{}, err
+	}
+	metrics := map[string]any{}
+	overlayNullableFloat(metrics, "annual_return", annual)
+	overlayNullableFloat(metrics, "max_drawdown", drawdown)
+	overlayNullableFloat(metrics, "sharpe", sharpe)
+	overlayNullableFloat(metrics, "calmar", calmar)
+	overlayNullableFloat(metrics, "avg_turnover", turnover)
+	overlayNullableFloat(metrics, "monthly_win_rate", monthlyWin)
+	overlayNullableFloat(metrics, "positive_3m_rate", positive3m)
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(payloadJSON), &payload)
+	if payload != nil {
+		metrics["admission"] = payload["admission"]
+		metrics["admission_score"] = payload["admission_score"]
+	}
+	review.Metrics = metrics
+	review.Gates = map[string]any{
+		"annual_return_positive": floatValue(metrics["annual_return"], 0) > 0,
+		"drawdown_control":       absFloat(floatValue(metrics["max_drawdown"], 0)) <= 0.22,
+		"sharpe_positive":        floatValue(metrics["sharpe"], 0) >= 0.3,
+		"calmar_positive":        floatValue(metrics["calmar"], 0) >= 0.25,
+		"turnover_acceptable":    floatValue(metrics["avg_turnover"], 0) <= 0.45,
+		"stability_acceptable":   floatValue(metrics["monthly_win_rate"], 0) >= 0.45 || floatValue(metrics["positive_3m_rate"], 0) >= 0.45,
+	}
+	passed := 0
+	for _, value := range review.Gates {
+		if ok, _ := value.(bool); ok {
+			passed++
+		}
+	}
+	review.Score = float64(passed) / float64(len(review.Gates))
+	if review.Score >= 0.85 {
+		review.Status = "promotable"
+		review.Recommendation = "通过主要晋级门槛，可人工复核后设为生效版本"
+	} else if review.Score >= 0.55 {
+		review.Status = "research"
+		review.Recommendation = "部分指标通过，建议继续 walk-forward 或参数邻域验证"
+	} else {
+		review.Status = "rejected"
+		review.Recommendation = "未通过核心晋级门槛，不建议生效"
+	}
+	return app.persistValidationReview(review)
+}
+
+func (app *App) persistValidationReview(review ValidationReviewDTO) (ValidationReviewDTO, error) {
+	if review.ID == "" {
+		review.ID = "vr_" + strings.ReplaceAll(task.NewID(), "-", "")
+	}
+	now := time.Now().Format(time.RFC3339)
+	if review.CreatedAt == "" {
+		review.CreatedAt = now
+	}
+	review.UpdatedAt = now
+	gatesJSON, _ := json.Marshal(review.Gates)
+	metricsJSON, _ := json.Marshal(review.Metrics)
+	if _, err := app.database.Conn().Exec(`INSERT INTO strategy_validation_reviews(
+		id, subject_type, subject_id, strategy, strategy_version, source_run_id, status, score, gates_json, metrics_json, recommendation, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		status = excluded.status,
+		score = excluded.score,
+		gates_json = excluded.gates_json,
+		metrics_json = excluded.metrics_json,
+		recommendation = excluded.recommendation,
+		updated_at = excluded.updated_at`,
+		review.ID, review.SubjectType, review.SubjectID, review.Strategy, review.StrategyVersion, review.SourceRunID, review.Status, review.Score, string(gatesJSON), string(metricsJSON), review.Recommendation, review.CreatedAt, review.UpdatedAt); err != nil {
+		return ValidationReviewDTO{}, err
+	}
+	validationJSON, _ := json.Marshal(map[string]any{"review_id": review.ID, "status": review.Status, "score": review.Score, "gates": review.Gates, "metrics": review.Metrics, "recommendation": review.Recommendation, "updated_at": review.UpdatedAt})
+	if review.SubjectType == "strategy_version" && review.Strategy != "" && review.StrategyVersion > 0 {
+		_, _ = app.database.Conn().Exec(`UPDATE strategy_settings_versions SET promotion_status = ?, validation_json = ? WHERE strategy = ? AND version = ?`,
+			review.Status, string(validationJSON), review.Strategy, review.StrategyVersion)
+	}
+	return review, nil
 }
 
 func (app *App) buildPortfolioAnalysisContext(parent task.Task, children []task.Task) (map[string]any, error) {

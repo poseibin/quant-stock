@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getSettings, saveSettings, type Settings, type StrategySettings, type ValidationIssue } from '../services/app'
+import { activateStrategyVersion, getSettings, listStrategyVersions, reviewStrategyVersion, saveSettings, type Settings, type StrategySettings, type StrategyVersion, type ValidationIssue } from '../services/app'
 import { Field } from '../components/Field'
 
 const strategyOrder = ['market_regime_timing', 'multi_factor_composite', 'small_cap_quality', 'trend_pullback', 'dividend_quality', 'earnings_revision', 'industry_prosperity', 'low_crowding_reversal', 'event_enhanced', 'beijing_satellite']
@@ -12,6 +12,9 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [jsonDrafts, setJsonDrafts] = useState<JsonDrafts>({})
   const [jsonErrors, setJsonErrors] = useState<Record<string, string>>({})
+  const [versions, setVersions] = useState<Record<string, StrategyVersion[]>>({})
+  const [openVersions, setOpenVersions] = useState<Record<string, boolean>>({})
+  const [versionBusy, setVersionBusy] = useState('')
 
   useEffect(() => {
     getSettings().then((response) => {
@@ -89,6 +92,49 @@ export function SettingsPage() {
     setIssues(response.issues || [])
     setJsonDrafts(makeDrafts(response.settings))
     setSaved(true)
+    await refreshOpenVersions()
+  }
+
+  const loadVersions = async (name: string) => {
+    setVersionBusy(name)
+    try {
+      const rows = await listStrategyVersions(name)
+      setVersions((prev) => ({ ...prev, [name]: rows }))
+      setOpenVersions((prev) => ({ ...prev, [name]: true }))
+    } finally {
+      setVersionBusy('')
+    }
+  }
+
+  const refreshOpenVersions = async () => {
+    const names = Object.entries(openVersions).filter(([, open]) => open).map(([name]) => name)
+    if (names.length === 0) return
+    const entries = await Promise.all(names.map(async (name) => [name, await listStrategyVersions(name)] as const))
+    setVersions((prev) => ({ ...prev, ...Object.fromEntries(entries) }))
+  }
+
+  const activateVersion = async (name: string, version: number) => {
+    setVersionBusy(`${name}@${version}`)
+    try {
+      const response = await activateStrategyVersion({ strategy: name, version })
+      setSettings(response.settings)
+      setIssues(response.issues || [])
+      setJsonDrafts(makeDrafts(response.settings))
+      setSaved(true)
+      await loadVersions(name)
+    } finally {
+      setVersionBusy('')
+    }
+  }
+
+  const reviewVersion = async (name: string, version: number) => {
+    setVersionBusy(`${name}@${version}`)
+    try {
+      await reviewStrategyVersion({ strategy: name, version })
+      await loadVersions(name)
+    } finally {
+      setVersionBusy('')
+    }
   }
 
   const strategyNames = strategyOrder.filter((name) => settings.strategies?.[name])
@@ -175,6 +221,34 @@ export function SettingsPage() {
                     onChange={updateJsonDraft}
                   />
                 ))}
+                <div className="strategyVersionPanel">
+                  <button className="secondaryButton quietButton" onClick={() => openVersions[name] ? setOpenVersions({ ...openVersions, [name]: false }) : loadVersions(name)}>
+                    {openVersions[name] ? '收起版本' : '版本'}
+                  </button>
+                  {openVersions[name] && (
+                    <div className="versionList">
+                      {(versions[name] || []).map((item) => (
+                        <div className="versionRow" key={`${name}-${item.version}`}>
+                          <div>
+                            <b>v{item.version}</b>
+                            <span className={item.is_active ? 'badge success' : 'badge created'}>{item.is_active ? '生效' : statusLabel(item.promotion_status)}</span>
+                            <em>{item.created_at}</em>
+                          </div>
+                          <div className="versionMeta">
+                            <span>{item.source || 'settings'}</span>
+                            <span>验证 {formatScore(item.validation?.score)}</span>
+                          </div>
+                          <div className="taskActions compactActions">
+                            <button className="secondaryButton quietButton" disabled={versionBusy !== ''} onClick={() => reviewVersion(name, item.version)}>复核</button>
+                            <button className="secondaryButton startButton" disabled={item.is_active || versionBusy !== ''} onClick={() => activateVersion(name, item.version)}>设为生效</button>
+                          </div>
+                        </div>
+                      ))}
+                      {versionBusy === name && <div className="mutedText">加载版本中...</div>}
+                      {(versions[name] || []).length === 0 && versionBusy !== name && <div className="mutedText">暂无版本记录，保存配置后生成</div>}
+                    </div>
+                  )}
+                </div>
               </div>
             )
           })}
@@ -236,4 +310,12 @@ function pretty(value: unknown) {
 
 function findIssue(issues: ValidationIssue[], field: string) {
   return issues.find((issue) => issue.field === field)
+}
+
+function statusLabel(status: string) {
+  return ({ active: '生效', promotable: '可生效', research: '研究中', rejected: '拒绝' } as Record<string, string>)[status] || status || '研究中'
+}
+
+function formatScore(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value * 100)}%` : '—'
 }

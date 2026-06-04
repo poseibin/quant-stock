@@ -224,6 +224,13 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
             <p className="recommendationMeta">
               {recommendationMeta}
             </p>
+            {recommendation?.active_strategy_versions?.length ? (
+              <div className="signalVersionPills">
+                {recommendation.active_strategy_versions.map((item) => (
+                  <span key={`${item.strategy}-${item.version}`}>{item.label || item.strategy} v{item.version || '—'} · {percent(item.weight || 0)}</span>
+                ))}
+              </div>
+            ) : null}
           </div>
           <div className="tableHeaderRight">
             {!rebalanced ? (

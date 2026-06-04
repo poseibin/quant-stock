@@ -7,6 +7,9 @@ declare global {
           GetSettings: () => Promise<SettingsResponse>
           SaveSettings: (settings: Settings) => Promise<SettingsResponse>
           ApplyPortfolioCandidate: (request: ApplyPortfolioCandidateRequest) => Promise<SettingsResponse>
+          ListStrategyVersions: (strategy: string) => Promise<StrategyVersion[]>
+          ActivateStrategyVersion: (request: StrategyVersionActivateRequest) => Promise<SettingsResponse>
+          ReviewStrategyVersion: (request: StrategyVersionActivateRequest) => Promise<ValidationReview>
           AnalyzePortfolioTask: (id: string) => Promise<TaskDTO>
           CreateTask: (request: CreateTaskRequest) => Promise<TaskDTO>
           StartTask: (id: string) => Promise<TaskDTO>
@@ -71,6 +74,41 @@ export interface StrategySettings {
   filters?: Record<string, unknown>
   selection?: Record<string, unknown>
   position?: Record<string, unknown>
+}
+
+export interface StrategyVersion {
+  strategy: string
+  version: number
+  label: string
+  config: Record<string, unknown>
+  is_active: boolean
+  promotion_status: string
+  validation: Record<string, unknown>
+  source: string
+  note: string
+  created_at: string
+  activated_at: string
+}
+
+export interface StrategyVersionActivateRequest {
+  strategy: string
+  version: number
+}
+
+export interface ValidationReview {
+  id: string
+  subject_type: string
+  subject_id: string
+  strategy: string
+  strategy_version: number
+  source_run_id: string
+  status: string
+  score: number
+  gates: Record<string, unknown>
+  metrics: Record<string, unknown>
+  recommendation: string
+  created_at: string
+  updated_at: string
 }
 
 export interface ValidationIssue {
@@ -445,6 +483,27 @@ export async function applyPortfolioCandidate(request: ApplyPortfolioCandidateRe
   return getSettings()
 }
 
+export async function listStrategyVersions(strategy: string): Promise<StrategyVersion[]> {
+  if (window.go?.main?.App?.ListStrategyVersions) {
+    return (await window.go.main.App.ListStrategyVersions(strategy)) || []
+  }
+  return []
+}
+
+export async function activateStrategyVersion(request: StrategyVersionActivateRequest): Promise<SettingsResponse> {
+  if (window.go?.main?.App?.ActivateStrategyVersion) {
+    return window.go.main.App.ActivateStrategyVersion(request)
+  }
+  return getSettings()
+}
+
+export async function reviewStrategyVersion(request: StrategyVersionActivateRequest): Promise<ValidationReview> {
+  if (window.go?.main?.App?.ReviewStrategyVersion) {
+    return window.go.main.App.ReviewStrategyVersion(request)
+  }
+  return { id: '', subject_type: 'strategy_version', subject_id: `${request.strategy}@${request.version}`, strategy: request.strategy, strategy_version: request.version, source_run_id: '', status: 'research', score: 0, gates: {}, metrics: {}, recommendation: '开发模式占位', created_at: '', updated_at: '' }
+}
+
 export async function analyzePortfolioTask(id: string): Promise<TaskDTO> {
   if (window.go?.main?.App?.AnalyzePortfolioTask) {
     return window.go.main.App.AnalyzePortfolioTask(id)
@@ -673,6 +732,7 @@ export interface PositionRecommendation {
   n_sell: number
   rebalanced: boolean
   rebalance_trades: number
+  active_strategy_versions?: Array<{ strategy: string; label: string; version: number; mode: string; weight: number }>
   rows: PositionRecommendationItem[]
 }
 

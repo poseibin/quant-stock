@@ -1190,6 +1190,67 @@ h1 {
   font-style: normal;
 }
 
+.strategyVersionPanel {
+  margin-top: 14px;
+}
+
+.versionList {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.versionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, auto) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(17, 22, 32, 0.72);
+}
+
+.versionRow > div:first-child {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.versionRow b {
+  color: #eef2ff;
+  font-family: 'JetBrains Mono', Menlo, monospace;
+}
+
+.versionRow em,
+.versionMeta {
+  color: #8f9ab3;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.versionMeta {
+  display: grid;
+  gap: 3px;
+}
+
+.signalVersionPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.signalVersionPills span {
+  padding: 4px 8px;
+  color: #aeb7cb;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(8, 11, 18, 0.5);
+  font-size: 12px;
+}
+
 .configJsonGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

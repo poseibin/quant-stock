@@ -158,6 +158,9 @@ func (service *Service) GetRecommendation(dataPath string) (Recommendation, erro
 	if err := json.Unmarshal([]byte(payload), &rec); err != nil {
 		return Recommendation{}, err
 	}
+	if len(rec.ActiveStrategyVersions) == 0 {
+		rec.ActiveStrategyVersions = service.activeStrategyVersions()
+	}
 	if rec.Date != "" {
 		var count int
 		err := service.db.QueryRow(`SELECT COUNT(*) FROM pool_trades WHERE trade_date = ?`, rec.Date).Scan(&count)
@@ -168,6 +171,37 @@ func (service *Service) GetRecommendation(dataPath string) (Recommendation, erro
 		rec.RebalanceTrades = count
 	}
 	return rec, nil
+}
+
+func (service *Service) activeStrategyVersions() []RecommendationStrategyVersion {
+	if service.db == nil {
+		return nil
+	}
+	rows, err := service.db.Query(`SELECT strategy, version, label, config_json FROM strategy_settings_versions WHERE is_active = 1 ORDER BY strategy`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []RecommendationStrategyVersion{}
+	for rows.Next() {
+		var item RecommendationStrategyVersion
+		var configJSON string
+		if err := rows.Scan(&item.Strategy, &item.Version, &item.Label, &configJSON); err != nil {
+			continue
+		}
+		var cfg struct {
+			Weight float64 `json:"weight"`
+			Label  string  `json:"label"`
+		}
+		_ = json.Unmarshal([]byte(configJSON), &cfg)
+		if item.Label == "" {
+			item.Label = cfg.Label
+		}
+		item.Weight = cfg.Weight
+		item.Mode = "active"
+		out = append(out, item)
+	}
+	return out
 }
 
 func (service *Service) GetRunStatus(task string) (RunStatus, error) {

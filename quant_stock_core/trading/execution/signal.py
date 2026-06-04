@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from common.config.desktop_settings import load_portfolio_risk
+from common.config.desktop_settings import load_portfolio_risk, load_strategy_settings
 from research.data.storage import duckdb_query as dq
 from common.infra import get_recommendation, upsert_recommendation
 from trading.strategy import combiner
@@ -237,6 +237,7 @@ def generate(
     payload = {
         "date": target_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "active_strategy_versions": _active_strategy_versions(strategies_filter),
         "rows": rows,
         "holdings": holdings,
         "trades": {"buy": buy, "sell": sell},
@@ -255,6 +256,23 @@ def generate(
             log.warning(f"upsert_recommendation 失败: {exc}")
 
     return payload
+
+
+def _active_strategy_versions(strategies_filter: list[str] | None) -> list[dict]:
+    settings = load_strategy_settings()
+    names = set(strategies_filter or settings.keys())
+    out = []
+    for name, cfg in settings.items():
+        if name not in names or not cfg.get("enabled", False):
+            continue
+        out.append({
+            "strategy": name,
+            "label": cfg.get("label") or name,
+            "version": cfg.get("_version"),
+            "mode": cfg.get("_version_mode", "active"),
+            "weight": cfg.get("weight", 0),
+        })
+    return sorted(out, key=lambda item: str(item["strategy"]))
 
 
 def load_latest() -> dict | None:

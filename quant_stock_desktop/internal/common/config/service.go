@@ -72,7 +72,8 @@ func (service *Service) loadFromDB(defaults Settings) (Settings, error) {
 	if err := json.Unmarshal([]byte(value), &settings); err != nil {
 		return Settings{}, err
 	}
-	return normalize(settings), nil
+	settings = normalize(settings)
+	return service.applyActiveStrategyVersions(settings), nil
 }
 
 func (service *Service) saveToDB(settings Settings) error {
@@ -104,6 +105,10 @@ func (service *Service) saveToDB(settings Settings) error {
 
 func (service *Service) ensureStrategyVersions(settings Settings, source string, note string) error {
 	if service.db == nil {
+		return nil
+	}
+	var count int
+	if err := service.db.QueryRow(`SELECT COUNT(*) FROM strategy_settings_versions`).Scan(&count); err == nil && count > 0 {
 		return nil
 	}
 	tx, err := service.db.Begin()
@@ -145,8 +150,8 @@ func (service *Service) saveStrategyVersions(tx *sql.Tx, settings Settings, sour
 			return err
 		}
 		if _, err := tx.Exec(`INSERT INTO strategy_settings_versions(
-			strategy, version, label, config_json, is_active, source, note, created_at, activated_at
-		) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+			strategy, version, label, config_json, is_active, promotion_status, validation_json, source, note, created_at, activated_at
+		) VALUES (?, ?, ?, ?, 1, 'active', '{}', ?, ?, ?, ?)`,
 			name, version, strategy.Label, string(configJSON), source, note, now, now); err != nil {
 			return err
 		}
@@ -158,8 +163,35 @@ func activateStrategyVersion(tx *sql.Tx, strategy string, version int, activated
 	if _, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 0 WHERE strategy = ?`, strategy); err != nil {
 		return err
 	}
-	_, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 1, activated_at = ? WHERE strategy = ? AND version = ?`, activatedAt, strategy, version)
+	_, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 1, promotion_status = 'active', activated_at = ? WHERE strategy = ? AND version = ?`, activatedAt, strategy, version)
 	return err
+}
+
+func (service *Service) applyActiveStrategyVersions(settings Settings) Settings {
+	if service.db == nil {
+		return settings
+	}
+	rows, err := service.db.Query(`SELECT strategy, config_json FROM strategy_settings_versions WHERE is_active = 1`)
+	if err != nil {
+		return settings
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var configJSON string
+		if err := rows.Scan(&name, &configJSON); err != nil {
+			continue
+		}
+		var strategy StrategySettings
+		if err := json.Unmarshal([]byte(configJSON), &strategy); err != nil {
+			continue
+		}
+		if settings.Strategies == nil {
+			settings.Strategies = map[string]StrategySettings{}
+		}
+		settings.Strategies[name] = strategy
+	}
+	return normalize(settings)
 }
 
 func (service *Service) Validate(settings Settings) []ValidationIssue {

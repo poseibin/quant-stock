@@ -155,10 +155,14 @@ def save_candidate(db_path: Path, run_id: str, row: dict[str, Any]) -> None:
             """
             INSERT INTO portfolio_optimization_candidates(
                 run_id, candidate_id, rank, name, objective, status, score,
-                strategies, weights_json, annual_return, max_drawdown, sharpe,
+                strategies, weights_json, total_return, excess_annual_return,
+                win_rate, annual_volatility, annual_return, max_drawdown, sharpe,
                 calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount,
+                exit_architecture_type, exit_architecture_label, exit_architecture_json,
+                rebalance_freq, market_regime_filter, position_max_weight,
+                validation_status, validation_json,
                 reason, payload_json, created_at, updated_at
-            ) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            ) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
             ON CONFLICT(run_id, candidate_id) DO UPDATE SET
                 rank = excluded.rank,
                 name = excluded.name,
@@ -167,6 +171,10 @@ def save_candidate(db_path: Path, run_id: str, row: dict[str, Any]) -> None:
                 score = excluded.score,
                 strategies = excluded.strategies,
                 weights_json = excluded.weights_json,
+                total_return = excluded.total_return,
+                excess_annual_return = excluded.excess_annual_return,
+                win_rate = excluded.win_rate,
+                annual_volatility = excluded.annual_volatility,
                 annual_return = excluded.annual_return,
                 max_drawdown = excluded.max_drawdown,
                 sharpe = excluded.sharpe,
@@ -175,6 +183,14 @@ def save_candidate(db_path: Path, run_id: str, row: dict[str, Any]) -> None:
                 avg_holdings = excluded.avg_holdings,
                 avg_total_mv = excluded.avg_total_mv,
                 avg_amount = excluded.avg_amount,
+                exit_architecture_type = excluded.exit_architecture_type,
+                exit_architecture_label = excluded.exit_architecture_label,
+                exit_architecture_json = excluded.exit_architecture_json,
+                rebalance_freq = excluded.rebalance_freq,
+                market_regime_filter = excluded.market_regime_filter,
+                position_max_weight = excluded.position_max_weight,
+                validation_status = excluded.validation_status,
+                validation_json = excluded.validation_json,
                 reason = excluded.reason,
                 payload_json = excluded.payload_json,
                 updated_at = excluded.updated_at
@@ -188,6 +204,10 @@ def save_candidate(db_path: Path, run_id: str, row: dict[str, Any]) -> None:
                 float(row.get("score") or 0),
                 row.get("strategies", ""),
                 json.dumps(row.get("weights") or {}, ensure_ascii=False),
+                _float_or_none(row.get("total_return")),
+                _float_or_none(row.get("excess_annual_return")),
+                _float_or_none(row.get("win_rate")),
+                _float_or_none(row.get("annual_volatility")),
                 _float_or_none(row.get("annual_return")),
                 _float_or_none(row.get("max_drawdown")),
                 _float_or_none(row.get("sharpe")),
@@ -196,6 +216,14 @@ def save_candidate(db_path: Path, run_id: str, row: dict[str, Any]) -> None:
                 _float_or_none(row.get("avg_holdings")),
                 _float_or_none(row.get("avg_total_mv")),
                 _float_or_none(row.get("avg_amount")),
+                row.get("exit_architecture_type", ""),
+                row.get("exit_architecture_label", ""),
+                json.dumps(row.get("exit_architecture") or {}, ensure_ascii=False, default=_json_default),
+                int(row.get("rebalance_freq") or 0),
+                _market_regime_filter(row.get("risk_rule")),
+                _float_or_none(_safe_json_object(row.get("position_rule")).get("max_weight")),
+                row.get("validation_status", ""),
+                json.dumps(row.get("validation") or {}, ensure_ascii=False, default=_json_default),
                 row.get("reason", ""),
                 json.dumps(row, ensure_ascii=False, default=_json_default),
             ),
@@ -212,6 +240,16 @@ def _safe_json_object(value: Any) -> dict[str, Any]:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _market_regime_filter(value: Any) -> str:
+    risk = _safe_json_object(value)
+    portfolio_risk = _safe_json_object(risk.get("portfolio_risk"))
+    regime = _safe_json_object(portfolio_risk.get("market_regime"))
+    if regime.get("enabled"):
+        return "enabled"
+    label = str(risk.get("label") or "")
+    return label or "off"
 
 
 def _candidate_risk(scheme: dict[str, Any], default_risk: dict[str, Any]) -> dict[str, Any]:
