@@ -257,7 +257,7 @@ def _return_stability(returns: pd.Series) -> dict[str, float | int]:
         }
     series = returns.copy()
     series.index = pd.to_datetime(series.index)
-    monthly = (1.0 + series).resample("M").prod() - 1.0
+    monthly = (1.0 + series).resample("ME").prod() - 1.0
     monthly = monthly.dropna()
     if monthly.empty:
         return {

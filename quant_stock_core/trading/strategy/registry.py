@@ -57,13 +57,14 @@ def _discover() -> None:
         return
     import importlib
 
-    skip = {"base", "combiner", "registry", "__init__"}
+    skip = {"base", "combiner", "registry", "research_universe", "__init__"}
     pkg_dir = Path(__file__).parent
     for f in sorted(pkg_dir.glob("*.py")):
         mod = f.stem
         if mod in skip or mod.startswith("_"):
             continue
         importlib.import_module(f"{__package__}.{mod}")
+    importlib.import_module(f"{__package__}.research_universe")
     _DISCOVERED = True
 
 
