@@ -5,8 +5,11 @@ import {
   getPositionRecommendation,
   getPositionSummary,
   getSignalRunStatus,
+  listGovernanceDashboard,
   listRecommendationHindsight,
+  refreshGovernanceAudit,
   refreshRecommendationHindsight,
+  type GovernanceDashboard,
   type PositionRecommendation,
   type PositionSummary,
   type RecommendationHindsight,
@@ -60,18 +63,21 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   const [saving, setSaving] = useState(false)
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null)
   const [hindsight, setHindsight] = useState<RecommendationHindsight[]>([])
+  const [governance, setGovernance] = useState<GovernanceDashboard>(emptyGovernance())
   const [hindsightLoading, setHindsightLoading] = useState(false)
+  const [governanceLoading, setGovernanceLoading] = useState(false)
   const [error, setError] = useState('')
   const prevStateRef = useRef<string>('')
 
   const load = () => {
     setLoading(true)
     setError('')
-    Promise.all([getPositionSummary(), getPositionRecommendation(), listRecommendationHindsight()])
-      .then(([nextSummary, nextRecommendation, nextHindsight]) => {
+    Promise.all([getPositionSummary(), getPositionRecommendation(), listRecommendationHindsight(), listGovernanceDashboard()])
+      .then(([nextSummary, nextRecommendation, nextHindsight, nextGovernance]) => {
         setSummary(nextSummary)
         setRecommendation(nextRecommendation)
         setHindsight(nextHindsight || [])
+        setGovernance(nextGovernance || emptyGovernance())
       })
       .catch((err: Error) => setError(err.message || '加载持仓失败'))
       .finally(() => setLoading(false))
@@ -89,6 +95,18 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
       .then((rows) => setHindsight(rows || []))
       .catch((err: Error) => setError(err.message || '刷新推荐回看失败'))
       .finally(() => setHindsightLoading(false))
+  }
+
+  const refreshGovernance = () => {
+    setGovernanceLoading(true)
+    setError('')
+    refreshGovernanceAudit()
+      .then((dashboard) => {
+        setGovernance(dashboard || emptyGovernance())
+        setHindsight(dashboard?.hindsight || [])
+      })
+      .catch((err: Error) => setError(err.message || '刷新治理审计失败'))
+      .finally(() => setGovernanceLoading(false))
   }
 
   const buildRebalanceTrades = (nextRecommendation: PositionRecommendation, nextSummary: PositionSummary): TradeRequest[] => {
@@ -208,6 +226,11 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
     : ''
   const rebalanceDisabled = loading || saving || isRunning || rebalanceCount === 0 || rebalanced
   const hindsightSummary = summarizeHindsight(hindsight)
+  const latestRisk = governance.risk?.[0]
+  const topPromotions = (governance.promotion || []).slice(0, 6)
+  const recentPaper = (governance.paper || []).slice(0, 6)
+  const walkSummary = summarizeStatus(governance.walk || [], 'pass')
+  const paramSummary = summarizeStatus(governance.params || [], 'stable')
 
   return (
     <div className="positionPage">
@@ -263,6 +286,70 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
             ))}
           </div>
         ) : null}
+      </div>
+
+      <div className="tableCard governanceCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">GOVERNANCE AUDIT</div>
+            <p className="recommendationMeta">多周期回看、风险暴露、模拟盘信号和策略晋级建议统一从 SQLite 审计结果读取</p>
+          </div>
+          <button className="secondaryButton startButton" onClick={refreshGovernance} disabled={governanceLoading}>
+            {governanceLoading ? '审计中...' : '刷新治理审计'}
+          </button>
+        </div>
+        <div className="governanceGrid">
+          <div className="governanceBlock">
+            <div className="miniCardTitle">风险暴露</div>
+            {latestRisk ? (
+              <>
+                <div className="riskMetrics">
+                  <span>持仓 {latestRisk.n_holdings}</span>
+                  <span>总仓 {percent(latestRisk.total_weight)}</span>
+                  <span>单票 {percent(latestRisk.max_single_weight)}</span>
+                  <span>Top5 {percent(latestRisk.top5_weight)}</span>
+                </div>
+                <MiniWeightList values={latestRisk.industry} />
+              </>
+            ) : <div className="mutedText">暂无风险暴露快照</div>}
+          </div>
+          <div className="governanceBlock">
+            <div className="miniCardTitle">策略晋级</div>
+            {topPromotions.length ? topPromotions.map((item) => (
+              <div className="governanceRow" key={`${item.strategy}-${item.strategy_version}`}>
+                <span>{strategyLabel(item.strategy)} v{item.strategy_version}</span>
+                <b>{promotionLabel(item.recommended_status)} · {Math.round(item.score * 100)}%</b>
+              </div>
+            )) : <div className="mutedText">暂无晋级建议</div>}
+          </div>
+          <div className="governanceBlock">
+            <div className="miniCardTitle">模拟盘信号</div>
+            {recentPaper.length ? recentPaper.map((item) => (
+              <div className="governanceRow" key={item.id}>
+                <span>{item.signal_date} {item.name || item.ts_code}</span>
+                <b>{item.action} · {percent(item.target_weight)}</b>
+              </div>
+            )) : <div className="mutedText">暂无模拟盘日志</div>}
+          </div>
+          <div className="governanceBlock">
+            <div className="miniCardTitle">Walk-forward</div>
+            <div className="riskMetrics">
+              <span>窗口 {walkSummary.total}</span>
+              <span>通过 {walkSummary.pass}</span>
+              <span>通过率 {formatNullablePercent(walkSummary.rate, 100)}</span>
+              <span>失败 {walkSummary.fail}</span>
+            </div>
+          </div>
+          <div className="governanceBlock">
+            <div className="miniCardTitle">参数实验</div>
+            <div className="riskMetrics">
+              <span>实验 {paramSummary.total}</span>
+              <span>稳定 {paramSummary.pass}</span>
+              <span>稳定率 {formatNullablePercent(paramSummary.rate, 100)}</span>
+              <span>不稳 {paramSummary.fail}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="tableCard">
@@ -352,6 +439,24 @@ function Metric({ label, value, tone = '' }: { label: string; value: string; ton
   )
 }
 
+function MiniWeightList({ values }: { values: Record<string, number> }) {
+  const rows = Object.entries(values || {})
+    .map(([name, value]) => ({ name, value: Number(value) || 0 }))
+    .sort((left, right) => right.value - left.value)
+    .slice(0, 5)
+  if (!rows.length) return <div className="mutedText">暂无权重分布</div>
+  return (
+    <div className="miniWeightList">
+      {rows.map((item) => (
+        <div key={item.name}>
+          <span>{item.name}</span>
+          <b>{percent(item.value)}</b>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function actionClass(action: string) {
   if (action === '新建') return 'new'
   if (action === '加仓') return 'add'
@@ -366,6 +471,28 @@ function actionShortLabel(action: string) {
   if (action === '减仓') return '减'
   if (action === '清仓') return '清'
   return '持'
+}
+
+function promotionLabel(status: string) {
+  return ({
+    research: '研究',
+    paper: '进模拟',
+    active_candidate: '可生效',
+    rejected: '拒绝',
+    active: '生效',
+    promotable: '可模拟'
+  } as Record<string, string>)[status] || status || '研究'
+}
+
+function emptyGovernance(): GovernanceDashboard {
+  return { hindsight: [], risk: [], paper: [], promotion: [], walk: [], params: [] }
+}
+
+function summarizeStatus(rows: Array<{ status: string }>, passStatus: string) {
+  const total = rows.length
+  const pass = rows.filter((row) => row.status === passStatus).length
+  const fail = rows.filter((row) => row.status === 'fail' || row.status === 'unstable' || row.status === 'rejected').length
+  return { total, pass, fail, rate: total ? pass / total : null }
 }
 
 function summarizeHindsight(rows: RecommendationHindsight[]) {

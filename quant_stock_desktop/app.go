@@ -172,6 +172,85 @@ type RecommendationHindsightDTO struct {
 	UpdatedAt          string         `json:"updated_at"`
 }
 
+type RiskExposureDTO struct {
+	ID              string         `json:"id"`
+	SubjectType     string         `json:"subject_type"`
+	SubjectID       string         `json:"subject_id"`
+	AsOfDate        string         `json:"as_of_date"`
+	NHoldings       int            `json:"n_holdings"`
+	TotalWeight     float64        `json:"total_weight"`
+	MaxSingleWeight float64        `json:"max_single_weight"`
+	Top5Weight      float64        `json:"top5_weight"`
+	Industry        map[string]any `json:"industry"`
+	Strategy        map[string]any `json:"strategy"`
+	Payload         map[string]any `json:"payload"`
+	CreatedAt       string         `json:"created_at"`
+}
+
+type PaperTradingLogDTO struct {
+	ID           string         `json:"id"`
+	SignalDate   string         `json:"signal_date"`
+	TSCode       string         `json:"ts_code"`
+	Name         string         `json:"name"`
+	Action       string         `json:"action"`
+	TargetWeight float64        `json:"target_weight"`
+	ActualWeight *float64       `json:"actual_weight"`
+	Status       string         `json:"status"`
+	Reason       string         `json:"reason"`
+	Payload      map[string]any `json:"payload"`
+	CreatedAt    string         `json:"created_at"`
+	UpdatedAt    string         `json:"updated_at"`
+}
+
+type PromotionDecisionDTO struct {
+	ID                string         `json:"id"`
+	Strategy          string         `json:"strategy"`
+	StrategyVersion   int            `json:"strategy_version"`
+	CurrentStatus     string         `json:"current_status"`
+	RecommendedStatus string         `json:"recommended_status"`
+	Score             float64        `json:"score"`
+	Reason            string         `json:"reason"`
+	Payload           map[string]any `json:"payload"`
+	CreatedAt         string         `json:"created_at"`
+	UpdatedAt         string         `json:"updated_at"`
+}
+
+type WalkForwardWindowDTO struct {
+	ID          string         `json:"id"`
+	SubjectType string         `json:"subject_type"`
+	SubjectID   string         `json:"subject_id"`
+	WindowName  string         `json:"window_name"`
+	StartDate   string         `json:"start_date"`
+	EndDate     string         `json:"end_date"`
+	Status      string         `json:"status"`
+	Score       float64        `json:"score"`
+	Metrics     map[string]any `json:"metrics"`
+	CreatedAt   string         `json:"created_at"`
+	UpdatedAt   string         `json:"updated_at"`
+}
+
+type ParameterExperimentDTO struct {
+	ID              string         `json:"id"`
+	Strategy        string         `json:"strategy"`
+	StrategyVersion int            `json:"strategy_version"`
+	ParamSet        string         `json:"param_set"`
+	Status          string         `json:"status"`
+	Score           float64        `json:"score"`
+	Params          map[string]any `json:"params"`
+	Metrics         map[string]any `json:"metrics"`
+	CreatedAt       string         `json:"created_at"`
+	UpdatedAt       string         `json:"updated_at"`
+}
+
+type GovernanceDashboardDTO struct {
+	Hindsight []RecommendationHindsightDTO `json:"hindsight"`
+	Risk      []RiskExposureDTO            `json:"risk"`
+	Paper     []PaperTradingLogDTO         `json:"paper"`
+	Promotion []PromotionDecisionDTO       `json:"promotion"`
+	Walk      []WalkForwardWindowDTO       `json:"walk"`
+	Params    []ParameterExperimentDTO     `json:"params"`
+}
+
 func (app *App) GetAppInfo() AppInfo {
 	return AppInfo{
 		Name:    "Quant Stock Desktop",
@@ -2209,7 +2288,7 @@ func (app *App) RefreshRecommendationHindsight() ([]RecommendationHindsightDTO, 
 	pythonPath := pythonPathForCore(quantRoot)
 	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
 	scriptPath := filepath.Join(quantRoot, "trading", "execution", "validation.py")
-	cmd := exec.Command(pythonPath, scriptPath, "--persist", "--db-path", dbPath)
+	cmd := exec.Command(pythonPath, scriptPath, "--persist", "--db-path", dbPath, "--horizons", "1,3,5,10,20")
 	cmd.Dir = quantRoot
 	cmd.Env = append(os.Environ(), "DESKTOP_DB_PATH="+dbPath)
 	var stderr bytes.Buffer
@@ -2219,6 +2298,26 @@ func (app *App) RefreshRecommendationHindsight() ([]RecommendationHindsightDTO, 
 	}
 	app.saveResearchReport("daily_recommendation", "hindsight", "recommendation_hindsight", "推荐结果回看", "已刷新推荐信号与次日表现回看。", map[string]any{"refreshed_at": time.Now().Format(time.RFC3339)})
 	return app.ListRecommendationHindsight()
+}
+
+func (app *App) RefreshGovernanceAudit() (GovernanceDashboardDTO, error) {
+	if _, err := app.RefreshRecommendationHindsight(); err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	if err := app.refreshRiskExposureSnapshots(); err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	if err := app.refreshPaperTradingLog(); err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	if err := app.refreshPromotionDecisions(); err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	if err := app.refreshWalkForwardAndParameterExperiments(); err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	app.saveResearchReport("governance", "latest", "governance_audit", "量化治理审计", "已刷新多周期推荐回看、风险暴露、模拟盘信号日志和策略晋级决策。", map[string]any{"refreshed_at": time.Now().Format(time.RFC3339)})
+	return app.ListGovernanceDashboard()
 }
 
 func (app *App) ListRecommendationHindsight() ([]RecommendationHindsightDTO, error) {
@@ -2249,6 +2348,37 @@ func (app *App) ListRecommendationHindsight() ([]RecommendationHindsightDTO, err
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (app *App) ListGovernanceDashboard() (GovernanceDashboardDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	hindsight, err := app.ListRecommendationHindsight()
+	if err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	risk, err := app.listRiskExposureSnapshots()
+	if err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	paper, err := app.listPaperTradingLog()
+	if err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	promotion, err := app.listPromotionDecisions()
+	if err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	walk, err := app.listWalkForwardWindows()
+	if err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	params, err := app.listParameterExperiments()
+	if err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	return GovernanceDashboardDTO{Hindsight: hindsight, Risk: risk, Paper: paper, Promotion: promotion, Walk: walk, Params: params}, nil
 }
 
 func (app *App) ListValidationEvidence(query ValidationEvidenceQuery) (ValidationEvidenceDTO, error) {
@@ -2359,6 +2489,355 @@ func (app *App) ListValidationEvidence(query ValidationEvidenceQuery) (Validatio
 		}
 	}
 	return out, nil
+}
+
+func (app *App) refreshRiskExposureSnapshots() error {
+	row := app.database.Conn().QueryRow(`SELECT date, payload_json FROM daily_recommendation ORDER BY date DESC LIMIT 1`)
+	var date string
+	var payloadJSON string
+	if err := row.Scan(&date, &payloadJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(payloadJSON), &payload)
+	rows, _ := payload["rows"].([]any)
+	industryWeights := map[string]float64{}
+	strategyWeights := map[string]float64{}
+	weights := []float64{}
+	totalWeight := 0.0
+	for _, raw := range rows {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		weight := floatValue(item["to_weight"], 0)
+		if weight <= 0 {
+			continue
+		}
+		totalWeight += weight
+		weights = append(weights, weight)
+		industry := strings.TrimSpace(fmt.Sprint(item["industry"]))
+		if industry == "" {
+			industry = "未分类"
+		}
+		industryWeights[industry] += weight
+		if sources, ok := item["sources"].([]any); ok {
+			for _, sourceRaw := range sources {
+				source, ok := sourceRaw.(map[string]any)
+				if !ok {
+					continue
+				}
+				strategy := strings.TrimSpace(fmt.Sprint(source["strategy"]))
+				if strategy != "" {
+					strategyWeights[strategy] += floatValue(source["weight"], 0) * weight
+				}
+			}
+		}
+	}
+	sort.Sort(sort.Reverse(sort.Float64Slice(weights)))
+	maxSingle := 0.0
+	top5 := 0.0
+	for idx, weight := range weights {
+		if idx == 0 {
+			maxSingle = weight
+		}
+		if idx < 5 {
+			top5 += weight
+		}
+	}
+	industryJSON, _ := json.Marshal(floatMapToAny(industryWeights))
+	strategyJSON, _ := json.Marshal(floatMapToAny(strategyWeights))
+	auditPayload := map[string]any{
+		"concentration": map[string]any{"max_single_weight": maxSingle, "top5_weight": top5},
+		"risk_flags":    riskExposureFlags(maxSingle, top5, industryWeights),
+	}
+	auditJSON, _ := json.Marshal(auditPayload)
+	_, err := app.database.Conn().Exec(`INSERT INTO risk_exposure_snapshots(
+		id, subject_type, subject_id, as_of_date, n_holdings, total_weight, max_single_weight, top5_weight, industry_json, strategy_json, payload_json, created_at
+	) VALUES (?, 'daily_recommendation', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"res_"+strings.ReplaceAll(task.NewID(), "-", ""), date, date, len(weights), totalWeight, maxSingle, top5, string(industryJSON), string(strategyJSON), string(auditJSON), time.Now().Format(time.RFC3339))
+	return err
+}
+
+func (app *App) refreshPaperTradingLog() error {
+	rows, err := app.database.Conn().Query(`SELECT date, payload_json FROM daily_recommendation ORDER BY date DESC LIMIT 120`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var date, payloadJSON string
+		if err := rows.Scan(&date, &payloadJSON); err != nil {
+			continue
+		}
+		var payload map[string]any
+		_ = json.Unmarshal([]byte(payloadJSON), &payload)
+		recRows, _ := payload["rows"].([]any)
+		for _, raw := range recRows {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			code := strings.TrimSpace(fmt.Sprint(item["ts_code"]))
+			action := strings.TrimSpace(fmt.Sprint(item["action"]))
+			if code == "" || action == "" || action == "持有" {
+				continue
+			}
+			name := strings.TrimSpace(fmt.Sprint(item["name"]))
+			targetWeight := floatValue(item["to_weight"], 0)
+			status := "signal_recorded"
+			reason := "已记录信号，等待模拟盘成交确认"
+			var actual sql.NullFloat64
+			_ = app.database.Conn().QueryRow(`SELECT weight FROM pool_holdings WHERE ts_code = ?`, code).Scan(&actual)
+			if actual.Valid {
+				status = "tracked"
+				reason = "已匹配当前持仓权重"
+			}
+			itemJSON, _ := json.Marshal(item)
+			_, _ = app.database.Conn().Exec(`INSERT INTO paper_trading_log(
+				id, signal_date, ts_code, name, action, target_weight, actual_weight, status, reason, payload_json, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(signal_date, ts_code, action) DO UPDATE SET
+				target_weight = excluded.target_weight,
+				actual_weight = excluded.actual_weight,
+				status = excluded.status,
+				reason = excluded.reason,
+				payload_json = excluded.payload_json,
+				updated_at = excluded.updated_at`,
+				"pt_"+strings.ReplaceAll(task.NewID(), "-", ""), date, code, name, action, targetWeight, nullableSQLValue(actual), status, reason, string(itemJSON), time.Now().Format(time.RFC3339), time.Now().Format(time.RFC3339))
+		}
+	}
+	return rows.Err()
+}
+
+func (app *App) refreshPromotionDecisions() error {
+	rows, err := app.database.Conn().Query(`SELECT strategy, version, COALESCE(promotion_status, 'research'), COALESCE(validation_json, '{}') FROM strategy_settings_versions ORDER BY strategy, version DESC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	now := time.Now().Format(time.RFC3339)
+	for rows.Next() {
+		var strategy, status, validationJSON string
+		var version int
+		if err := rows.Scan(&strategy, &version, &status, &validationJSON); err != nil {
+			continue
+		}
+		var validation map[string]any
+		_ = json.Unmarshal([]byte(validationJSON), &validation)
+		score := floatValue(validation["score"], 0)
+		recommended := "research"
+		reason := "缺少足够复核证据，保持研究状态"
+		if score >= 0.85 {
+			recommended = "paper"
+			reason = "可信度分数达到模拟盘门槛，建议进入 paper trading"
+		}
+		if status == "paper" && score >= 0.85 {
+			recommended = "active_candidate"
+			reason = "已处于模拟盘且可信度达标，可人工确认后生效"
+		}
+		if score > 0 && score < 0.55 {
+			recommended = "rejected"
+			reason = "可信度不足，不建议启用"
+		}
+		payloadJSON, _ := json.Marshal(map[string]any{"validation": validation})
+		_, _ = app.database.Conn().Exec(`INSERT INTO promotion_decisions(
+			id, strategy, strategy_version, current_status, recommended_status, score, reason, payload_json, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(strategy, strategy_version) DO UPDATE SET
+			current_status = excluded.current_status,
+			recommended_status = excluded.recommended_status,
+			score = excluded.score,
+			reason = excluded.reason,
+			payload_json = excluded.payload_json,
+			updated_at = excluded.updated_at`,
+			"pd_"+strings.ReplaceAll(task.NewID(), "-", ""), strategy, version, status, recommended, score, reason, string(payloadJSON), now, now)
+	}
+	return rows.Err()
+}
+
+func (app *App) refreshWalkForwardAndParameterExperiments() error {
+	rows, err := app.database.Conn().Query(`SELECT run_id, strategy, COALESCE(strategy_version, 0), start_date, end_date, annual_return, max_drawdown, sharpe, calmar, avg_turnover, COALESCE(payload_json, '{}')
+		FROM strategy_evaluation ORDER BY strategy, start_date`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	now := time.Now().Format(time.RFC3339)
+	for rows.Next() {
+		var runID, strategy, startDate, endDate, payloadJSON string
+		var version int
+		var annual, drawdown, sharpe, calmar, turnover sql.NullFloat64
+		if err := rows.Scan(&runID, &strategy, &version, &startDate, &endDate, &annual, &drawdown, &sharpe, &calmar, &turnover, &payloadJSON); err != nil {
+			continue
+		}
+		subjectID := fmt.Sprintf("%s@%d", strategy, version)
+		score := strategyWindowScore(nullableFloatValue(annual, 0), nullableFloatValue(drawdown, 0), nullableFloatValue(sharpe, 0), nullableFloatValue(calmar, 0), nullableFloatValue(turnover, 0))
+		status := "research"
+		if score >= 0.75 {
+			status = "pass"
+		} else if score < 0.45 {
+			status = "fail"
+		}
+		metricsJSON, _ := json.Marshal(map[string]any{"run_id": runID, "annual_return": nullableFloatPtr(annual), "max_drawdown": nullableFloatPtr(drawdown), "sharpe": nullableFloatPtr(sharpe), "calmar": nullableFloatPtr(calmar), "avg_turnover": nullableFloatPtr(turnover), "payload": jsonRawMap(payloadJSON)})
+		_, _ = app.database.Conn().Exec(`INSERT INTO walk_forward_windows(
+			id, subject_type, subject_id, window_name, start_date, end_date, status, score, metrics_json, created_at, updated_at
+		) VALUES (?, 'strategy_version', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(subject_type, subject_id, window_name) DO UPDATE SET
+			status = excluded.status,
+			score = excluded.score,
+			metrics_json = excluded.metrics_json,
+			updated_at = excluded.updated_at`,
+			"wfw_"+strings.ReplaceAll(task.NewID(), "-", ""), subjectID, runID, startDate, endDate, status, score, string(metricsJSON), now, now)
+	}
+	versionRows, err := app.database.Conn().Query(`SELECT strategy, version, config_json, COALESCE(validation_json, '{}') FROM strategy_settings_versions ORDER BY strategy, version DESC`)
+	if err != nil {
+		return err
+	}
+	defer versionRows.Close()
+	for versionRows.Next() {
+		var strategy, configJSON, validationJSON string
+		var version int
+		if err := versionRows.Scan(&strategy, &version, &configJSON, &validationJSON); err != nil {
+			continue
+		}
+		var validation map[string]any
+		_ = json.Unmarshal([]byte(validationJSON), &validation)
+		score := floatValue(validation["score"], 0)
+		status := "research"
+		if score >= 0.85 {
+			status = "stable"
+		} else if score > 0 && score < 0.55 {
+			status = "unstable"
+		}
+		_, _ = app.database.Conn().Exec(`INSERT INTO parameter_experiments(
+			id, strategy, strategy_version, param_set, status, score, params_json, metrics_json, created_at, updated_at
+		) VALUES (?, ?, ?, 'version_config', ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(strategy, strategy_version, param_set) DO UPDATE SET
+			status = excluded.status,
+			score = excluded.score,
+			params_json = excluded.params_json,
+			metrics_json = excluded.metrics_json,
+			updated_at = excluded.updated_at`,
+			"pe_"+strings.ReplaceAll(task.NewID(), "-", ""), strategy, version, status, score, configJSON, validationJSON, now, now)
+	}
+	return nil
+}
+
+func (app *App) listRiskExposureSnapshots() ([]RiskExposureDTO, error) {
+	rows, err := app.database.Conn().Query(`SELECT id, subject_type, subject_id, as_of_date, n_holdings, total_weight, max_single_weight, top5_weight, COALESCE(industry_json, '{}'), COALESCE(strategy_json, '{}'), COALESCE(payload_json, '{}'), created_at
+		FROM risk_exposure_snapshots ORDER BY datetime(created_at) DESC LIMIT 30`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RiskExposureDTO{}
+	for rows.Next() {
+		var item RiskExposureDTO
+		var industryJSON, strategyJSON, payloadJSON string
+		if err := rows.Scan(&item.ID, &item.SubjectType, &item.SubjectID, &item.AsOfDate, &item.NHoldings, &item.TotalWeight, &item.MaxSingleWeight, &item.Top5Weight, &industryJSON, &strategyJSON, &payloadJSON, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.Industry = map[string]any{}
+		item.Strategy = map[string]any{}
+		item.Payload = map[string]any{}
+		_ = json.Unmarshal([]byte(industryJSON), &item.Industry)
+		_ = json.Unmarshal([]byte(strategyJSON), &item.Strategy)
+		_ = json.Unmarshal([]byte(payloadJSON), &item.Payload)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) listWalkForwardWindows() ([]WalkForwardWindowDTO, error) {
+	rows, err := app.database.Conn().Query(`SELECT id, subject_type, subject_id, window_name, start_date, end_date, status, score, COALESCE(metrics_json, '{}'), created_at, updated_at
+		FROM walk_forward_windows ORDER BY datetime(updated_at) DESC LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []WalkForwardWindowDTO{}
+	for rows.Next() {
+		var item WalkForwardWindowDTO
+		var metricsJSON string
+		if err := rows.Scan(&item.ID, &item.SubjectType, &item.SubjectID, &item.WindowName, &item.StartDate, &item.EndDate, &item.Status, &item.Score, &metricsJSON, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Metrics = map[string]any{}
+		_ = json.Unmarshal([]byte(metricsJSON), &item.Metrics)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) listParameterExperiments() ([]ParameterExperimentDTO, error) {
+	rows, err := app.database.Conn().Query(`SELECT id, strategy, strategy_version, param_set, status, score, COALESCE(params_json, '{}'), COALESCE(metrics_json, '{}'), created_at, updated_at
+		FROM parameter_experiments ORDER BY strategy, strategy_version DESC LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ParameterExperimentDTO{}
+	for rows.Next() {
+		var item ParameterExperimentDTO
+		var paramsJSON, metricsJSON string
+		if err := rows.Scan(&item.ID, &item.Strategy, &item.StrategyVersion, &item.ParamSet, &item.Status, &item.Score, &paramsJSON, &metricsJSON, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Params = map[string]any{}
+		item.Metrics = map[string]any{}
+		_ = json.Unmarshal([]byte(paramsJSON), &item.Params)
+		_ = json.Unmarshal([]byte(metricsJSON), &item.Metrics)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) listPaperTradingLog() ([]PaperTradingLogDTO, error) {
+	rows, err := app.database.Conn().Query(`SELECT id, signal_date, ts_code, name, action, target_weight, actual_weight, status, reason, COALESCE(payload_json, '{}'), created_at, updated_at
+		FROM paper_trading_log ORDER BY signal_date DESC, updated_at DESC LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PaperTradingLogDTO{}
+	for rows.Next() {
+		var item PaperTradingLogDTO
+		var actual sql.NullFloat64
+		var payloadJSON string
+		if err := rows.Scan(&item.ID, &item.SignalDate, &item.TSCode, &item.Name, &item.Action, &item.TargetWeight, &actual, &item.Status, &item.Reason, &payloadJSON, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.ActualWeight = nullableFloatPtr(actual)
+		item.Payload = map[string]any{}
+		_ = json.Unmarshal([]byte(payloadJSON), &item.Payload)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) listPromotionDecisions() ([]PromotionDecisionDTO, error) {
+	rows, err := app.database.Conn().Query(`SELECT id, strategy, strategy_version, current_status, recommended_status, score, reason, COALESCE(payload_json, '{}'), created_at, updated_at
+		FROM promotion_decisions ORDER BY strategy, strategy_version DESC LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PromotionDecisionDTO{}
+	for rows.Next() {
+		var item PromotionDecisionDTO
+		var payloadJSON string
+		if err := rows.Scan(&item.ID, &item.Strategy, &item.StrategyVersion, &item.CurrentStatus, &item.RecommendedStatus, &item.Score, &item.Reason, &payloadJSON, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Payload = map[string]any{}
+		_ = json.Unmarshal([]byte(payloadJSON), &item.Payload)
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (app *App) persistValidationReview(review ValidationReviewDTO) (ValidationReviewDTO, error) {
@@ -2555,6 +3034,66 @@ func nullableFloatPtr(value sql.NullFloat64) *float64 {
 	}
 	out := value.Float64
 	return &out
+}
+
+func nullableSQLValue(value sql.NullFloat64) any {
+	if value.Valid {
+		return value.Float64
+	}
+	return nil
+}
+
+func floatMapToAny(value map[string]float64) map[string]any {
+	out := map[string]any{}
+	for key, item := range value {
+		out[key] = item
+	}
+	return out
+}
+
+func riskExposureFlags(maxSingle float64, top5 float64, industries map[string]float64) []string {
+	flags := []string{}
+	if maxSingle > 0.08 {
+		flags = append(flags, "单票权重超过 8%")
+	}
+	if top5 > 0.35 {
+		flags = append(flags, "前五持仓集中度超过 35%")
+	}
+	for industry, weight := range industries {
+		if weight > 0.30 {
+			flags = append(flags, fmt.Sprintf("%s 行业权重超过 30%%", industry))
+		}
+	}
+	if len(flags) == 0 {
+		flags = append(flags, "未触发集中度红线")
+	}
+	return flags
+}
+
+func strategyWindowScore(annual float64, drawdown float64, sharpe float64, calmar float64, turnover float64) float64 {
+	score := 0.0
+	if annual > 0 {
+		score += 0.25
+	}
+	if absFloat(drawdown) <= 0.22 {
+		score += 0.20
+	}
+	if sharpe >= 0.3 {
+		score += 0.20
+	}
+	if calmar >= 0.25 {
+		score += 0.20
+	}
+	if turnover <= 0.45 {
+		score += 0.15
+	}
+	return score
+}
+
+func jsonRawMap(data string) map[string]any {
+	out := map[string]any{}
+	_ = json.Unmarshal([]byte(data), &out)
+	return out
 }
 
 func (app *App) buildPortfolioAnalysisContext(parent task.Task, children []task.Task) (map[string]any, error) {

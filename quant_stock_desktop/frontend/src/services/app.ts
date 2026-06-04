@@ -14,6 +14,8 @@ declare global {
           ListValidationEvidence: (query: ValidationEvidenceQuery) => Promise<ValidationEvidence>
           RefreshRecommendationHindsight: () => Promise<RecommendationHindsight[]>
           ListRecommendationHindsight: () => Promise<RecommendationHindsight[]>
+          RefreshGovernanceAudit: () => Promise<GovernanceDashboard>
+          ListGovernanceDashboard: () => Promise<GovernanceDashboard>
           AnalyzePortfolioTask: (id: string) => Promise<TaskDTO>
           CreateTask: (request: CreateTaskRequest) => Promise<TaskDTO>
           StartTask: (id: string) => Promise<TaskDTO>
@@ -165,6 +167,85 @@ export interface RecommendationHindsight {
   payload: Record<string, unknown>
   created_at: string
   updated_at: string
+}
+
+export interface RiskExposure {
+  id: string
+  subject_type: string
+  subject_id: string
+  as_of_date: string
+  n_holdings: number
+  total_weight: number
+  max_single_weight: number
+  top5_weight: number
+  industry: Record<string, number>
+  strategy: Record<string, number>
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface PaperTradingLog {
+  id: string
+  signal_date: string
+  ts_code: string
+  name: string
+  action: string
+  target_weight: number
+  actual_weight?: number | null
+  status: string
+  reason: string
+  payload: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface PromotionDecision {
+  id: string
+  strategy: string
+  strategy_version: number
+  current_status: string
+  recommended_status: string
+  score: number
+  reason: string
+  payload: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface WalkForwardWindow {
+  id: string
+  subject_type: string
+  subject_id: string
+  window_name: string
+  start_date: string
+  end_date: string
+  status: string
+  score: number
+  metrics: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface ParameterExperiment {
+  id: string
+  strategy: string
+  strategy_version: number
+  param_set: string
+  status: string
+  score: number
+  params: Record<string, unknown>
+  metrics: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface GovernanceDashboard {
+  hindsight: RecommendationHindsight[]
+  risk: RiskExposure[]
+  paper: PaperTradingLog[]
+  promotion: PromotionDecision[]
+  walk: WalkForwardWindow[]
+  params: ParameterExperiment[]
 }
 
 export interface ValidationIssue {
@@ -586,6 +667,20 @@ export async function listRecommendationHindsight(): Promise<RecommendationHinds
     return (await window.go.main.App.ListRecommendationHindsight()) || []
   }
   return []
+}
+
+export async function refreshGovernanceAudit(): Promise<GovernanceDashboard> {
+  if (window.go?.main?.App?.RefreshGovernanceAudit) {
+    return window.go.main.App.RefreshGovernanceAudit()
+  }
+  return { hindsight: [], risk: [], paper: [], promotion: [], walk: [], params: [] }
+}
+
+export async function listGovernanceDashboard(): Promise<GovernanceDashboard> {
+  if (window.go?.main?.App?.ListGovernanceDashboard) {
+    return window.go.main.App.ListGovernanceDashboard()
+  }
+  return { hindsight: [], risk: [], paper: [], promotion: [], walk: [], params: [] }
 }
 
 export async function analyzePortfolioTask(id: string): Promise<TaskDTO> {

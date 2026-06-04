@@ -34,11 +34,16 @@ def _now() -> str:
 
 
 def _next_trade_date(date: str) -> str | None:
+    return _future_trade_date(date, 1)
+
+
+def _future_trade_date(date: str, horizon_days: int) -> str | None:
     cal = dq.get_trade_dates()
     if date not in cal:
         return None
     idx = cal.index(date)
-    return cal[idx + 1] if idx + 1 < len(cal) else None
+    target = idx + max(1, horizon_days)
+    return cal[target] if target < len(cal) else None
 
 
 def _fetch_pct_chg(date: str, codes: list[str]) -> dict[str, float]:
@@ -53,6 +58,28 @@ def _fetch_pct_chg(date: str, codes: list[str]) -> dict[str, float]:
     if df.empty:
         return {}
     return {r["ts_code"]: float(r["pct_chg"]) for _, r in df.iterrows() if pd.notna(r["pct_chg"])}
+
+
+def _fetch_window_return(start_exclusive: str, end_date: str, codes: list[str]) -> dict[str, float]:
+    if not codes:
+        return {}
+    in_clause = ",".join(f"'{c}'" for c in codes)
+    df = dq.sql(f"""
+        SELECT ts_code, trade_date, pct_chg
+        FROM read_parquet('{RAW_DIR / "daily" / "*.parquet"}')
+        WHERE trade_date > '{start_exclusive}' AND trade_date <= '{end_date}' AND ts_code IN ({in_clause})
+        ORDER BY ts_code, trade_date
+    """)
+    if df.empty:
+        return {}
+    out: dict[str, float] = {}
+    for code, sub in df.groupby("ts_code"):
+        equity = 1.0
+        for _, row in sub.iterrows():
+            if pd.notna(row["pct_chg"]):
+                equity *= 1 + float(row["pct_chg"]) / 100.0
+        out[str(code)] = (equity - 1.0) * 100.0
+    return out
 
 
 def _fetch_names(codes: list[str]) -> dict[str, str]:
@@ -70,19 +97,19 @@ def _fetch_names(codes: list[str]) -> dict[str, str]:
     return {r["ts_code"]: r["name"] for _, r in df.iterrows()}
 
 
-def evaluate_signal(date: str) -> dict | None:
+def evaluate_signal(date: str, horizon_days: int = 1) -> dict | None:
     """评估单个交易日信号 vs 次日真实表现。"""
     s = sig.load_by_date(date)
     if not s or not s.get("holdings"):
         return None
-    nd = _next_trade_date(date)
+    nd = _future_trade_date(date, horizon_days)
     if not nd:
-        log.info(f"{date} 无次日交易日（可能是最新日），无法评估")
+        log.info(f"{date} 无 {horizon_days} 日后交易日（可能是最新日），无法评估")
         return None
 
     holdings = s["holdings"]
     codes = [h["ts_code"] for h in holdings]
-    pct_map = _fetch_pct_chg(nd, codes)
+    pct_map = _fetch_pct_chg(nd, codes) if horizon_days <= 1 else _fetch_window_return(date, nd, codes)
     if not pct_map:
         return None
     name_map = _fetch_names(codes)
@@ -120,6 +147,7 @@ def evaluate_signal(date: str) -> dict | None:
     return {
         "date": date,
         "next_date": nd,
+        "horizon_days": horizon_days,
         "n_holdings": len(holdings),
         "n_eval": n_eval,
         "weighted_return": weighted_return,
@@ -131,7 +159,7 @@ def evaluate_signal(date: str) -> dict | None:
     }
 
 
-def evaluate_history() -> pd.DataFrame:
+def evaluate_history(horizon_days: int = 1) -> pd.DataFrame:
     """对 db 中所有信号逐日评估，返回时间序列 DataFrame。
 
     columns: date, next_date, n_holdings, weighted_return, equal_weight_return,
@@ -139,11 +167,12 @@ def evaluate_history() -> pd.DataFrame:
     """
     rows = []
     for d in sig.list_dates():
-        r = evaluate_signal(d)
+        r = evaluate_signal(d, horizon_days=horizon_days)
         if r:
             rows.append({
                 "date": r["date"],
                 "next_date": r["next_date"],
+                "horizon_days": r["horizon_days"],
                 "n_holdings": r["n_holdings"],
                 "weighted_return": r["weighted_return"],
                 "equal_weight_return": r["equal_weight_return"],
@@ -169,7 +198,7 @@ def evaluate_history() -> pd.DataFrame:
 
 def persist_history(db_path: str | None = None, horizon_days: int = 1) -> list[dict]:
     """把推荐回看写回 SQLite recommendation_hindsight。"""
-    df = evaluate_history()
+    df = evaluate_history(horizon_days=horizon_days)
     if df.empty:
         return []
     path = db_path or str(desktop_db_path())
@@ -269,12 +298,16 @@ def main() -> None:
     parser.add_argument("--persist", action="store_true", help="写入 SQLite recommendation_hindsight")
     parser.add_argument("--db-path", default=None, help="SQLite meta.db 路径")
     parser.add_argument("--horizon-days", type=int, default=1)
+    parser.add_argument("--horizons", default="", help="逗号分隔多周期，例如 1,3,5,10,20")
     args = parser.parse_args()
     if args.persist:
-        rows = persist_history(args.db_path, args.horizon_days)
+        horizons = [int(x) for x in args.horizons.split(",") if x.strip().isdigit()] if args.horizons else [args.horizon_days]
+        rows = []
+        for horizon in horizons:
+            rows.extend(persist_history(args.db_path, horizon))
         print(json.dumps({"rows": len(rows)}, ensure_ascii=False))
     else:
-        df = evaluate_history()
+        df = evaluate_history(horizon_days=args.horizon_days)
         print(df.to_json(orient="records", force_ascii=False))
 
 
