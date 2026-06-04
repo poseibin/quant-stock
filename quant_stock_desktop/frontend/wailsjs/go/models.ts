@@ -1513,6 +1513,7 @@ export namespace position {
 	    market_value: number;
 	    total_assets: number;
 	    total_cost: number;
+	    total_fee: number;
 	    total_pnl: number;
 	    today_pnl: number;
 	    today_pct: number;
@@ -1536,6 +1537,7 @@ export namespace position {
 	        this.market_value = source["market_value"];
 	        this.total_assets = source["total_assets"];
 	        this.total_cost = source["total_cost"];
+	        this.total_fee = source["total_fee"];
 	        this.total_pnl = source["total_pnl"];
 	        this.today_pnl = source["today_pnl"];
 	        this.today_pct = source["today_pct"];

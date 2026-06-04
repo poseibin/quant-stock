@@ -906,6 +906,7 @@ export interface PositionSummary {
   market_value: number
   total_assets: number
   total_cost: number
+  total_fee: number
   total_pnl: number
   today_pnl: number
   today_pct: number
@@ -994,6 +995,7 @@ export async function getPositionSummary(): Promise<PositionSummary> {
     market_value: 0,
     total_assets: 500000,
     total_cost: 0,
+    total_fee: 0,
     total_pnl: 0,
     today_pnl: 0,
     today_pct: 0,

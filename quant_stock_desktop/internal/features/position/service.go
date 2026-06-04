@@ -52,13 +52,13 @@ func (service *Service) GetSummary(dataPath string) (Summary, error) {
 		return Summary{}, errors.New("database is not initialized")
 	}
 	row := service.db.QueryRow(`SELECT initial_cash, current_cash, market_value, total_assets,
-	    COALESCE(total_cost,0), total_pnl, today_pnl, COALESCE(today_pct,0),
+	    COALESCE(total_cost,0), COALESCE(total_fee,0), total_pnl, today_pnl, COALESCE(today_pct,0),
 	    COALESCE(unrealized_pnl,0), COALESCE(unrealized_pct,0),
 	    COALESCE(realized_pnl,0), COALESCE(cum_return,0), COALESCE(n_closed,0),
 	    COALESCE(updated_at,'') FROM pool_summary WHERE id = 1`)
 	var s Summary
 	if err := row.Scan(&s.InitialCash, &s.Cash, &s.MarketValue, &s.TotalAssets,
-		&s.TotalCost, &s.TotalPnL, &s.TodayPnL, &s.TodayPct,
+		&s.TotalCost, &s.TotalFee, &s.TotalPnL, &s.TodayPnL, &s.TodayPct,
 		&s.UnrealizedPnL, &s.UnrealizedPct, &s.RealizedPnL, &s.CumReturn, &s.NClosed,
 		&s.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from common.config import COMMISSION_RATE, DEFAULT_SLIPPAGE, STAMP_TAX_RATE
 from common.infra.db import open_db
 
 INITIAL_CASH: float = 500_000.0
@@ -18,11 +19,31 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _trade_fee(amount: float, side: str, slippage: float | None = None) -> float:
+    slip = DEFAULT_SLIPPAGE if slippage is None else float(slippage)
+    rate = COMMISSION_RATE + slip
+    if side == "sell":
+        rate += STAMP_TAX_RATE
+    return max(0.0, float(amount) * rate)
+
+
+def _ensure_fee_columns(conn) -> None:
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(pool_trades)").fetchall()}
+    if "fee" not in cols:
+        conn.execute("ALTER TABLE pool_trades ADD COLUMN fee REAL NOT NULL DEFAULT 0")
+    if "net_amount" not in cols:
+        conn.execute("ALTER TABLE pool_trades ADD COLUMN net_amount REAL NOT NULL DEFAULT 0")
+    summary_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(pool_summary)").fetchall()}
+    if "total_fee" not in summary_cols:
+        conn.execute("ALTER TABLE pool_summary ADD COLUMN total_fee REAL NOT NULL DEFAULT 0")
+
+
 def list_summary() -> dict[str, Any]:
     with open_db() as conn:
+        _ensure_fee_columns(conn)
         row = conn.execute(
             """SELECT initial_cash, current_cash, market_value, total_assets, total_cost,
-                      total_pnl, today_pnl, today_pct, unrealized_pnl, unrealized_pct,
+                      COALESCE(total_fee,0), total_pnl, today_pnl, today_pct, unrealized_pnl, unrealized_pct,
                       realized_pnl, cum_return, n_closed, updated_at
                FROM pool_summary WHERE id = 1"""
         ).fetchone()
@@ -33,6 +54,7 @@ def list_summary() -> dict[str, Any]:
             "market_value": 0.0,
             "total_assets": INITIAL_CASH,
             "total_cost": 0.0,
+            "total_fee": 0.0,
             "total_pnl": 0.0,
             "today_pnl": 0.0,
             "today_pct": 0.0,
@@ -49,15 +71,16 @@ def list_summary() -> dict[str, Any]:
         "market_value": float(row[2] or 0),
         "total_assets": float(row[3] or 0),
         "total_cost": float(row[4] or 0),
-        "total_pnl": float(row[5] or 0),
-        "today_pnl": float(row[6] or 0),
-        "today_pct": float(row[7] or 0),
-        "unrealized_pnl": float(row[8] or 0),
-        "unrealized_pct": float(row[9] or 0),
-        "realized_pnl": float(row[10] or 0),
-        "cum_return": float(row[11] or 0),
-        "n_closed": int(row[12] or 0),
-        "updated_at": row[13] or "",
+        "total_fee": float(row[5] or 0),
+        "total_pnl": float(row[6] or 0),
+        "today_pnl": float(row[7] or 0),
+        "today_pct": float(row[8] or 0),
+        "unrealized_pnl": float(row[9] or 0),
+        "unrealized_pct": float(row[10] or 0),
+        "realized_pnl": float(row[11] or 0),
+        "cum_return": float(row[12] or 0),
+        "n_closed": int(row[13] or 0),
+        "updated_at": row[14] or "",
     }
 
 
@@ -91,8 +114,10 @@ def list_holdings() -> list[dict[str, Any]]:
 
 def list_trades(limit: int = 200) -> list[dict[str, Any]]:
     with open_db() as conn:
+        _ensure_fee_columns(conn)
         rows = conn.execute(
-            """SELECT id, ts_code, side, shares, price, amount, trade_date, pnl, created_at
+            """SELECT id, ts_code, side, shares, price, amount, trade_date, pnl, created_at,
+                      COALESCE(fee,0), COALESCE(net_amount,0)
                FROM pool_trades ORDER BY id DESC LIMIT ?""",
             (int(limit),),
         ).fetchall()
@@ -107,6 +132,8 @@ def list_trades(limit: int = 200) -> list[dict[str, Any]]:
             "trade_date": r[6] or "",
             "pnl": float(r[7] or 0),
             "created_at": r[8] or "",
+            "fee": float(r[9] or 0),
+            "net_amount": float(r[10] or 0),
         }
         for r in rows
     ]
@@ -124,6 +151,7 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
     with open_db() as conn:
         conn.execute("BEGIN")
         try:
+            _ensure_fee_columns(conn)
             summary = conn.execute(
                 "SELECT initial_cash, current_cash FROM pool_summary WHERE id = 1"
             ).fetchone()
@@ -149,6 +177,8 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                 if not ts_code or shares <= 0 or price <= 0 or side not in ("buy", "sell"):
                     continue
                 amount = price * shares
+                fee = _trade_fee(amount, side, trade.get("slippage"))
+                net_amount = amount + fee if side == "buy" else amount - fee
 
                 row = conn.execute(
                     "SELECT shares, avg_cost FROM pool_holdings WHERE ts_code = ?",
@@ -159,11 +189,11 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
                 realized_pnl = 0.0
                 if side == "buy":
-                    if amount > current_cash + 1e-6:
-                        raise ValueError(f"现金不足: 需要 {amount:.2f}, 仅有 {current_cash:.2f}")
+                    if net_amount > current_cash + 1e-6:
+                        raise ValueError(f"现金不足: 需要 {net_amount:.2f}, 仅有 {current_cash:.2f}")
                     new_shares = cur_shares + shares
-                    new_cost = (cur_cost * cur_shares + amount) / new_shares if new_shares > 0 else 0.0
-                    current_cash -= amount
+                    new_cost = (cur_cost * cur_shares + net_amount) / new_shares if new_shares > 0 else 0.0
+                    current_cash -= net_amount
                     if row:
                         conn.execute(
                             """UPDATE pool_holdings SET shares=?, avg_cost=?, updated_at=?
@@ -180,9 +210,9 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                 else:  # sell
                     if shares > cur_shares:
                         raise ValueError(f"卖出 {shares} 超过持仓 {cur_shares}: {ts_code}")
-                    realized_pnl = (price - cur_cost) * shares
+                    realized_pnl = (price - cur_cost) * shares - fee
                     new_shares = cur_shares - shares
-                    current_cash += amount
+                    current_cash += net_amount
                     realized_pnl_total += realized_pnl
                     if new_shares > 0:
                         conn.execute(
@@ -193,16 +223,19 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                         conn.execute("DELETE FROM pool_holdings WHERE ts_code=?", (ts_code,))
 
                 conn.execute(
-                    """INSERT INTO pool_trades(ts_code, side, shares, price, amount, trade_date, pnl, created_at)
-                       VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (ts_code, side, shares, price, amount, trade_date, realized_pnl, now),
+                    """INSERT INTO pool_trades(ts_code, side, shares, price, amount, trade_date, pnl, created_at, fee, net_amount)
+                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (ts_code, side, shares, price, amount, trade_date, realized_pnl, now, fee, net_amount),
                 )
 
             conn.execute(
                 """UPDATE pool_summary SET current_cash=?, updated_at=?
                        , total_pnl = total_pnl + ?
+                       , total_fee = COALESCE(total_fee,0) + (
+                         SELECT COALESCE(SUM(fee),0) FROM pool_trades WHERE created_at = ?
+                       )
                    WHERE id=1""",
-                (current_cash, now, realized_pnl_total),
+                (current_cash, now, realized_pnl_total, now),
             )
             conn.execute("COMMIT")
         except Exception:

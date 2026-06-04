@@ -757,6 +757,63 @@ h1 {
   gap: 16px;
 }
 
+.dashboardSectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.dashboardSectionHeader p {
+  max-width: 420px;
+  margin: 0;
+  color: #8f9ab3;
+  font-size: 13px;
+  text-align: right;
+}
+
+.governanceSummaryPanel {
+  margin-bottom: 16px;
+}
+
+.governanceSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summaryTile {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(8, 11, 18, 0.34);
+}
+
+.summaryTile span,
+.summaryTile em {
+  display: block;
+  overflow: hidden;
+  color: #8f9ab3;
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summaryTile b {
+  display: block;
+  margin: 7px 0 4px;
+  overflow: hidden;
+  color: #eef2ff;
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-size: 18px;
+  line-height: 1.12;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .eventPanel {
   min-width: 0;
 }
@@ -1616,13 +1673,14 @@ h1 {
 .metricGrid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  gap: 10px;
 }
 
 .metricCard {
-  padding: 16px;
+  min-width: 0;
+  padding: 12px 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
+  border-radius: 10px;
   background: rgba(8, 11, 18, 0.34);
 }
 
@@ -1634,10 +1692,14 @@ h1 {
 
 .metricCard strong {
   display: block;
-  margin-top: 8px;
+  margin-top: 6px;
+  overflow: hidden;
   color: #eef2ff;
   font-family: 'JetBrains Mono', Menlo, monospace;
-  font-size: 20px;
+  font-size: clamp(17px, 1.2vw, 21px);
+  line-height: 1.12;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .metricCard em {
@@ -3656,8 +3718,11 @@ th {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .metricGrid,
   .governanceGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .governanceSummaryGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -3736,6 +3801,7 @@ th {
   .dashboardGrid,
   .metricGrid,
   .governanceGrid,
+  .governanceSummaryGrid,
   .assetGrid,
   .returnMetricGrid,
   .breakoutMetricGrid,

@@ -517,6 +517,8 @@ func (db *DB) Migrate() error {
 			amount REAL NOT NULL,
 			trade_date TEXT NOT NULL,
 			pnl REAL NOT NULL DEFAULT 0,
+			fee REAL NOT NULL DEFAULT 0,
+			net_amount REAL NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_pool_trades_date ON pool_trades(trade_date);`,
@@ -535,6 +537,9 @@ func (db *DB) Migrate() error {
 		`ALTER TABLE pool_summary ADD COLUMN realized_pnl REAL NOT NULL DEFAULT 0;`,
 		`ALTER TABLE pool_summary ADD COLUMN cum_return REAL NOT NULL DEFAULT 0;`,
 		`ALTER TABLE pool_summary ADD COLUMN n_closed INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE pool_summary ADD COLUMN total_fee REAL NOT NULL DEFAULT 0;`,
+		`ALTER TABLE pool_trades ADD COLUMN fee REAL NOT NULL DEFAULT 0;`,
+		`ALTER TABLE pool_trades ADD COLUMN net_amount REAL NOT NULL DEFAULT 0;`,
 		`ALTER TABLE time_machine_trades ADD COLUMN is_new INTEGER NOT NULL DEFAULT 0;`,
 		`ALTER TABLE evaluation_tasks ADD COLUMN parent_id TEXT;`,
 		`ALTER TABLE evaluation_tasks ADD COLUMN group_run_id TEXT;`,

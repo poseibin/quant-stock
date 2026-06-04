@@ -9,16 +9,21 @@ import {
   getPositionRecommendation,
   getPositionSummary,
   listDatasetUpdateStatus,
+  listGovernanceDashboard,
+  listRecommendationHindsight,
   listTasks,
   type AppInfo,
   type DatasetUpdateStatus,
+  type GovernanceDashboard,
   type PositionHistoryPoint,
   type PositionRecommendation,
   type PositionSummary,
+  type RecommendationHindsight,
   type RunStatus,
   type TaskDTO
 } from '../services/app'
 import { formatDate } from '../components/format'
+import { strategyLabel } from './PositionPage'
 
 echarts.use([CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
@@ -65,6 +70,8 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
   const [tasks, setTasks] = useState<TaskDTO[]>([])
   const [dataStatus, setDataStatus] = useState<RunStatus | null>(null)
   const [datasetStatus, setDatasetStatus] = useState<DatasetUpdateStatus[]>([])
+  const [hindsight, setHindsight] = useState<RecommendationHindsight[]>([])
+  const [governance, setGovernance] = useState<GovernanceDashboard>(emptyGovernance())
 
   useEffect(() => {
     Promise.all([
@@ -73,14 +80,18 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
       getPositionRecommendation().catch(() => null),
       listTasks({ limit: 200 }),
       getDataUpdateStatus(),
-      listDatasetUpdateStatus()
-    ]).then(([nextSummary, nextHistory, nextRecommendation, nextTasks, nextDataStatus, nextDatasetStatus]) => {
+      listDatasetUpdateStatus(),
+      listRecommendationHindsight().catch(() => []),
+      listGovernanceDashboard().catch(() => emptyGovernance())
+    ]).then(([nextSummary, nextHistory, nextRecommendation, nextTasks, nextDataStatus, nextDatasetStatus, nextHindsight, nextGovernance]) => {
       setSummary(nextSummary)
       setHistory(nextHistory)
       setRecommendation(nextRecommendation)
       setTasks(nextTasks)
       setDataStatus(nextDataStatus)
       setDatasetStatus(nextDatasetStatus)
+      setHindsight(nextHindsight || [])
+      setGovernance(nextGovernance || emptyGovernance())
     }).catch(() => {})
   }, [])
 
@@ -99,6 +110,15 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
   const risk = buildRisk(summary)
   const returnStats = useMemo(() => buildReturnStats(history, summary), [history, summary])
   const signalStats = buildSignalStats(recommendation)
+  const hindsightSummary = summarizeHindsight(hindsight)
+  const dataQuality = governance.data_quality || {}
+  const missingData = asStringArray(dataQuality.missing)
+  const recovery = governance.recovery || {}
+  const latestRisk = governance.risk?.[0]
+  const walkSummary = summarizeStatus(governance.walk || [], 'pass')
+  const paramSummary = summarizeStatus(governance.params || [], 'stable')
+  const topPromotion = (governance.promotion || [])[0]
+  const topAttribution = (governance.portfolio_attribution || [])[0]
   const events = buildEvents({ recommendation, summary, tasks: topLevelTasks, dataStatus, datasetStatus })
   const currentTaskLabel = runningTask ? `${runningTask.name} · ${Math.round(runningTask.progress * 100)}%` : '无'
 
@@ -172,6 +192,26 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
         </section>
       </div>
 
+      <section className="dashboardPanel governanceSummaryPanel">
+        <div className="dashboardSectionHeader">
+          <div>
+            <div className="sectionLabel">GOVERNANCE</div>
+            <div className="dashboardPanelTitle">系统健康与研究闭环</div>
+          </div>
+          <p>推荐回看、数据闸门、任务恢复和策略晋级统一看这里</p>
+        </div>
+        <div className="governanceSummaryGrid">
+          <SummaryTile title="推荐回看" value={hindsight.length ? `${hindsight.length} 日` : '暂无'} hint={`加权 ${formatNullablePercent(hindsightSummary.weightedReturn)} · 命中 ${formatNullablePercent(hindsightSummary.hitRate, 100)}`} />
+          <SummaryTile title="数据闸门" value={String(dataQuality.status || '—')} hint={missingData.length ? `缺少 ${missingData.join('、')}` : `数据集 ${Object.keys(asRecord(dataQuality.datasets) || {}).length}`} tone={missingData.length ? 'negative' : 'positive'} />
+          <SummaryTile title="任务恢复" value={`${num(recovery.total)} 个`} hint={`可重跑 ${num(recovery.retryable_failed)} · 阻断 ${num(recovery.blocked_failed)}`} tone={num(recovery.blocked_failed) ? 'negative' : ''} />
+          <SummaryTile title="风险暴露" value={latestRisk ? `${latestRisk.n_holdings} 只` : '暂无'} hint={latestRisk ? `总仓 ${percent(latestRisk.total_weight)} · 单票 ${percent(latestRisk.max_single_weight)}` : '等待审计快照'} />
+          <SummaryTile title="Walk-forward" value={`${walkSummary.pass}/${walkSummary.total}`} hint={`通过率 ${formatNullablePercent(walkSummary.rate, 100)} · 失败 ${walkSummary.fail}`} tone={walkSummary.fail ? 'negative' : ''} />
+          <SummaryTile title="参数实验" value={`${paramSummary.pass}/${paramSummary.total}`} hint={`稳定率 ${formatNullablePercent(paramSummary.rate, 100)} · 不稳 ${paramSummary.fail}`} tone={paramSummary.fail ? 'negative' : ''} />
+          <SummaryTile title="策略晋级" value={topPromotion ? strategyLabel(topPromotion.strategy) : '暂无'} hint={topPromotion ? `${promotionLabel(topPromotion.recommended_status)} · v${topPromotion.strategy_version} · ${Math.round(topPromotion.score * 100)}%` : '等待准入结果'} />
+          <SummaryTile title="组合归因" value={topAttribution ? strategyLabel(String(topAttribution.strategy || '')) : '暂无'} hint={topAttribution ? `权重 ${percent(num(topAttribution.weight))}` : '等待时光机结果'} />
+        </div>
+      </section>
+
       <div className="dashboardBottomGrid">
         <section className="dashboardPanel">
           <div className="sectionLabel">RISK</div>
@@ -220,6 +260,16 @@ function AssetBlock({ label, value, hint, tone = '' }: { label: string; value: s
   return (
     <div className="assetBlock">
       <span>{label}</span>
+      <b className={tone}>{value}</b>
+      <em>{hint}</em>
+    </div>
+  )
+}
+
+function SummaryTile({ title, value, hint, tone = '' }: { title: string; value: string; hint: string; tone?: string }) {
+  return (
+    <div className="summaryTile">
+      <span>{title}</span>
       <b className={tone}>{value}</b>
       <em>{hint}</em>
     </div>
@@ -463,4 +513,65 @@ function buildEvents({ recommendation, summary, tasks, dataStatus, datasetStatus
     .filter((event) => event.sortTime)
     .sort((left, right) => right.sortTime.localeCompare(left.sortTime))
     .slice(0, 6)
+}
+
+function formatNullablePercent(value?: number | null, multiplier = 1) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return `${(value * multiplier).toFixed(2)}%`
+}
+
+function summarizeStatus(rows: Array<{ status: string }>, passStatus: string) {
+  const total = rows.length
+  const pass = rows.filter((row) => row.status === passStatus).length
+  const fail = rows.filter((row) => row.status === 'fail' || row.status === 'unstable' || row.status === 'rejected').length
+  return { total, pass, fail, rate: total ? pass / total : null }
+}
+
+function summarizeHindsight(rows: RecommendationHindsight[]) {
+  let weightedSum = 0
+  let weightedCount = 0
+  let hitSum = 0
+  let hitCount = 0
+  for (const row of rows) {
+    if (typeof row.weighted_return === 'number' && Number.isFinite(row.weighted_return)) {
+      weightedSum += row.weighted_return
+      weightedCount += 1
+    }
+    if (typeof row.hit_rate === 'number' && Number.isFinite(row.hit_rate)) {
+      hitSum += row.hit_rate
+      hitCount += 1
+    }
+  }
+  return {
+    weightedReturn: weightedCount ? weightedSum / weightedCount : null,
+    hitRate: hitCount ? hitSum / hitCount : null
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => String(item)).filter(Boolean)
+}
+
+function num(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function promotionLabel(status: string) {
+  return ({
+    research: '研究',
+    paper: '进模拟',
+    active_candidate: '可生效',
+    rejected: '拒绝',
+    active: '生效',
+    promotable: '可模拟'
+  } as Record<string, string>)[status] || status || '研究'
+}
+
+function emptyGovernance(): GovernanceDashboard {
+  return { hindsight: [], risk: [], paper: [], promotion: [], walk: [], params: [], data_quality: {}, parameter_recommendations: [], retirement: [], portfolio_attribution: [], recovery: {}, reports: [] }
 }

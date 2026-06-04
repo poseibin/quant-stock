@@ -172,6 +172,7 @@ type Summary struct {
 	MarketValue   float64    `json:"market_value"`
 	TotalAssets   float64    `json:"total_assets"`
 	TotalCost     float64    `json:"total_cost"`
+	TotalFee      float64    `json:"total_fee"`
 	TotalPnL      float64    `json:"total_pnl"`
 	TodayPnL      float64    `json:"today_pnl"`
 	TodayPct      float64    `json:"today_pct"`
