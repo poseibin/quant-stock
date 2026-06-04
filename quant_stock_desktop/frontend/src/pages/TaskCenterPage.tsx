@@ -748,7 +748,7 @@ function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart
         <Metric label={mode.limitedLabel} value={`${limitedCount}`} />
         <Metric label={mode.watchLabel} value={`${watchCount}`} />
         <Metric label={mode.rejectLabel} value={`${rejectCount}`} tone={rejectCount > 0 ? 'negative' : ''} />
-        <Metric label="结果目录" value={resultPathText(task)} hint={task.result_path} />
+        <Metric label="结果目录" value={resultPathText(task)} hint={task.result_path} className="pathMetric" />
       </div>
 
       <ValidationEvidencePanel evidence={evidence} title={mode.evidenceTitle} emptyText={mode.evidenceEmpty} />
@@ -921,7 +921,7 @@ function PortfolioOptimizationDetail({ task, childTasks, onBack, onRefresh, onSt
         <Metric label="最佳评分" value={numberOf(task.summary.best_score, 0).toFixed(3)} tone="positive" />
         <Metric label="最佳年化" value={percent(numberOf(task.summary.best_annual_return, 0), true)} tone={toneOf(numberOf(task.summary.best_annual_return, 0))} />
         <Metric label="最佳回撤" value={percent(numberOf(task.summary.best_max_drawdown, 0))} tone="negative" />
-        <Metric label="结果目录" value={resultPathText(task)} hint={task.result_path} />
+        <Metric label="结果目录" value={resultPathText(task)} hint={task.result_path} className="pathMetric" />
       </div>
 
       <ValidationEvidencePanel evidence={evidence} title="方案可信度证据" emptyText="暂无方案分析报告，任务成功后点击量化优化生成" />
@@ -1399,8 +1399,8 @@ function EChartLine({ title, dates, values, valueFormatter, yFormatter, positive
   return <div className="tmEchartPanel"><div ref={elRef} className="tmEchart" /></div>
 }
 
-function Metric({ label, value, tone = '', hint = '' }: { label: string; value: string; tone?: string; hint?: string }) {
-  return <div className="metricCard"><span>{label}</span><strong className={tone}>{value}</strong>{hint && <em>{hint}</em>}</div>
+function Metric({ label, value, tone = '', hint = '', className = '' }: { label: string; value: string; tone?: string; hint?: string; className?: string }) {
+  return <div className={`metricCard ${className}`.trim()}><span>{label}</span><strong className={tone}>{value}</strong>{hint && <em title={hint}>{hint}</em>}</div>
 }
 
 function StockLink({ tsCode, children, onOpenResearch }: { tsCode: string; children: string; onOpenResearch?: (tsCode: string) => void }) {
