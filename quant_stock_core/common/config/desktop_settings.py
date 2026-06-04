@@ -223,7 +223,7 @@ def save_settings(settings: dict[str, Any]) -> None:
 
 
 def load_strategy_settings() -> dict[str, dict[str, Any]]:
-    settings = deepcopy(load_settings().get("strategies", {}) or {})
+    settings = _load_versioned_strategy_settings(deepcopy(load_settings().get("strategies", {}) or {}))
     for name, override in _strategy_overrides().items():
         if isinstance(override, dict) and isinstance(settings.get(name), dict):
             settings[name] = _deep_merge(settings[name], override)
@@ -264,3 +264,70 @@ def _strategy_overrides() -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _load_versioned_strategy_settings(base: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    db_path = config_db_path()
+    if not db_path.exists():
+        return base
+    mode = os.getenv("QUANT_STRATEGY_VERSION_MODE", "active").strip().lower() or "active"
+    version_spec = _strategy_version_spec()
+    try:
+        with sqlite3.connect(str(db_path), timeout=10.0) as conn:
+            has_table = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'strategy_settings_versions'"
+            ).fetchone()
+            if not has_table:
+                return base
+            out = deepcopy(base)
+            for name, default_cfg in base.items():
+                row = None
+                version = version_spec.get(name)
+                if version is not None:
+                    row = conn.execute(
+                        "SELECT version, config_json FROM strategy_settings_versions WHERE strategy = ? AND version = ?",
+                        (name, int(version)),
+                    ).fetchone()
+                elif mode == "latest":
+                    row = conn.execute(
+                        "SELECT version, config_json FROM strategy_settings_versions WHERE strategy = ? ORDER BY version DESC LIMIT 1",
+                        (name,),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT version, config_json FROM strategy_settings_versions WHERE strategy = ? AND is_active = 1 ORDER BY version DESC LIMIT 1",
+                        (name,),
+                    ).fetchone()
+                if not row:
+                    continue
+                try:
+                    loaded = json.loads(row[1])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if isinstance(loaded, dict):
+                    cfg = _deep_merge(default_cfg, loaded)
+                    cfg["_version"] = int(row[0])
+                    cfg["_version_mode"] = "specified" if name in version_spec else mode
+                    out[name] = cfg
+            return out
+    except sqlite3.Error:
+        return base
+
+
+def _strategy_version_spec() -> dict[str, int]:
+    raw = os.getenv("QUANT_STRATEGY_VERSION_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: dict[str, int] = {}
+    for name, version in parsed.items():
+        try:
+            out[str(name)] = int(version)
+        except (TypeError, ValueError):
+            continue
+    return out

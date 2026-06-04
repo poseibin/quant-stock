@@ -48,6 +48,8 @@ def main() -> None:
     parser.add_argument("--scheme-json", default="{}")
     parser.add_argument("--exit-json", default="{}")
     parser.add_argument("--strategy-overrides-json", default="{}")
+    parser.add_argument("--strategy-version-mode", choices=["active", "latest"], default="latest")
+    parser.add_argument("--strategy-version-json", default="{}")
     parser.add_argument("--rebalance-freq", type=int, default=5)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--benchmark", default="000905.SH")
@@ -67,6 +69,8 @@ def main() -> None:
         exit_architecture = _safe_json_object(scheme.get("exit_architecture"))
     strategy_overrides = _safe_json_object(args.strategy_overrides_json) or _safe_json_object(scheme.get("strategy_overrides"))
     os.environ["QUANT_STRATEGY_OVERRIDES_JSON"] = json.dumps(strategy_overrides, ensure_ascii=False)
+    os.environ["QUANT_STRATEGY_VERSION_MODE"] = args.strategy_version_mode
+    os.environ["QUANT_STRATEGY_VERSION_JSON"] = args.strategy_version_json
 
     emit({"type": "progress", "stage": "load", "progress": 0.03, "message": "加载策略与风控配置"})
     risk = _candidate_risk(scheme, load_portfolio_risk())
@@ -98,6 +102,7 @@ def main() -> None:
             "scheme_type": "trading_scheme",
             "scheme": scheme,
             "strategy_overrides": strategy_overrides,
+            "strategy_version_mode": args.strategy_version_mode,
             "exit_architecture": exit_architecture,
             "exit_architecture_type": str(exit_architecture.get("type") or "rebalance_only"),
             "exit_architecture_label": str(exit_architecture.get("label") or "跌出目标池卖出"),
@@ -119,6 +124,7 @@ def main() -> None:
             "scheme_type": "trading_scheme",
             "scheme": scheme,
             "strategy_overrides": strategy_overrides,
+            "strategy_version_mode": args.strategy_version_mode,
             "entry": scheme.get("entry") or {"type": "strategy_weight_mix", "weights": weights},
             "exit_architecture": exit_architecture,
             "exit_architecture_type": str(exit_architecture.get("type") or "rebalance_only"),

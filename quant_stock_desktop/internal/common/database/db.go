@@ -48,6 +48,23 @@ func (db *DB) Migrate() error {
 			value TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS strategy_settings_versions (
+			strategy TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			label TEXT NOT NULL DEFAULT '',
+			config_json TEXT NOT NULL,
+			is_active INTEGER NOT NULL DEFAULT 0,
+			source TEXT NOT NULL DEFAULT '',
+			note TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			activated_at TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY(strategy, version)
+		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_strategy_settings_versions_active
+			ON strategy_settings_versions(strategy)
+			WHERE is_active = 1;`,
+		`CREATE INDEX IF NOT EXISTS idx_strategy_settings_versions_strategy_version
+			ON strategy_settings_versions(strategy, version DESC);`,
 		`CREATE TABLE IF NOT EXISTS evaluation_tasks (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -230,6 +247,8 @@ func (db *DB) Migrate() error {
 			capacity_score REAL,
 			stability_score REAL,
 			independence_score REAL,
+			strategy_version INTEGER,
+			strategy_version_mode TEXT,
 			error TEXT NOT NULL DEFAULT '',
 			generated_at TEXT NOT NULL,
 			payload_json TEXT NOT NULL,
@@ -466,6 +485,8 @@ func (db *DB) migrateStrategyEvaluationSchema() error {
 			capacity_score REAL,
 			stability_score REAL,
 			independence_score REAL,
+			strategy_version INTEGER,
+			strategy_version_mode TEXT,
 			error TEXT NOT NULL DEFAULT '',
 			generated_at TEXT NOT NULL,
 			payload_json TEXT NOT NULL,
@@ -483,18 +504,20 @@ func (db *DB) migrateStrategyEvaluationSchema() error {
 
 func (db *DB) ensureStrategyEvaluationScoreColumns(columns map[string]bool) error {
 	addColumns := map[string]string{
-		"admission_score":     "REAL",
-		"month_count":         "INTEGER",
-		"monthly_win_rate":    "REAL",
-		"worst_month_return":  "REAL",
-		"positive_3m_rate":    "REAL",
-		"return_score":        "REAL",
-		"drawdown_score":      "REAL",
-		"risk_adjusted_score": "REAL",
-		"cost_score":          "REAL",
-		"capacity_score":      "REAL",
-		"stability_score":     "REAL",
-		"independence_score":  "REAL",
+		"admission_score":       "REAL",
+		"month_count":           "INTEGER",
+		"monthly_win_rate":      "REAL",
+		"worst_month_return":    "REAL",
+		"positive_3m_rate":      "REAL",
+		"return_score":          "REAL",
+		"drawdown_score":        "REAL",
+		"risk_adjusted_score":   "REAL",
+		"cost_score":            "REAL",
+		"capacity_score":        "REAL",
+		"stability_score":       "REAL",
+		"independence_score":    "REAL",
+		"strategy_version":      "INTEGER",
+		"strategy_version_mode": "TEXT",
 	}
 	for name, ddl := range addColumns {
 		if columns[strings.ToLower(name)] {

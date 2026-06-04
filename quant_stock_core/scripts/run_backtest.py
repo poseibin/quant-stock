@@ -59,8 +59,6 @@ def main() -> None:
         result.returns.to_csv(out_dir / "returns.csv")
         result.equity.to_csv(out_dir / "equity.csv")
         result.weights.to_parquet(out_dir / "weights.parquet")
-        with open(out_dir / "summary.json", "w") as f:
-            json.dump(result.summary, f, ensure_ascii=False, indent=2, default=float)
         log.info(f"结果已保存到 {out_dir}")
 
 

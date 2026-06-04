@@ -25,7 +25,6 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.config import BACKTEST_DIR
 from common.config.desktop_settings import load_strategy_settings
 from common.utils import get_logger
 from research.data.storage import duckdb_query as dq
@@ -46,9 +45,14 @@ def main() -> None:
     parser.add_argument("--save", default=None, help="保存 run id；结果写入 SQLite strategy_evaluation 表")
     parser.add_argument("--append-save", action="store_true", help="追加保存单个策略结果，不清空同 run_id 已有记录")
     parser.add_argument("--db-path", default=None, help="SQLite 路径，默认 DESKTOP_DB_PATH 或 DATA_ROOT/meta.db")
+    parser.add_argument("--strategy-version-mode", choices=["active", "latest"], default="latest", help="策略参数版本：评估默认 latest，实盘推股默认 active")
+    parser.add_argument("--strategy-version-json", default="{}", help="指定策略版本，如 {\"small_cap_quality\": 3}")
     parser.add_argument("--export-files", action="store_true", help="额外导出 JSON/CSV 到 backtest_results/<save>/")
     parser.add_argument("--json", action="store_true", help="仅输出 JSON")
     args = parser.parse_args()
+
+    os.environ["QUANT_STRATEGY_VERSION_MODE"] = args.strategy_version_mode
+    os.environ["QUANT_STRATEGY_VERSION_JSON"] = args.strategy_version_json
 
     names = _resolve_strategy_names(args.strategies)
     eval_names = list(names)
@@ -77,12 +81,7 @@ def main() -> None:
         save_strategy_evaluation(db_path, args.save, payload, delete_existing=not args.append_save)
         log.info(f"策略评估结果已保存到 SQLite: {db_path} run_id={args.save}")
         if args.export_files:
-            out_dir = BACKTEST_DIR / args.save
-            out_dir.mkdir(parents=True, exist_ok=True)
-            with (out_dir / "strategy_evaluation.json").open("w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False, indent=2, default=_json_default)
-            pd.DataFrame(results).to_csv(out_dir / "strategy_evaluation.csv", index=False)
-            log.info(f"策略评估导出文件已保存到 {out_dir}")
+            log.info("--export-files 已废弃：策略评估结果统一写入 SQLite，不再导出 JSON/CSV")
 
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default))
@@ -119,6 +118,8 @@ def evaluate(
             "strategy": name,
             "label": registry.get_label(name),
             "enabled": bool(settings.get(name, {}).get("enabled", False)),
+            "strategy_version": settings.get(name, {}).get("_version"),
+            "strategy_version_mode": settings.get(name, {}).get("_version_mode"),
             "status": "ok",
         }
         try:
@@ -458,7 +459,8 @@ def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]
                 "positive_3m_rate", "avg_turnover", "avg_holdings", "avg_total_mv", "avg_amount",
                 "overlap_with_baseline", "corr_with_baseline", "return_score", "drawdown_score",
                 "risk_adjusted_score", "cost_score", "capacity_score", "stability_score",
-                "independence_score", "error", "generated_at", "payload_json", "created_at", "updated_at",
+                "independence_score", "strategy_version", "strategy_version_mode",
+                "error", "generated_at", "payload_json", "created_at", "updated_at",
             ]
             values = [
                 run_id,
@@ -498,6 +500,8 @@ def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]
                 _float_or_none(row.get("capacity_score")),
                 _float_or_none(row.get("stability_score")),
                 _float_or_none(row.get("independence_score")),
+                _int_or_none(row.get("strategy_version")),
+                str(row.get("strategy_version_mode") or ""),
                 str(row.get("error") or ""),
                 generated_at,
                 row_payload,
@@ -562,6 +566,8 @@ def _ensure_strategy_evaluation_table(conn: sqlite3.Connection) -> None:
             capacity_score REAL,
             stability_score REAL,
             independence_score REAL,
+            strategy_version INTEGER,
+            strategy_version_mode TEXT,
             error TEXT NOT NULL DEFAULT '',
             generated_at TEXT NOT NULL,
             payload_json TEXT NOT NULL,
@@ -587,6 +593,8 @@ def _ensure_strategy_evaluation_table(conn: sqlite3.Connection) -> None:
             "capacity_score": "REAL",
             "stability_score": "REAL",
             "independence_score": "REAL",
+            "strategy_version": "INTEGER",
+            "strategy_version_mode": "TEXT",
         },
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_run ON strategy_evaluation(run_id)")

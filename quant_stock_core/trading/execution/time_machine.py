@@ -7,10 +7,8 @@
 
 输入：start_date, end_date, initial_cash
 输出：
-  - 一个独立的 pool（不污染主仓池），保存到 data_store/positions/timemachine/<run_id>/
-  - daily_snapshots: 每日净值序列（DataFrame）
-  - trades: 每日成交流水（DataFrame）
-  - summary: 总收益、年化、最大回撤、夏普、胜率等
+  - SQLite time_machine_snapshots / time_machine_trades / time_machine_positions
+  - 函数返回 summary / snapshots / trades，桌面端统一从 SQLite 读取
 
 用法：
     from trading.execution.time_machine import run_time_machine
@@ -39,10 +37,6 @@ log = get_logger("time_machine")
 
 TM_DIR = BACKTEST_DIR.parent / "positions" / "timemachine"
 TM_DIR.mkdir(parents=True, exist_ok=True)
-
-# 评估台账：每次回测结束后追写一行（JSON Lines）
-LEDGER_PATH = TM_DIR / "index.jsonl"
-
 
 def _desktop_db_path() -> str | None:
     path = os.getenv("DESKTOP_DB_PATH")
@@ -278,15 +272,6 @@ def _collect_strategy_meta(strategies_filter: list[str] | None) -> list[dict]:
             "weight": float(cfg.weight),
         })
     return out
-
-
-def _append_ledger(entry: dict) -> None:
-    """把一条评估记录追写到台账 index.jsonl（失败不影响主流程）。"""
-    try:
-        with open(LEDGER_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False, default=float) + "\n")
-    except Exception as e:  # pragma: no cover
-        log.warning(f"写入评估台账失败：{e}")
 
 
 # ──────────────────────────────────── 评估状态机 ────────────────────────────────────
@@ -1051,27 +1036,6 @@ def run_time_machine(
     summary["exit_rules"] = exit_rules_cfg or {}
     # 评估名字（用户自定义，便于在列表页识别）
     summary["eval_name"] = (eval_name or "").strip()
-    with open(run_dir / "summary.json", "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2, default=float)
-
-    # 追写评估台账：用了什么策略 + 收益结果一目了然
-    _append_ledger({
-        "run_id": run_id,
-        "eval_name": summary["eval_name"],
-        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "start": start_date,
-        "end": end_date,
-        "mode": summary["mode"],
-        "strategies": strat_meta,
-        "initial_cash": initial_cash,
-        "final_equity": summary.get("final_equity"),
-        "total_return": summary.get("total_return"),
-        "annual_return": summary.get("annual_return"),
-        "max_drawdown": summary.get("max_drawdown"),
-        "sharpe": summary.get("sharpe"),
-        "win_rate": summary.get("win_rate"),
-        "n_trades": summary.get("n_trades"),
-    })
 
     log.info(f"时光机完成：{run_id} → 总收益 {summary['total_return']*100:+.2f}% · 用时 {summary['elapsed_sec']}s")
 
@@ -1163,53 +1127,15 @@ def _summarize(snaps: pd.DataFrame, initial_cash: float, final_pool: dict,
 # ──────────────────────────────────── 列出历史 ────────────────────────────────────
 
 def list_runs() -> list[dict]:
-    """列出已保存的时光机运行结果。"""
-    out = []
-    if not TM_DIR.exists():
-        return out
-    for d in sorted(TM_DIR.iterdir(), reverse=True):
-        if not d.is_dir():
-            continue
-        sj = d / "summary.json"
-        if not sj.exists():
-            continue
-        try:
-            summ = json.loads(sj.read_text(encoding="utf-8"))
-            out.append({"run_id": d.name, "run_dir": str(d), **summ})
-        except Exception:
-            continue
-    return out
+    """历史结果不再扫描 summary.json；桌面端从 SQLite 查询。"""
+    return []
 
 
 def list_ledger() -> list[dict]:
-    """读取评估台账 index.jsonl（每次回测追写一行），最新优先。
-
-    返回每条记录含：run_id / ts / start / end / mode / strategies / 收益指标。
-    """
-    if not LEDGER_PATH.exists():
-        return []
-    rows: list[dict] = []
-    for line in LEDGER_PATH.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rows.append(json.loads(line))
-        except Exception:
-            continue
-    rows.reverse()
-    return rows
+    """历史台账不再写 index.jsonl；桌面端从 SQLite 查询。"""
+    return []
 
 
 def load_run(run_id: str) -> dict | None:
-    """加载某次运行结果。"""
-    d = TM_DIR / run_id
-    if not d.is_dir():
-        return None
-    summ = json.loads((d / "summary.json").read_text(encoding="utf-8"))
-    snaps_path = d / "snapshots.parquet"
-    snaps = pd.read_parquet(snaps_path) if snaps_path.exists() else pd.DataFrame()
-    tr_path = d / "trades.parquet"
-    trades = pd.read_parquet(tr_path) if tr_path.exists() else pd.DataFrame()
-    return {"run_id": run_id, "run_dir": str(d),
-            "snapshots": snaps, "trades": trades, "summary": summ}
+    """不再从结果目录加载 summary.json；桌面端从 SQLite 查询。"""
+    return None

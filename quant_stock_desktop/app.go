@@ -644,23 +644,6 @@ func readStrategyEvaluationSummaryFromDB(db *sql.DB, runID string) string {
 	return string(summary)
 }
 
-func readStrategyEvaluationSummaryFromFile(resultPath string) string {
-	data, err := os.ReadFile(filepath.Join(resultPath, "strategy_evaluation.json"))
-	if err != nil {
-		return ""
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return ""
-	}
-	enrichStrategyEvaluationSummary(payload)
-	summary, err := json.Marshal(payload)
-	if err != nil {
-		return ""
-	}
-	return string(summary)
-}
-
 func readStrategyEvaluationRowSummaryFromDB(db *sql.DB, runID string, strategyName string) string {
 	row := db.QueryRow(`SELECT payload_json FROM strategy_evaluation WHERE run_id = ? AND strategy = ?`, runID, strategyName)
 	var payloadJSON string
@@ -1045,20 +1028,21 @@ func (app *App) initializeStrategyEvaluation(parent task.Task) error {
 	parent.Progress = 0
 	parent.ResultPath = filepath.Join(app.settings.DataPath, "backtest_results", runID)
 	parent.SummaryJSON = mustJSON(map[string]any{
-		"start":          startDate,
-		"end":            endDate,
-		"benchmark":      stringParam(params, "benchmark", "000905.SH"),
-		"baseline":       stringParam(params, "baseline", "small_cap_quality"),
-		"strategy_count": len(strategyNames),
-		"planned_count":  len(strategyNames),
-		"success_count":  0,
-		"empty_count":    0,
-		"failed_count":   0,
-		"admit_count":    0,
-		"limited_count":  0,
-		"watch_count":    0,
-		"reject_count":   0,
-		"rows":           []any{},
+		"start":                 startDate,
+		"end":                   endDate,
+		"benchmark":             stringParam(params, "benchmark", "000905.SH"),
+		"baseline":              stringParam(params, "baseline", "small_cap_quality"),
+		"strategy_version_mode": stringParam(params, "strategy_version_mode", "latest"),
+		"strategy_count":        len(strategyNames),
+		"planned_count":         len(strategyNames),
+		"success_count":         0,
+		"empty_count":           0,
+		"failed_count":          0,
+		"admit_count":           0,
+		"limited_count":         0,
+		"watch_count":           0,
+		"reject_count":          0,
+		"rows":                  []any{},
 	})
 	parent.UpdatedAt = now
 	if err := app.taskService.Repository().UpdateRuntime(parent); err != nil {
@@ -1069,13 +1053,14 @@ func (app *App) initializeStrategyEvaluation(parent task.Task) error {
 	}
 	for idx, strategyName := range strategyNames {
 		childParams := map[string]any{
-			"start_date": startDate,
-			"end_date":   endDate,
-			"strategies": strategyName,
-			"strategy":   strategyName,
-			"baseline":   stringParam(params, "baseline", "small_cap_quality"),
-			"benchmark":  stringParam(params, "benchmark", "000905.SH"),
-			"slippage":   numberParam(params, "slippage", 0.002),
+			"start_date":            startDate,
+			"end_date":              endDate,
+			"strategies":            strategyName,
+			"strategy":              strategyName,
+			"baseline":              stringParam(params, "baseline", "small_cap_quality"),
+			"benchmark":             stringParam(params, "benchmark", "000905.SH"),
+			"slippage":              numberParam(params, "slippage", 0.002),
+			"strategy_version_mode": stringParam(params, "strategy_version_mode", "latest"),
 		}
 		paramsData, err := json.Marshal(childParams)
 		if err != nil {
@@ -1171,19 +1156,20 @@ func (app *App) initializePortfolioEvaluation(parent task.Task) error {
 	parent.Total = len(candidates)
 	parent.Progress = 0
 	parent.SummaryJSON = mustJSON(map[string]any{
-		"start":              startDate,
-		"end":                endDate,
-		"objective":          objective,
-		"benchmark":          benchmark,
-		"strategy_count":     len(strategyNames),
-		"candidate_count":    len(candidates),
-		"planned_count":      len(candidates),
-		"completed_count":    0,
-		"failed_count":       0,
-		"top_n":              topN,
-		"admission_used":     admissionFiltered,
-		"strategy_overrides": strategyOverrides,
-		"rows":               []any{},
+		"start":                 startDate,
+		"end":                   endDate,
+		"objective":             objective,
+		"benchmark":             benchmark,
+		"strategy_count":        len(strategyNames),
+		"candidate_count":       len(candidates),
+		"planned_count":         len(candidates),
+		"completed_count":       0,
+		"failed_count":          0,
+		"top_n":                 topN,
+		"admission_used":        admissionFiltered,
+		"strategy_overrides":    strategyOverrides,
+		"strategy_version_mode": stringParam(params, "strategy_version_mode", "latest"),
+		"rows":                  []any{},
 	})
 	parent.UpdatedAt = now
 	if err := app.taskService.Repository().UpdateRuntime(parent); err != nil {
@@ -1198,21 +1184,22 @@ func (app *App) initializePortfolioEvaluation(parent task.Task) error {
 
 	for idx, candidate := range candidates {
 		childParams := map[string]any{
-			"start_date":         startDate,
-			"end_date":           endDate,
-			"candidate_id":       candidate.ID,
-			"candidate_name":     candidate.Name,
-			"weights":            candidate.Weights,
-			"entry":              map[string]any{"type": "strategy_weight_mix", "weights": candidate.Weights},
-			"exit_architecture":  candidate.ExitArchitecture,
-			"position_rule":      candidate.PositionRule,
-			"rebalance_freq":     candidate.RebalanceFreq,
-			"risk_rule":          candidate.RiskRule,
-			"strategy_overrides": candidate.StrategyOverrides,
-			"scheme":             candidate.toSchemePayload(),
-			"objective":          objective,
-			"benchmark":          benchmark,
-			"slippage":           numberParam(params, "slippage", 0.002),
+			"start_date":            startDate,
+			"end_date":              endDate,
+			"candidate_id":          candidate.ID,
+			"candidate_name":        candidate.Name,
+			"weights":               candidate.Weights,
+			"entry":                 map[string]any{"type": "strategy_weight_mix", "weights": candidate.Weights},
+			"exit_architecture":     candidate.ExitArchitecture,
+			"position_rule":         candidate.PositionRule,
+			"rebalance_freq":        candidate.RebalanceFreq,
+			"risk_rule":             candidate.RiskRule,
+			"strategy_overrides":    candidate.StrategyOverrides,
+			"strategy_version_mode": stringParam(params, "strategy_version_mode", "latest"),
+			"scheme":                candidate.toSchemePayload(),
+			"objective":             objective,
+			"benchmark":             benchmark,
+			"slippage":              numberParam(params, "slippage", 0.002),
 		}
 		paramsData, err := json.Marshal(childParams)
 		if err != nil {
@@ -2075,17 +2062,18 @@ func (app *App) buildQuantPortfolioRecommendation(parent task.Task, contextPaylo
 		best = scored[0].Row
 	}
 	nextParams := map[string]any{
-		"start_date":         params["start_date"],
-		"end_date":           params["end_date"],
-		"strategies":         selectedStrategies,
-		"objective":          stringParam(params, "objective", "平衡"),
-		"max_candidates":     0,
-		"top_n":              params["top_n"],
-		"benchmark":          params["benchmark"],
-		"slippage":           params["slippage"],
-		"strategy_overrides": overrides,
-		"optimizer":          map[string]any{"type": "quant_robust_rules_v1", "llm_role": "research_assistant_only"},
-		"validation":         []string{"全量候选回测", "样本外滚动验证", "参数邻域稳定性检查", "交易成本和滑点压力测试"},
+		"start_date":            params["start_date"],
+		"end_date":              params["end_date"],
+		"strategies":            selectedStrategies,
+		"objective":             stringParam(params, "objective", "平衡"),
+		"max_candidates":        0,
+		"top_n":                 params["top_n"],
+		"benchmark":             params["benchmark"],
+		"slippage":              params["slippage"],
+		"strategy_overrides":    overrides,
+		"strategy_version_mode": "latest",
+		"optimizer":             map[string]any{"type": "quant_robust_rules_v1", "llm_role": "research_assistant_only"},
+		"validation":            []string{"全量候选回测", "样本外滚动验证", "参数邻域稳定性检查", "交易成本和滑点压力测试"},
 	}
 	nextConfig := map[string]any{
 		"name":      parent.Name + " - 量化优化下一轮",
@@ -2499,15 +2487,16 @@ func normalizeNextEvalConfig(parent task.Task, config map[string]any) map[string
 		}
 	}
 	defaults := map[string]any{
-		"start_date":         params["start_date"],
-		"end_date":           params["end_date"],
-		"strategies":         params["strategies"],
-		"objective":          params["objective"],
-		"max_candidates":     params["max_candidates"],
-		"top_n":              params["top_n"],
-		"benchmark":          params["benchmark"],
-		"slippage":           params["slippage"],
-		"strategy_overrides": params["strategy_overrides"],
+		"start_date":            params["start_date"],
+		"end_date":              params["end_date"],
+		"strategies":            params["strategies"],
+		"objective":             params["objective"],
+		"max_candidates":        params["max_candidates"],
+		"top_n":                 params["top_n"],
+		"benchmark":             params["benchmark"],
+		"slippage":              params["slippage"],
+		"strategy_overrides":    params["strategy_overrides"],
+		"strategy_version_mode": params["strategy_version_mode"],
 	}
 	for key, value := range defaults {
 		if nextParams[key] == nil || fmt.Sprint(nextParams[key]) == "" {
@@ -2528,6 +2517,9 @@ func normalizeNextEvalConfig(parent task.Task, config map[string]any) map[string
 	}
 	if nextParams["slippage"] == nil {
 		nextParams["slippage"] = 0.003
+	}
+	if nextParams["strategy_version_mode"] == nil || fmt.Sprint(nextParams["strategy_version_mode"]) == "" {
+		nextParams["strategy_version_mode"] = "latest"
 	}
 	if optimizer, ok := config["optimizer"]; ok && nextParams["optimizer"] == nil {
 		nextParams["optimizer"] = optimizer
@@ -2969,6 +2961,7 @@ func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, er
 		"--strategies", strategyName,
 		"--baseline", stringParam(params, "baseline", "small_cap_quality"),
 		"--benchmark", stringParam(params, "benchmark", "000905.SH"),
+		"--strategy-version-mode", stringParam(params, "strategy_version_mode", "latest"),
 		"--save", runID,
 		"--append-save",
 		"--db-path", filepath.Join(app.settings.DataPath, "meta.db"),
@@ -3261,6 +3254,7 @@ func (app *App) startPortfolioCandidateTaskSync(t task.Task) (task.Task, error) 
 		"--scheme-json", string(schemeJSON),
 		"--exit-json", string(exitJSON),
 		"--strategy-overrides-json", string(strategyOverridesJSON),
+		"--strategy-version-mode", stringParam(params, "strategy_version_mode", "latest"),
 		"--rebalance-freq", strconv.Itoa(int(numberParam(params, "rebalance_freq", 5))),
 		"--run-id", runID,
 		"--benchmark", stringParam(params, "benchmark", "000905.SH"),

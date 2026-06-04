@@ -38,6 +38,7 @@ func (service *Service) Load(defaults Settings) (Settings, error) {
 	if service.db != nil {
 		settings, err := service.loadFromDB(defaults)
 		if err == nil {
+			_ = service.ensureStrategyVersions(settings, "settings_load", "初始化策略版本")
 			return settings, nil
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -79,9 +80,85 @@ func (service *Service) saveToDB(settings Settings) error {
 	if err != nil {
 		return err
 	}
-	_, err = service.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+	tx, err := service.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	_, err = tx.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
 		"settings", string(data), time.Now().Format("2006-01-02T15:04:05"))
+	if err != nil {
+		return err
+	}
+	if err = service.saveStrategyVersions(tx, settings, "settings_save", "用户保存策略配置"); err != nil {
+		return err
+	}
+	err = tx.Commit()
+	return err
+}
+
+func (service *Service) ensureStrategyVersions(settings Settings, source string, note string) error {
+	if service.db == nil {
+		return nil
+	}
+	tx, err := service.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err = service.saveStrategyVersions(tx, normalize(settings), source, note); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+func (service *Service) saveStrategyVersions(tx *sql.Tx, settings Settings, source string, note string) error {
+	now := time.Now().Format("2006-01-02T15:04:05")
+	for name, strategy := range settings.Strategies {
+		configJSON, err := json.Marshal(strategy)
+		if err != nil {
+			return err
+		}
+		var latestVersion int
+		var latestConfig string
+		row := tx.QueryRow(`SELECT version, config_json FROM strategy_settings_versions WHERE strategy = ? ORDER BY version DESC LIMIT 1`, name)
+		scanErr := row.Scan(&latestVersion, &latestConfig)
+		switch {
+		case scanErr == nil && latestConfig == string(configJSON):
+			if err := activateStrategyVersion(tx, name, latestVersion, now); err != nil {
+				return err
+			}
+			continue
+		case scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows):
+			return scanErr
+		}
+		version := latestVersion + 1
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			version = 1
+		}
+		if _, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 0 WHERE strategy = ?`, name); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO strategy_settings_versions(
+			strategy, version, label, config_json, is_active, source, note, created_at, activated_at
+		) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+			name, version, strategy.Label, string(configJSON), source, note, now, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func activateStrategyVersion(tx *sql.Tx, strategy string, version int, activatedAt string) error {
+	if _, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 0 WHERE strategy = ?`, strategy); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 1, activated_at = ? WHERE strategy = ? AND version = ?`, activatedAt, strategy, version)
 	return err
 }
 
