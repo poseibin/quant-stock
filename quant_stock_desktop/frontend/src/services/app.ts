@@ -63,6 +63,7 @@ export interface Settings {
   data_path: string
   default_initial_cash: number
   default_rebalance_freq: number
+  task_concurrency: number
   tushare_token: string
   deepseek_token: string
   deepseek_model: string
@@ -566,6 +567,7 @@ export async function getSettings(): Promise<SettingsResponse> {
       data_path: '/Users/kitty/Library/Application Support/QuantStockDesktop/data_store',
       default_initial_cash: 500000,
       default_rebalance_freq: 5,
+      task_concurrency: 2,
       tushare_token: '',
       deepseek_token: '',
       deepseek_model: 'deepseek-v4-pro',

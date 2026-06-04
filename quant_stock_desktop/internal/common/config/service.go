@@ -27,6 +27,7 @@ func DefaultSettings(homeDir string) Settings {
 		DataPath:             defaultDataPathForHome(homeDir),
 		DefaultInitialCash:   500000,
 		DefaultRebalanceFreq: 5,
+		TaskConcurrency:      2,
 		DeepSeekModel:        "deepseek-v4-pro",
 		Strategies:           defaultStrategies(),
 		PortfolioRisk:        defaultPortfolioRisk(),
@@ -217,6 +218,9 @@ func (service *Service) Validate(settings Settings) []ValidationIssue {
 	if settings.DefaultRebalanceFreq <= 0 {
 		issues = append(issues, ValidationIssue{Field: "default_rebalance_freq", Message: "调仓频率必须大于 0"})
 	}
+	if settings.TaskConcurrency < 1 || settings.TaskConcurrency > 8 {
+		issues = append(issues, ValidationIssue{Field: "task_concurrency", Message: "任务并发数必须在 1 到 8 之间"})
+	}
 	totalWeight := 0.0
 	for name, strategy := range settings.Strategies {
 		if strategy.Enabled {
@@ -241,6 +245,9 @@ func normalize(settings Settings) Settings {
 	}
 	if settings.DefaultRebalanceFreq == 0 {
 		settings.DefaultRebalanceFreq = 5
+	}
+	if settings.TaskConcurrency == 0 {
+		settings.TaskConcurrency = 2
 	}
 	if settings.DeepSeekModel == "" {
 		settings.DeepSeekModel = "deepseek-v4-pro"

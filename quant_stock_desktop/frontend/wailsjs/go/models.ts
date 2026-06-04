@@ -30,6 +30,7 @@ export namespace config {
 	    data_path: string;
 	    default_initial_cash: number;
 	    default_rebalance_freq: number;
+	    task_concurrency: number;
 	    tushare_token: string;
 	    deepseek_token: string;
 	    deepseek_model: string;
@@ -47,6 +48,7 @@ export namespace config {
 	        this.data_path = source["data_path"];
 	        this.default_initial_cash = source["default_initial_cash"];
 	        this.default_rebalance_freq = source["default_rebalance_freq"];
+	        this.task_concurrency = source["task_concurrency"];
 	        this.tushare_token = source["tushare_token"];
 	        this.deepseek_token = source["deepseek_token"];
 	        this.deepseek_model = source["deepseek_model"];

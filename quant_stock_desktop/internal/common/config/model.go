@@ -4,6 +4,7 @@ type Settings struct {
 	DataPath             string                      `json:"data_path"`
 	DefaultInitialCash   float64                     `json:"default_initial_cash"`
 	DefaultRebalanceFreq int                         `json:"default_rebalance_freq"`
+	TaskConcurrency      int                         `json:"task_concurrency"`
 	TushareToken         string                      `json:"tushare_token"`
 	DeepSeekToken        string                      `json:"deepseek_token"`
 	DeepSeekModel        string                      `json:"deepseek_model"`

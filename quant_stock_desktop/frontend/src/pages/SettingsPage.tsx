@@ -185,6 +185,9 @@ export function SettingsPage() {
           <Field label="默认调仓频率" issue={findIssue(issues, 'default_rebalance_freq')} className="runtimeField runtimeFieldCompact">
             <input type="number" value={settings.default_rebalance_freq} onChange={(event) => update('default_rebalance_freq', Number(event.target.value))} />
           </Field>
+          <Field label="任务并发数" issue={findIssue(issues, 'task_concurrency')} className="runtimeField runtimeFieldCompact">
+            <input type="number" min={1} max={8} value={settings.task_concurrency || 2} onChange={(event) => update('task_concurrency', Number(event.target.value))} />
+          </Field>
         </div>
       </div>
 

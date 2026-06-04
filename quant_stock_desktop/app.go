@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -4769,26 +4770,12 @@ func (app *App) runStrategyEvaluationChildren(parent task.Task) {
 			app.finishStrategyEvaluationParent(parent, task.StatusFailed, err.Error(), children)
 			return
 		}
-		next := firstRunnablePortfolioChild(children)
-		if next == nil {
+		next := runnablePortfolioChildren(children, app.taskConcurrency())
+		if len(next) == 0 {
 			app.finishStrategyEvaluationParent(parent, portfolioParentStatus(children), "", children)
 			return
 		}
-		child, err := app.startStrategyEvaluationChildTaskSync(*next)
-		if err != nil {
-			if child.ID == "" {
-				child = *next
-			}
-			if child.Status != task.StatusFailed && child.Status != task.StatusCancelled {
-				child.Status = task.StatusFailed
-				child.ErrorMessage = err.Error()
-				child.Progress = 1
-				child.WorkerPID = 0
-				child.FinishedAt = time.Now()
-				child.UpdatedAt = child.FinishedAt
-				_ = app.taskService.Repository().UpdateRuntime(child)
-			}
-		}
+		app.runChildTaskBatch(next, app.startStrategyEvaluationChildTaskSync)
 		children, _ = app.taskService.Repository().ListChildren(parent.ID)
 		parent.Progress = portfolioParentProgress(children)
 		parent.SummaryJSON = app.strategyEvaluationSummaryForParent(parent, children)
@@ -5102,26 +5089,12 @@ func (app *App) runPortfolioOptimizationChildren(parent task.Task) {
 			app.finishPortfolioParent(parent, task.StatusFailed, err.Error(), children)
 			return
 		}
-		next := firstRunnablePortfolioChild(children)
-		if next == nil {
+		next := runnablePortfolioChildren(children, app.taskConcurrency())
+		if len(next) == 0 {
 			app.finishPortfolioParent(parent, portfolioParentStatus(children), "", children)
 			return
 		}
-		child, err := app.startPortfolioCandidateTaskSync(*next)
-		if err != nil {
-			if child.ID == "" {
-				child = *next
-			}
-			if child.Status != task.StatusFailed && child.Status != task.StatusCancelled {
-				child.Status = task.StatusFailed
-				child.ErrorMessage = err.Error()
-				child.Progress = 1
-				child.WorkerPID = 0
-				child.FinishedAt = time.Now()
-				child.UpdatedAt = child.FinishedAt
-				_ = app.taskService.Repository().UpdateRuntime(child)
-			}
-		}
+		app.runChildTaskBatch(next, app.startPortfolioCandidateTaskSync)
 		children, _ = app.taskService.Repository().ListChildren(parent.ID)
 		parent.Progress = portfolioParentProgress(children)
 		parent.SummaryJSON = app.portfolioSummaryForParent(parent, children)
@@ -5303,7 +5276,11 @@ func (app *App) startPortfolioCandidateTaskSync(t task.Task) (task.Task, error) 
 	return t, nil
 }
 
-func firstRunnablePortfolioChild(children []task.Task) *task.Task {
+func runnablePortfolioChildren(children []task.Task, limit int) []task.Task {
+	if limit <= 0 {
+		limit = 1
+	}
+	out := make([]task.Task, 0, limit)
 	for idx := range children {
 		child := children[idx]
 		if child.Status == task.StatusSuccess || child.Status == task.StatusRunning || child.Status == task.StatusCancelled || child.Status == task.StatusInterrupted {
@@ -5312,9 +5289,56 @@ func firstRunnablePortfolioChild(children []task.Task) *task.Task {
 		if child.MaxAttempts > 0 && child.Attempt >= child.MaxAttempts && child.Status == task.StatusFailed {
 			continue
 		}
-		return &child
+		out = append(out, child)
+		if len(out) >= limit {
+			break
+		}
 	}
-	return nil
+	return out
+}
+
+func (app *App) runChildTaskBatch(children []task.Task, runner func(task.Task) (task.Task, error)) {
+	var wg sync.WaitGroup
+	for _, child := range children {
+		child := child
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			updated, err := runner(child)
+			if err != nil {
+				if updated.ID == "" {
+					updated = child
+				}
+				app.markChildTaskFailed(updated, err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func (app *App) markChildTaskFailed(child task.Task, err error) {
+	if err == nil || child.Status == task.StatusFailed || child.Status == task.StatusCancelled {
+		return
+	}
+	now := time.Now()
+	child.Status = task.StatusFailed
+	child.ErrorMessage = err.Error()
+	child.Progress = 1
+	child.WorkerPID = 0
+	child.FinishedAt = now
+	child.UpdatedAt = now
+	_ = app.taskService.Repository().UpdateRuntime(child)
+}
+
+func (app *App) taskConcurrency() int {
+	value := app.settings.TaskConcurrency
+	if value < 1 {
+		return 1
+	}
+	if value > 8 {
+		return 8
+	}
+	return value
 }
 
 func portfolioParentProgress(children []task.Task) float64 {
