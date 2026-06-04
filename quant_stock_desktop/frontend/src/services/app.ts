@@ -34,8 +34,10 @@ declare global {
           GetStockValuation: (query: ValuationQuery) => Promise<StockValuation>
           ListLimitBreakoutCandidates: (query: BreakoutQuery) => Promise<LimitBreakoutCandidate[]>
           RefreshLimitBreakoutCandidates: (query: BreakoutQuery) => Promise<LimitBreakoutCandidate[]>
+          GetLimitBreakoutRunStatus: () => Promise<RunStatus>
           ListLimitUpMomentumCandidates: (query: LimitUpMomentumQuery) => Promise<LimitUpMomentumCandidate[]>
           RefreshLimitUpMomentumCandidates: (query: LimitUpMomentumQuery) => Promise<LimitUpMomentumCandidate[]>
+          GetLimitUpMomentumRunStatus: () => Promise<RunStatus>
           GetPositionSummary: () => Promise<PositionSummary>
           GetPositionHistory: () => Promise<PositionHistoryPoint[]>
           GetPositionHoldings: () => Promise<PositionItem[]>
@@ -1060,6 +1062,20 @@ export async function getSignalRunStatus(): Promise<RunStatus> {
     return window.go.main.App.GetSignalRunStatus()
   }
   return { task: 'daily_signal', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+}
+
+export async function getLimitBreakoutRunStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetLimitBreakoutRunStatus) {
+    return window.go.main.App.GetLimitBreakoutRunStatus()
+  }
+  return { task: 'limit_breakout', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+}
+
+export async function getLimitUpMomentumRunStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetLimitUpMomentumRunStatus) {
+    return window.go.main.App.GetLimitUpMomentumRunStatus()
+  }
+  return { task: 'limit_up_momentum', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
 }
 
 export async function previewDataset(query: DatasetPreviewQuery): Promise<DatasetPreview> {

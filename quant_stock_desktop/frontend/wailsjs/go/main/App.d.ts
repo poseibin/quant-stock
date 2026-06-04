@@ -30,6 +30,10 @@ export function GetAppInfo():Promise<main.AppInfo>;
 
 export function GetDataUpdateStatus():Promise<datafetch.RunStatus>;
 
+export function GetLimitBreakoutRunStatus():Promise<position.RunStatus>;
+
+export function GetLimitUpMomentumRunStatus():Promise<position.RunStatus>;
+
 export function GetPositionHistory():Promise<Array<position.HistoryPoint>>;
 
 export function GetPositionHoldings():Promise<Array<position.Position>>;

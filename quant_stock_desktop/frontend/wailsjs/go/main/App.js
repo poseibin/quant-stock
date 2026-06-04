@@ -46,6 +46,14 @@ export function GetDataUpdateStatus() {
   return window['go']['main']['App']['GetDataUpdateStatus']();
 }
 
+export function GetLimitBreakoutRunStatus() {
+  return window['go']['main']['App']['GetLimitBreakoutRunStatus']();
+}
+
+export function GetLimitUpMomentumRunStatus() {
+  return window['go']['main']['App']['GetLimitUpMomentumRunStatus']();
+}
+
 export function GetPositionHistory() {
   return window['go']['main']['App']['GetPositionHistory']();
 }

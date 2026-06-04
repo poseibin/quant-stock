@@ -646,6 +646,20 @@ func (app *App) RefreshLimitUpMomentumCandidates(query market.LimitUpMomentumQue
 	return app.marketService.ListLimitUpMomentumCandidates(dataPath, query)
 }
 
+func (app *App) GetLimitBreakoutRunStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("limit_breakout")
+}
+
+func (app *App) GetLimitUpMomentumRunStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("limit_up_momentum")
+}
+
 func (app *App) GetPositionSummary() (position.Summary, error) {
 	if err := app.ensurePositionService(); err != nil {
 		return position.Summary{}, err

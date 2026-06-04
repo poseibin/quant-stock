@@ -4,12 +4,23 @@ import argparse
 import json
 import math
 import sqlite3
+import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import duckdb
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from common.infra.db import write_transaction
+from common.infra import status as run_status
+
+
+TASK_NAME = "limit_breakout"
 
 
 @dataclass
@@ -268,22 +279,29 @@ def read_inputs(data_path: Path, lookback: int, recent_days: int) -> tuple[pd.Da
     return stocks, daily, financial
 
 
-def scan(data_path: Path, lookback: int, recent_days: int, limit: int) -> list[Candidate]:
+def scan(data_path: Path, lookback: int, recent_days: int, limit: int, on_progress=None) -> list[Candidate]:
     stocks, daily, financial = read_inputs(data_path, lookback, recent_days)
     financial_map = {row.ts_code: row for row in financial.itertuples(index=False)}
     daily_groups = {code: group for code, group in daily.groupby("ts_code", sort=False)}
     candidates: list[Candidate] = []
-    for stock_tuple in stocks.itertuples(index=False):
+    total = len(stocks)
+    if on_progress:
+        on_progress(0, total)
+    for idx, stock_tuple in enumerate(stocks.itertuples(index=False), start=1):
         stock = pd.Series(stock_tuple._asdict())
         code = str(stock.get("ts_code") or "")
         bars = daily_groups.get(code)
         if bars is None:
+            if on_progress and (idx == total or idx % 200 == 0):
+                on_progress(idx, total)
             continue
         fin_tuple = financial_map.get(code)
         fin = pd.Series(fin_tuple._asdict()) if fin_tuple is not None else None
         candidate = score_one(stock, bars, fin, lookback, recent_days)
         if candidate is not None:
             candidates.append(candidate)
+        if on_progress and (idx == 1 or idx == total or idx % 200 == 0):
+            on_progress(idx, total)
     candidates.sort(key=lambda item: item.score, reverse=True)
     return candidates[:limit]
 
@@ -314,12 +332,9 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
 
 def write_cache(db_path: Path, cache_key: str, candidates: list[Candidate]) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    ensure_tables(conn)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with conn:
+    with write_transaction(db_path) as conn:
+        ensure_tables(conn)
         conn.execute("DELETE FROM limit_breakout_cache WHERE cache_key = ?", (cache_key,))
         conn.execute(
             """INSERT INTO limit_breakout_cache_meta(cache_key,item_count,generated_at,updated_at)
@@ -338,7 +353,6 @@ def write_cache(db_path: Path, cache_key: str, candidates: list[Candidate]) -> N
             ) VALUES(?,?,?,?,?,?,?,?)""",
             rows,
         )
-    conn.close()
 
 
 def main() -> int:
@@ -350,9 +364,22 @@ def main() -> int:
     parser.add_argument("--lookback", type=int, default=1250)
     parser.add_argument("--recent-days", type=int, default=20)
     args = parser.parse_args()
-    candidates = scan(Path(args.data_path), args.lookback, args.recent_days, args.limit)
-    write_cache(Path(args.db_path), args.cache_key, candidates)
-    print(json.dumps({"count": len(candidates), "cache_key": args.cache_key}, ensure_ascii=False), flush=True)
+    try:
+        run_status.begin(TASK_NAME)
+        run_status.progress(TASK_NAME, 1, 100, "load", "读取行情与财务数据")
+        def report_scan(idx: int, total: int) -> None:
+            pct_idx = 2 + int((idx / total) * 94) if total > 0 else 2
+            run_status.progress(TASK_NAME, min(pct_idx, 96), 100, "scan", f"扫描横盘形态 {idx}/{total}")
+
+        candidates = scan(Path(args.data_path), args.lookback, args.recent_days, args.limit, report_scan)
+        run_status.progress(TASK_NAME, 98, 100, "persist", f"写入 {len(candidates)} 个预警候选")
+        write_cache(Path(args.db_path), args.cache_key, candidates)
+        run_status.progress(TASK_NAME, 100, 100, "done", "刷新页面缓存")
+        run_status.done(TASK_NAME, f"已生成 {len(candidates)} 个横盘突发候选")
+        print(json.dumps({"count": len(candidates), "cache_key": args.cache_key}, ensure_ascii=False), flush=True)
+    except Exception as exc:
+        run_status.error(TASK_NAME, str(exc))
+        raise
     return 0
 
 

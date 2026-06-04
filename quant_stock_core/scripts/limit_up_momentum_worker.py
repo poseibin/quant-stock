@@ -4,12 +4,23 @@ import argparse
 import json
 import math
 import sqlite3
+import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import duckdb
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from common.infra.db import write_transaction
+from common.infra import status as run_status
+
+
+TASK_NAME = "limit_up_momentum"
 
 
 @dataclass
@@ -330,11 +341,19 @@ def build_candidate(row: pd.Series, bars: pd.DataFrame) -> MomentumCandidate:
     )
 
 
-def scan(data_path: Path, lookback: int, history_days: int, limit: int) -> list[MomentumCandidate]:
+def scan(data_path: Path, lookback: int, history_days: int, limit: int, on_progress=None) -> list[MomentumCandidate]:
     df = latest_daily(data_path, history_days)
     if df.empty:
         return []
-    featured = pd.concat([add_features(group) for _, group in df.groupby("ts_code", sort=False)], ignore_index=True)
+    stock_groups = list(df.groupby("ts_code", sort=False))
+    featured_parts = []
+    if on_progress:
+        on_progress(0, len(stock_groups), "feature")
+    for idx, (_, group) in enumerate(stock_groups, start=1):
+        featured_parts.append(add_features(group))
+        if on_progress and (idx == 1 or idx == len(stock_groups) or idx % 200 == 0):
+            on_progress(idx, len(stock_groups), "feature")
+    featured = pd.concat(featured_parts, ignore_index=True)
     latest_dates = sorted(featured["trade_date"].dropna().unique())
     recent_dates = set(latest_dates[-lookback:])
     events = featured[(featured["trade_date"].isin(recent_dates)) & (featured["is_limit_up"])].copy()
@@ -342,11 +361,15 @@ def scan(data_path: Path, lookback: int, history_days: int, limit: int) -> list[
         return []
     groups = {code: group for code, group in featured.groupby("ts_code", sort=False)}
     items: list[MomentumCandidate] = []
-    for _, row in events.iterrows():
+    if on_progress:
+        on_progress(0, len(events), "event")
+    for idx, (_, row) in enumerate(events.iterrows(), start=1):
         code = str(row.get("ts_code") or "")
         group = groups.get(code, pd.DataFrame())
         bars = group[group["trade_date"] <= row["trade_date"]] if not group.empty else group
         items.append(build_candidate(row, bars))
+        if on_progress and (idx == 1 or idx == len(events) or idx % 100 == 0):
+            on_progress(idx, len(events), "event")
     items = [item for item in items if item.recommendation != "不追" or item.score >= 45]
     items.sort(key=lambda item: (item.trade_date, item.score), reverse=True)
     deduped: list[MomentumCandidate] = []
@@ -379,12 +402,9 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
 
 
 def write_cache(db_path: Path, cache_key: str, items: list[MomentumCandidate]) -> None:
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    ensure_tables(conn)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with conn:
+    with write_transaction(db_path) as conn:
+        ensure_tables(conn)
         conn.execute("DELETE FROM limit_up_momentum_cache WHERE cache_key = ?", (cache_key,))
         conn.execute(
             """INSERT INTO limit_up_momentum_cache_meta(cache_key,item_count,generated_at,updated_at)
@@ -403,7 +423,6 @@ def write_cache(db_path: Path, cache_key: str, items: list[MomentumCandidate]) -
             ) VALUES(?,?,?,?,?,?,?,?)""",
             rows,
         )
-    conn.close()
 
 
 def main() -> int:
@@ -415,9 +434,28 @@ def main() -> int:
     parser.add_argument("--lookback", type=int, default=20)
     parser.add_argument("--history-days", type=int, default=760)
     args = parser.parse_args()
-    items = scan(Path(args.data_path), args.lookback, args.history_days, args.limit)
-    write_cache(Path(args.db_path), args.cache_key, items)
-    print(json.dumps({"count": len(items), "cache_key": args.cache_key}, ensure_ascii=False), flush=True)
+    try:
+        run_status.begin(TASK_NAME)
+        run_status.progress(TASK_NAME, 1, 100, "load", "读取涨停与基础行情")
+        def report_scan(idx: int, total: int, phase: str) -> None:
+            stage = "feature" if phase == "feature" else "event"
+            name = "计算股票特征" if phase == "feature" else "构建涨停事件候选"
+            pct_idx = 2
+            if total > 0 and phase == "feature":
+                pct_idx = 2 + int((idx / total) * 54)
+            elif total > 0:
+                pct_idx = 56 + int((idx / total) * 40)
+            run_status.progress(TASK_NAME, min(pct_idx, 96), 100, stage, f"{name} {idx}/{total}")
+
+        items = scan(Path(args.data_path), args.lookback, args.history_days, args.limit, report_scan)
+        run_status.progress(TASK_NAME, 98, 100, "persist", f"写入 {len(items)} 个短线候选")
+        write_cache(Path(args.db_path), args.cache_key, items)
+        run_status.progress(TASK_NAME, 100, 100, "done", "刷新页面缓存")
+        run_status.done(TASK_NAME, f"已生成 {len(items)} 个涨停推荐候选")
+        print(json.dumps({"count": len(items), "cache_key": args.cache_key}, ensure_ascii=False), flush=True)
+    except Exception as exc:
+        run_status.error(TASK_NAME, str(exc))
+        raise
     return 0
 
 

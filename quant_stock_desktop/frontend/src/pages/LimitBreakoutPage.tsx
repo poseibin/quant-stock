@@ -5,6 +5,8 @@ import { CandlestickChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import {
+  getLimitBreakoutRunStatus,
+  getLimitUpMomentumRunStatus,
   listDailyBars,
   listLimitBreakoutCandidates,
   listLimitUpMomentumCandidates,
@@ -13,7 +15,8 @@ import {
   type BreakoutBar,
   type DailyBar,
   type LimitBreakoutCandidate,
-  type LimitUpMomentumCandidate
+  type LimitUpMomentumCandidate,
+  type RunStatus
 } from '../services/app'
 
 echarts.use([CanvasRenderer, CandlestickChart, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent])
@@ -35,6 +38,30 @@ function moneyYi(value: number) {
 
 function timeLabel() {
   return new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function runStatusPercent(status: RunStatus) {
+  if (status.total > 0) return Math.max(0, Math.min(100, (status.idx / status.total) * 100))
+  if (status.state === 'running') return 5
+  if (status.state === 'done') return 100
+  return 0
+}
+
+function RunStatusProgress({ status }: { status: RunStatus | null }) {
+  if (!status || (status.state !== 'running' && status.state !== 'error')) return null
+  const progress = runStatusPercent(status)
+  const label = status.name || status.stage || (status.state === 'error' ? '任务失败' : '任务运行中')
+  const detail = status.total > 0 ? `${status.idx}/${status.total}` : status.state
+  return (
+    <div className="signalProgress breakoutRefreshProgress">
+      <div className="signalProgressHeader">
+        <span>{label}</span>
+        <span>{Math.round(progress)}% · {detail}</span>
+      </div>
+      <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: `${progress}%` }} /></div>
+      {status.message && <div className={status.state === 'error' ? 'errorText' : 'cardHint'}>{status.message}</div>}
+    </div>
+  )
 }
 
 export function LimitBreakoutPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
@@ -70,14 +97,24 @@ function MomentumPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
   const [loading, setLoading] = useState(false)
   const [refreshInfo, setRefreshInfo] = useState('')
   const [error, setError] = useState('')
+  const [runStatus, setRunStatus] = useState<RunStatus | null>(null)
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([])
   const selected = items.find((item) => item.ts_code === selectedCode) || items[0] || null
   const topItems = items.slice(0, 3)
   const query = { limit: 50, lookback: 20, history_days: 760 }
 
+  const refreshRunStatus = async () => {
+    try {
+      setRunStatus(await getLimitUpMomentumRunStatus())
+    } catch (err) {
+      console.error('[limit-up-momentum] status failed', err)
+    }
+  }
+
   const load = async (refresh = false) => {
     setLoading(true)
     setError('')
+    if (refresh) await refreshRunStatus()
     try {
       const previousTop = items[0]?.ts_code || ''
       const next = refresh ? await refreshLimitUpMomentumCandidates(query) : await listLimitUpMomentumCandidates(query)
@@ -90,6 +127,7 @@ function MomentumPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
+      await refreshRunStatus()
       setLoading(false)
     }
   }
@@ -99,6 +137,12 @@ function MomentumPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
   useEffect(() => {
     load().catch((error) => console.error('[limit-up-momentum] load failed', error))
   }, [])
+
+  useEffect(() => {
+    refreshRunStatus()
+    const timer = window.setInterval(refreshRunStatus, loading || runStatus?.state === 'running' ? 1000 : 3000)
+    return () => window.clearInterval(timer)
+  }, [loading, runStatus?.state])
 
   const columns = useMemo<Column<LimitUpMomentumCandidate>[]>(() => [
     {
@@ -136,6 +180,7 @@ function MomentumPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
         </div>
         <button className="primaryButton" onClick={() => load(true)} disabled={loading}>{loading ? '计算中…' : '刷新推荐'}</button>
       </section>
+      <RunStatusProgress status={runStatus} />
 
       {topItems.length > 0 && (
         <section className="breakoutRecommendPanel">
@@ -237,12 +282,22 @@ function BreakoutPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
   const [loading, setLoading] = useState(false)
   const [refreshInfo, setRefreshInfo] = useState('')
   const [error, setError] = useState('')
+  const [runStatus, setRunStatus] = useState<RunStatus | null>(null)
   const selected = items.find((item) => item.ts_code === selectedCode) || items[0] || null
   const query = { limit: 40, lookback: 1250, recent_days: 20 }
+
+  const refreshRunStatus = async () => {
+    try {
+      setRunStatus(await getLimitBreakoutRunStatus())
+    } catch (err) {
+      console.error('[breakout] status failed', err)
+    }
+  }
 
   const load = async (refresh = false) => {
     setLoading(true)
     setError('')
+    if (refresh) await refreshRunStatus()
     try {
       const previousTop = items[0]?.ts_code || ''
       const next = refresh ? await refreshLimitBreakoutCandidates(query) : await listLimitBreakoutCandidates(query)
@@ -255,6 +310,7 @@ function BreakoutPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
+      await refreshRunStatus()
       setLoading(false)
     }
   }
@@ -262,6 +318,12 @@ function BreakoutPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
   useEffect(() => {
     load().catch((error) => console.error('[breakout] load failed', error))
   }, [])
+
+  useEffect(() => {
+    refreshRunStatus()
+    const timer = window.setInterval(refreshRunStatus, loading || runStatus?.state === 'running' ? 1000 : 3000)
+    return () => window.clearInterval(timer)
+  }, [loading, runStatus?.state])
 
   const columns = useMemo<Column<LimitBreakoutCandidate>[]>(() => [
     {
@@ -295,6 +357,7 @@ function BreakoutPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
         </div>
         <button className="primaryButton" onClick={() => load(true)} disabled={loading}>{loading ? '扫描中…' : '重新扫描'}</button>
       </section>
+      <RunStatusProgress status={runStatus} />
 
       <div className="breakoutLayout">
         <section className="tableCard breakoutListCard">
