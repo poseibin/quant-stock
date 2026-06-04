@@ -332,6 +332,42 @@ func (db *DB) Migrate() error {
 			updated_at TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_strategy_validation_reviews_subject ON strategy_validation_reviews(subject_type, subject_id);`,
+		`CREATE TABLE IF NOT EXISTS research_reports (
+			id TEXT PRIMARY KEY,
+			subject_type TEXT NOT NULL,
+			subject_id TEXT NOT NULL,
+			report_type TEXT NOT NULL,
+			title TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			content_md TEXT NOT NULL DEFAULT '',
+			payload_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_research_reports_subject ON research_reports(subject_type, subject_id);`,
+		`CREATE TABLE IF NOT EXISTS evaluation_data_snapshots (
+			id TEXT PRIMARY KEY,
+			subject_type TEXT NOT NULL,
+			subject_id TEXT NOT NULL,
+			snapshot_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_evaluation_data_snapshots_subject ON evaluation_data_snapshots(subject_type, subject_id);`,
+		`CREATE TABLE IF NOT EXISTS recommendation_hindsight (
+			id TEXT PRIMARY KEY,
+			recommendation_date TEXT NOT NULL,
+			horizon_days INTEGER NOT NULL DEFAULT 1,
+			next_date TEXT NOT NULL DEFAULT '',
+			n_holdings INTEGER NOT NULL DEFAULT 0,
+			n_eval INTEGER NOT NULL DEFAULT 0,
+			weighted_return REAL,
+			equal_weight_return REAL,
+			hit_rate REAL,
+			payload_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(recommendation_date, horizon_days)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_recommendation_hindsight_date ON recommendation_hindsight(recommendation_date);`,
 		`CREATE TABLE IF NOT EXISTS py_run_lock (
 			name TEXT PRIMARY KEY,
 			pid INTEGER NOT NULL,

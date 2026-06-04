@@ -1235,6 +1235,32 @@ h1 {
   gap: 3px;
 }
 
+.versionDiff {
+  grid-column: 1 / -1;
+  color: #9aa6bd;
+  font-size: 12px;
+}
+
+.versionDiff summary {
+  cursor: pointer;
+  width: fit-content;
+  color: #f6bd3a;
+}
+
+.versionDiff pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  color: #d8deed;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(6, 10, 18, 0.72);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .signalVersionPills {
   display: flex;
   flex-wrap: wrap;

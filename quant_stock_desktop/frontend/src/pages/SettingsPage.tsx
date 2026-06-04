@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { activateStrategyVersion, getSettings, listStrategyVersions, reviewStrategyVersion, saveSettings, type Settings, type StrategySettings, type StrategyVersion, type ValidationIssue } from '../services/app'
+import { activateStrategyVersion, getSettings, listStrategyVersions, reviewStrategyVersion, saveSettings, setStrategyVersionStatus, type Settings, type StrategySettings, type StrategyVersion, type ValidationIssue } from '../services/app'
 import { Field } from '../components/Field'
 
 const strategyOrder = ['market_regime_timing', 'multi_factor_composite', 'small_cap_quality', 'trend_pullback', 'dividend_quality', 'earnings_revision', 'industry_prosperity', 'low_crowding_reversal', 'event_enhanced', 'beijing_satellite']
@@ -137,6 +137,16 @@ export function SettingsPage() {
     }
   }
 
+  const markPaperVersion = async (name: string, version: number) => {
+    setVersionBusy(`${name}@${version}`)
+    try {
+      const rows = await setStrategyVersionStatus({ strategy: name, version, status: 'paper' })
+      setVersions((prev) => ({ ...prev, [name]: rows }))
+    } finally {
+      setVersionBusy('')
+    }
+  }
+
   const strategyNames = strategyOrder.filter((name) => settings.strategies?.[name])
 
   return (
@@ -227,7 +237,9 @@ export function SettingsPage() {
                   </button>
                   {openVersions[name] && (
                     <div className="versionList">
-                      {(versions[name] || []).map((item) => (
+                      {(versions[name] || []).map((item) => {
+                        const activeVersion = (versions[name] || []).find((row) => row.is_active)
+                        return (
                         <div className="versionRow" key={`${name}-${item.version}`}>
                           <div>
                             <b>v{item.version}</b>
@@ -240,10 +252,15 @@ export function SettingsPage() {
                           </div>
                           <div className="taskActions compactActions">
                             <button className="secondaryButton quietButton" disabled={versionBusy !== ''} onClick={() => reviewVersion(name, item.version)}>复核</button>
+                            <button className="secondaryButton quietButton" disabled={item.is_active || item.promotion_status === 'paper' || versionBusy !== ''} onClick={() => markPaperVersion(name, item.version)}>模拟</button>
                             <button className="secondaryButton startButton" disabled={item.is_active || versionBusy !== ''} onClick={() => activateVersion(name, item.version)}>设为生效</button>
                           </div>
+                          <details className="versionDiff">
+                            <summary>参数差异</summary>
+                            <pre>{diffVersionConfig(item, activeVersion)}</pre>
+                          </details>
                         </div>
-                      ))}
+                      )})}
                       {versionBusy === name && <div className="mutedText">加载版本中...</div>}
                       {(versions[name] || []).length === 0 && versionBusy !== name && <div className="mutedText">暂无版本记录，保存配置后生成</div>}
                     </div>
@@ -318,4 +335,32 @@ function statusLabel(status: string) {
 
 function formatScore(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value * 100)}%` : '—'
+}
+
+function diffVersionConfig(item: StrategyVersion, active?: StrategyVersion) {
+  if (!active || active.version === item.version) {
+    return prettyCompact(item.config)
+  }
+  const keys = ['enabled', 'weight', 'rebalance', 'universe', 'filters', 'selection', 'position']
+  const lines: string[] = []
+  for (const key of keys) {
+    const current = (item.config || {})[key]
+    const base = (active.config || {})[key]
+    if (JSON.stringify(current ?? null) !== JSON.stringify(base ?? null)) {
+      lines.push(`${key}:`)
+      lines.push(`  当前版本: ${prettyInline(current)}`)
+      lines.push(`  生效版本: ${prettyInline(base)}`)
+    }
+  }
+  return lines.length ? lines.join('\n') : '与当前生效版本一致'
+}
+
+function prettyCompact(value: unknown) {
+  return JSON.stringify(value || {}, null, 2)
+}
+
+function prettyInline(value: unknown) {
+  if (value === undefined) return '未设置'
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return JSON.stringify(value || {})
 }

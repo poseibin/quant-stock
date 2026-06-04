@@ -5,14 +5,32 @@
 """
 from __future__ import annotations
 
+import argparse
+import json
+import sqlite3
+import sys
+from datetime import datetime
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
+sys.path = [p for p in sys.path if Path(p or ".").resolve() != SCRIPT_DIR]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import pandas as pd
 
+from common.infra.db import desktop_db_path
 from common.config import RAW_DIR
 from research.data.storage import duckdb_query as dq
 from trading.execution import signal as sig
 from common.utils import get_logger
 
 log = get_logger("validation")
+
+
+def _now() -> str:
+    return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _next_trade_date(date: str) -> str | None:
@@ -149,6 +167,75 @@ def evaluate_history() -> pd.DataFrame:
     return df
 
 
+def persist_history(db_path: str | None = None, horizon_days: int = 1) -> list[dict]:
+    """把推荐回看写回 SQLite recommendation_hindsight。"""
+    df = evaluate_history()
+    if df.empty:
+        return []
+    path = db_path or str(desktop_db_path())
+    now = _now()
+    rows: list[dict] = []
+    with sqlite3.connect(path, timeout=30.0) as conn:
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recommendation_hindsight (
+                id TEXT PRIMARY KEY,
+                recommendation_date TEXT NOT NULL,
+                horizon_days INTEGER NOT NULL DEFAULT 1,
+                next_date TEXT NOT NULL DEFAULT '',
+                n_holdings INTEGER NOT NULL DEFAULT 0,
+                n_eval INTEGER NOT NULL DEFAULT 0,
+                weighted_return REAL,
+                equal_weight_return REAL,
+                hit_rate REAL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(recommendation_date, horizon_days)
+            )
+            """
+        )
+        for _, item in df.iterrows():
+            payload = {k: (None if pd.isna(v) else v) for k, v in item.to_dict().items()}
+            rec_date = str(payload.get("date") or "")
+            row_id = f"rh_{rec_date}_{horizon_days}"
+            conn.execute(
+                """
+                INSERT INTO recommendation_hindsight(
+                    id, recommendation_date, horizon_days, next_date, n_holdings, n_eval,
+                    weighted_return, equal_weight_return, hit_rate, payload_json, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(recommendation_date, horizon_days) DO UPDATE SET
+                    next_date = excluded.next_date,
+                    n_holdings = excluded.n_holdings,
+                    n_eval = excluded.n_eval,
+                    weighted_return = excluded.weighted_return,
+                    equal_weight_return = excluded.equal_weight_return,
+                    hit_rate = excluded.hit_rate,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    row_id,
+                    rec_date,
+                    horizon_days,
+                    str(payload.get("next_date") or ""),
+                    int(payload.get("n_holdings") or 0),
+                    int(payload.get("n_eval") or 0),
+                    payload.get("weighted_return"),
+                    payload.get("equal_weight_return"),
+                    payload.get("hit_rate"),
+                    json.dumps(payload, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            rows.append(payload)
+    return rows
+
+
 def fetch_benchmark(start: str, end: str, code: str = "000300.SH") -> pd.DataFrame:
     """取基准指数（默认沪深300）区间，返回 trade_date / pct_chg / equity。
 
@@ -175,3 +262,21 @@ def fetch_benchmark(start: str, end: str, code: str = "000300.SH") -> pd.DataFra
         cum.append(eq)
     df["equity"] = cum
     return df
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="刷新 daily_recommendation 回看结果")
+    parser.add_argument("--persist", action="store_true", help="写入 SQLite recommendation_hindsight")
+    parser.add_argument("--db-path", default=None, help="SQLite meta.db 路径")
+    parser.add_argument("--horizon-days", type=int, default=1)
+    args = parser.parse_args()
+    if args.persist:
+        rows = persist_history(args.db_path, args.horizon_days)
+        print(json.dumps({"rows": len(rows)}, ensure_ascii=False))
+    else:
+        df = evaluate_history()
+        print(df.to_json(orient="records", force_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

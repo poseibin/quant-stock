@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -101,6 +102,12 @@ type StrategyVersionActivateRequest struct {
 	Version  int    `json:"version"`
 }
 
+type StrategyVersionStatusRequest struct {
+	Strategy string `json:"strategy"`
+	Version  int    `json:"version"`
+	Status   string `json:"status"`
+}
+
 type ValidationReviewDTO struct {
 	ID              string         `json:"id"`
 	SubjectType     string         `json:"subject_type"`
@@ -115,6 +122,21 @@ type ValidationReviewDTO struct {
 	Recommendation  string         `json:"recommendation"`
 	CreatedAt       string         `json:"created_at"`
 	UpdatedAt       string         `json:"updated_at"`
+}
+
+type RecommendationHindsightDTO struct {
+	ID                 string         `json:"id"`
+	RecommendationDate string         `json:"recommendation_date"`
+	HorizonDays        int            `json:"horizon_days"`
+	NextDate           string         `json:"next_date"`
+	NHoldings          int            `json:"n_holdings"`
+	NEval              int            `json:"n_eval"`
+	WeightedReturn     *float64       `json:"weighted_return"`
+	EqualWeightReturn  *float64       `json:"equal_weight_return"`
+	HitRate            *float64       `json:"hit_rate"`
+	Payload            map[string]any `json:"payload"`
+	CreatedAt          string         `json:"created_at"`
+	UpdatedAt          string         `json:"updated_at"`
 }
 
 func (app *App) GetAppInfo() AppInfo {
@@ -267,6 +289,31 @@ func (app *App) ActivateStrategyVersion(req StrategyVersionActivateRequest) (Set
 	}
 	app.settings = settings
 	return SettingsResponse{Settings: app.settings, Issues: app.configService.Validate(app.settings)}, nil
+}
+
+func (app *App) SetStrategyVersionStatus(req StrategyVersionStatusRequest) ([]StrategyVersionDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return nil, err
+	}
+	strategyName := strings.TrimSpace(req.Strategy)
+	status := strings.TrimSpace(req.Status)
+	if strategyName == "" || req.Version <= 0 {
+		return nil, errors.New("strategy and version are required")
+	}
+	allowed := map[string]bool{"research": true, "paper": true, "promotable": true, "rejected": true}
+	if !allowed[status] {
+		return nil, errors.New("unsupported strategy version status")
+	}
+	if status == "paper" {
+		if _, err := app.database.Conn().Exec(`UPDATE strategy_settings_versions SET promotion_status = CASE WHEN version = ? THEN 'paper' WHEN promotion_status = 'paper' THEN 'research' ELSE promotion_status END WHERE strategy = ?`, req.Version, strategyName); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := app.database.Conn().Exec(`UPDATE strategy_settings_versions SET promotion_status = ? WHERE strategy = ? AND version = ?`, status, strategyName, req.Version); err != nil {
+			return nil, err
+		}
+	}
+	return app.ListStrategyVersions(strategyName)
 }
 
 func (app *App) ApplyPortfolioCandidate(req ApplyPortfolioCandidateRequest) (SettingsResponse, error) {
@@ -2000,8 +2047,16 @@ func (app *App) AnalyzePortfolioTask(id string) (task.DTO, error) {
 	t.UpdatedAt = now
 	_ = app.taskService.Repository().UpdateStatus(t)
 	if t.ExternalRunID != "" {
-		_, _ = app.database.Conn().Exec(`UPDATE portfolio_optimization_runs SET summary_json = ?, updated_at = datetime('now') WHERE run_id = ?`, string(data), t.ExternalRunID)
+		validationJSON, _ := json.Marshal(map[string]any{
+			"status":                "analyzed",
+			"optimizer":             "quant_robust_rules_v1",
+			"multiple_test_penalty": recommendation["multiple_test_penalty"],
+			"data_snapshot":         app.captureDataSnapshot("portfolio_optimization", t.ExternalRunID),
+			"analyzed_at":           now.Format(time.RFC3339),
+		})
+		_, _ = app.database.Conn().Exec(`UPDATE portfolio_optimization_runs SET summary_json = ?, validation_status = 'analyzed', validation_json = ?, updated_at = datetime('now') WHERE run_id = ?`, string(data), string(validationJSON), t.ExternalRunID)
 	}
+	app.saveResearchReport("portfolio_optimization", t.ExternalRunID, "optimizer_analysis", "方案评估优化分析", analysis, recommendation)
 	return task.ToDTO(t), nil
 }
 
@@ -2055,7 +2110,7 @@ func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (Valid
 			review.Status = "research"
 			review.Recommendation = "暂无对应版本的策略准入结果，先运行策略准入评估"
 			review.Gates = map[string]any{"has_evaluation": false}
-			review.Metrics = map[string]any{}
+			review.Metrics = map[string]any{"data_snapshot": app.captureDataSnapshot("strategy_version", review.SubjectID)}
 			return app.persistValidationReview(review)
 		}
 		return ValidationReviewDTO{}, err
@@ -2074,6 +2129,11 @@ func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (Valid
 		metrics["admission"] = payload["admission"]
 		metrics["admission_score"] = payload["admission_score"]
 	}
+	walkForward, neighborhood := app.strategyValidationEvidence(strategyName, version)
+	metrics["walk_forward"] = walkForward
+	metrics["parameter_neighborhood"] = neighborhood
+	metrics["multiple_test_penalty"] = app.multipleTestPenalty(review.SourceRunID)
+	metrics["data_snapshot"] = app.captureDataSnapshot("strategy_version", review.SubjectID)
 	review.Metrics = metrics
 	review.Gates = map[string]any{
 		"annual_return_positive": floatValue(metrics["annual_return"], 0) > 0,
@@ -2082,6 +2142,8 @@ func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (Valid
 		"calmar_positive":        floatValue(metrics["calmar"], 0) >= 0.25,
 		"turnover_acceptable":    floatValue(metrics["avg_turnover"], 0) <= 0.45,
 		"stability_acceptable":   floatValue(metrics["monthly_win_rate"], 0) >= 0.45 || floatValue(metrics["positive_3m_rate"], 0) >= 0.45,
+		"walk_forward_ok":        floatValue(walkForward["pass_rate"], 0) >= 0.50 && floatValue(walkForward["window_count"], 0) >= 1,
+		"neighborhood_stable":    floatValue(neighborhood["checked_versions"], 0) == 0 || floatValue(neighborhood["pass_rate"], 0) >= 0.50,
 	}
 	passed := 0
 	for _, value := range review.Gates {
@@ -2089,10 +2151,13 @@ func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (Valid
 			passed++
 		}
 	}
-	review.Score = float64(passed) / float64(len(review.Gates))
+	review.Score = float64(passed)/float64(len(review.Gates)) - floatValue(metrics["multiple_test_penalty"], 0)
+	if review.Score < 0 {
+		review.Score = 0
+	}
 	if review.Score >= 0.85 {
 		review.Status = "promotable"
-		review.Recommendation = "通过主要晋级门槛，可人工复核后设为生效版本"
+		review.Recommendation = "通过主要晋级门槛，可进入模拟盘；模拟盘稳定后再设为生效版本"
 	} else if review.Score >= 0.55 {
 		review.Status = "research"
 		review.Recommendation = "部分指标通过，建议继续 walk-forward 或参数邻域验证"
@@ -2101,6 +2166,56 @@ func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (Valid
 		review.Recommendation = "未通过核心晋级门槛，不建议生效"
 	}
 	return app.persistValidationReview(review)
+}
+
+func (app *App) RefreshRecommendationHindsight() ([]RecommendationHindsightDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return nil, err
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
+	scriptPath := filepath.Join(quantRoot, "trading", "execution", "validation.py")
+	cmd := exec.Command(pythonPath, scriptPath, "--persist", "--db-path", dbPath)
+	cmd.Dir = quantRoot
+	cmd.Env = append(os.Environ(), "DESKTOP_DB_PATH="+dbPath)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if output, err := cmd.Output(); err != nil {
+		return nil, fmt.Errorf("刷新推荐回看失败：%v %s", err, strings.TrimSpace(stderr.String()+string(output)))
+	}
+	app.saveResearchReport("daily_recommendation", "hindsight", "recommendation_hindsight", "推荐结果回看", "已刷新推荐信号与次日表现回看。", map[string]any{"refreshed_at": time.Now().Format(time.RFC3339)})
+	return app.ListRecommendationHindsight()
+}
+
+func (app *App) ListRecommendationHindsight() ([]RecommendationHindsightDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return nil, err
+	}
+	rows, err := app.database.Conn().Query(`SELECT id, recommendation_date, horizon_days, next_date, n_holdings, n_eval, weighted_return, equal_weight_return, hit_rate, COALESCE(payload_json, '{}'), created_at, updated_at
+		FROM recommendation_hindsight
+		ORDER BY recommendation_date DESC, horizon_days ASC
+		LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RecommendationHindsightDTO{}
+	for rows.Next() {
+		var item RecommendationHindsightDTO
+		var weighted, equal, hit sql.NullFloat64
+		var payloadJSON string
+		if err := rows.Scan(&item.ID, &item.RecommendationDate, &item.HorizonDays, &item.NextDate, &item.NHoldings, &item.NEval, &weighted, &equal, &hit, &payloadJSON, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.WeightedReturn = nullableFloatPtr(weighted)
+		item.EqualWeightReturn = nullableFloatPtr(equal)
+		item.HitRate = nullableFloatPtr(hit)
+		item.Payload = map[string]any{}
+		_ = json.Unmarshal([]byte(payloadJSON), &item.Payload)
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (app *App) persistValidationReview(review ValidationReviewDTO) (ValidationReviewDTO, error) {
@@ -2132,7 +2247,171 @@ func (app *App) persistValidationReview(review ValidationReviewDTO) (ValidationR
 		_, _ = app.database.Conn().Exec(`UPDATE strategy_settings_versions SET promotion_status = ?, validation_json = ? WHERE strategy = ? AND version = ?`,
 			review.Status, string(validationJSON), review.Strategy, review.StrategyVersion)
 	}
+	app.saveResearchReport(review.SubjectType, review.SubjectID, "validation_review", "策略版本复核", review.Recommendation, map[string]any{
+		"review_id": review.ID,
+		"status":    review.Status,
+		"score":     review.Score,
+		"gates":     review.Gates,
+		"metrics":   review.Metrics,
+	})
 	return review, nil
+}
+
+func (app *App) strategyValidationEvidence(strategyName string, version int) (map[string]any, map[string]any) {
+	walkForward := map[string]any{"window_count": 0, "pass_rate": 0.0, "avg_annual_return": nil, "worst_drawdown": nil}
+	rows, err := app.database.Conn().Query(`SELECT annual_return, max_drawdown, sharpe, calmar, avg_turnover, monthly_win_rate, positive_3m_rate
+		FROM strategy_evaluation
+		WHERE strategy = ? AND COALESCE(strategy_version, 0) = ?`, strategyName, version)
+	if err == nil {
+		defer rows.Close()
+		count := 0
+		pass := 0
+		annualSum := 0.0
+		worstDrawdown := 0.0
+		for rows.Next() {
+			var annual, drawdown, sharpe, calmar, turnover, monthlyWin, positive3m sql.NullFloat64
+			if err := rows.Scan(&annual, &drawdown, &sharpe, &calmar, &turnover, &monthlyWin, &positive3m); err != nil {
+				continue
+			}
+			count++
+			annualValue := nullableFloatValue(annual, 0)
+			drawdownValue := absFloat(nullableFloatValue(drawdown, 0))
+			annualSum += annualValue
+			if drawdownValue > worstDrawdown {
+				worstDrawdown = drawdownValue
+			}
+			if annualValue > 0 && drawdownValue <= 0.22 && nullableFloatValue(sharpe, 0) >= 0.3 && nullableFloatValue(calmar, 0) >= 0.25 && nullableFloatValue(turnover, 0) <= 0.45 && (nullableFloatValue(monthlyWin, 0) >= 0.45 || nullableFloatValue(positive3m, 0) >= 0.45) {
+				pass++
+			}
+		}
+		if count > 0 {
+			walkForward["window_count"] = count
+			walkForward["pass_rate"] = float64(pass) / float64(count)
+			walkForward["avg_annual_return"] = annualSum / float64(count)
+			walkForward["worst_drawdown"] = worstDrawdown
+		}
+	}
+	neighborhood := map[string]any{"checked_versions": 0, "pass_rate": 0.0}
+	rows, err = app.database.Conn().Query(`SELECT COALESCE(validation_json, '{}')
+		FROM strategy_settings_versions
+		WHERE strategy = ? AND version <> ? AND ABS(version - ?) <= 2`, strategyName, version, version)
+	if err == nil {
+		defer rows.Close()
+		count := 0
+		pass := 0
+		for rows.Next() {
+			var validationJSON string
+			if err := rows.Scan(&validationJSON); err != nil {
+				continue
+			}
+			var validation map[string]any
+			_ = json.Unmarshal([]byte(validationJSON), &validation)
+			if len(validation) == 0 {
+				continue
+			}
+			count++
+			if floatValue(validation["score"], 0) >= 0.55 {
+				pass++
+			}
+		}
+		neighborhood["checked_versions"] = count
+		if count > 0 {
+			neighborhood["pass_rate"] = float64(pass) / float64(count)
+		}
+	}
+	return walkForward, neighborhood
+}
+
+func (app *App) multipleTestPenalty(runID string) float64 {
+	runID = strings.TrimSpace(runID)
+	if runID == "" || app.database == nil {
+		return 0
+	}
+	var strategyTests int
+	_ = app.database.Conn().QueryRow(`SELECT COUNT(*) FROM strategy_evaluation WHERE run_id = ?`, runID).Scan(&strategyTests)
+	var candidateTests int
+	_ = app.database.Conn().QueryRow(`SELECT COUNT(*) FROM portfolio_optimization_candidates WHERE run_id = ?`, runID).Scan(&candidateTests)
+	tests := strategyTests + candidateTests
+	if tests <= 1 {
+		return 0
+	}
+	penalty := math.Log10(float64(tests)) * 0.035
+	if penalty > 0.18 {
+		return 0.18
+	}
+	return penalty
+}
+
+func (app *App) captureDataSnapshot(subjectType string, subjectID string) map[string]any {
+	if app.database == nil {
+		return map[string]any{}
+	}
+	snapshot := map[string]any{
+		"captured_at": time.Now().Format(time.RFC3339),
+	}
+	typeCount := map[string]any{}
+	rows, err := app.database.Conn().Query(`SELECT data_type, COUNT(*), COALESCE(SUM(row_count), 0), COALESCE(MAX(updated_at), '') FROM market_data_files GROUP BY data_type ORDER BY data_type`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var dataType string
+			var files int
+			var rowsCount int64
+			var updatedAt string
+			if err := rows.Scan(&dataType, &files, &rowsCount, &updatedAt); err == nil {
+				typeCount[dataType] = map[string]any{"files": files, "rows": rowsCount, "updated_at": updatedAt}
+			}
+		}
+	}
+	datasetStatus := []map[string]any{}
+	rows, err = app.database.Conn().Query(`SELECT dataset, category, state, progress_done, progress_total, updated_at FROM dataset_update_status ORDER BY category, dataset LIMIT 200`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var dataset, category, state, updatedAt string
+			var done, total int
+			if err := rows.Scan(&dataset, &category, &state, &done, &total, &updatedAt); err == nil {
+				datasetStatus = append(datasetStatus, map[string]any{"dataset": dataset, "category": category, "state": state, "done": done, "total": total, "updated_at": updatedAt})
+			}
+		}
+	}
+	snapshot["market_data_files"] = typeCount
+	snapshot["dataset_status"] = datasetStatus
+	app.saveDataSnapshot(subjectType, subjectID, snapshot)
+	return snapshot
+}
+
+func (app *App) saveDataSnapshot(subjectType string, subjectID string, snapshot map[string]any) {
+	if app.database == nil || strings.TrimSpace(subjectType) == "" || strings.TrimSpace(subjectID) == "" {
+		return
+	}
+	data, _ := json.Marshal(snapshot)
+	_, _ = app.database.Conn().Exec(`INSERT INTO evaluation_data_snapshots(id, subject_type, subject_id, snapshot_json, created_at) VALUES(?, ?, ?, ?, ?)`,
+		"eds_"+strings.ReplaceAll(task.NewID(), "-", ""), subjectType, subjectID, string(data), time.Now().Format(time.RFC3339))
+}
+
+func (app *App) saveResearchReport(subjectType string, subjectID string, reportType string, title string, content string, payload map[string]any) {
+	if app.database == nil || strings.TrimSpace(subjectType) == "" || strings.TrimSpace(subjectID) == "" {
+		return
+	}
+	data, _ := json.Marshal(payload)
+	_, _ = app.database.Conn().Exec(`INSERT INTO research_reports(id, subject_type, subject_id, report_type, title, model, content_md, payload_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"rr_"+strings.ReplaceAll(task.NewID(), "-", ""), subjectType, subjectID, reportType, title, "quant_robust_rules_v1", content, string(data), time.Now().Format(time.RFC3339))
+}
+
+func nullableFloatValue(value sql.NullFloat64, fallback float64) float64 {
+	if value.Valid {
+		return value.Float64
+	}
+	return fallback
+}
+
+func nullableFloatPtr(value sql.NullFloat64) *float64 {
+	if !value.Valid {
+		return nil
+	}
+	out := value.Float64
+	return &out
 }
 
 func (app *App) buildPortfolioAnalysisContext(parent task.Task, children []task.Task) (map[string]any, error) {
@@ -2282,11 +2561,16 @@ func (app *App) buildQuantPortfolioRecommendation(parent task.Task, contextPaylo
 	params := task.ToDTO(parent).Params
 	rows := rowsFromContext(contextPayload["candidate_results"])
 	scored := make([]quantCandidateScore, 0, len(rows))
+	multiplePenalty := app.candidateSetPenalty(len(rows))
 	for _, row := range rows {
 		if strings.TrimSpace(fmt.Sprint(row["status"])) != "ok" {
 			continue
 		}
 		score, reason := robustCandidateScore(row)
+		score -= multiplePenalty
+		if score < 0 {
+			score = 0
+		}
 		scored = append(scored, quantCandidateScore{Row: row, Score: score, Reason: reason})
 	}
 	sort.Slice(scored, func(i, j int) bool {
@@ -2327,19 +2611,31 @@ func (app *App) buildQuantPortfolioRecommendation(parent task.Task, contextPaylo
 	diagnosis, keep, change, remove, validation := app.quantRecommendationText(scored, topWindow, selectedStrategies, overrides)
 	analysis := app.quantAnalysisMarkdown(parent, scored, topWindow, selectedStrategies, overrides)
 	recommendation := map[string]any{
-		"analysis_md":        analysis,
-		"diagnosis":          diagnosis,
-		"keep":               keep,
-		"change":             change,
-		"remove":             remove,
-		"validation_plan":    validation,
-		"next_eval_config":   nextConfig,
-		"optimizer_type":     "quant_robust_rules_v1",
-		"llm_role":           "LLM 不直接优化参数，只用于后续报告解释、研报/公告解析和代码审查",
-		"best_candidate":     summarizeCandidate(best),
-		"candidate_coverage": contextPayload["coverage"],
+		"analysis_md":           analysis,
+		"diagnosis":             diagnosis,
+		"keep":                  keep,
+		"change":                change,
+		"remove":                remove,
+		"validation_plan":       validation,
+		"next_eval_config":      nextConfig,
+		"optimizer_type":        "quant_robust_rules_v1",
+		"llm_role":              "LLM 不直接优化参数，只用于后续报告解释、研报/公告解析和代码审查",
+		"best_candidate":        summarizeCandidate(best),
+		"candidate_coverage":    contextPayload["coverage"],
+		"multiple_test_penalty": multiplePenalty,
 	}
 	return analysis, recommendation
+}
+
+func (app *App) candidateSetPenalty(count int) float64 {
+	if count <= 1 {
+		return 0
+	}
+	penalty := math.Log10(float64(count)) * 0.025
+	if penalty > 0.16 {
+		return 0.16
+	}
+	return penalty
 }
 
 func robustCandidateScore(row map[string]any) (float64, string) {

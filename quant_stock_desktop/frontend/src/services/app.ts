@@ -9,7 +9,10 @@ declare global {
           ApplyPortfolioCandidate: (request: ApplyPortfolioCandidateRequest) => Promise<SettingsResponse>
           ListStrategyVersions: (strategy: string) => Promise<StrategyVersion[]>
           ActivateStrategyVersion: (request: StrategyVersionActivateRequest) => Promise<SettingsResponse>
+          SetStrategyVersionStatus: (request: StrategyVersionStatusRequest) => Promise<StrategyVersion[]>
           ReviewStrategyVersion: (request: StrategyVersionActivateRequest) => Promise<ValidationReview>
+          RefreshRecommendationHindsight: () => Promise<RecommendationHindsight[]>
+          ListRecommendationHindsight: () => Promise<RecommendationHindsight[]>
           AnalyzePortfolioTask: (id: string) => Promise<TaskDTO>
           CreateTask: (request: CreateTaskRequest) => Promise<TaskDTO>
           StartTask: (id: string) => Promise<TaskDTO>
@@ -95,6 +98,10 @@ export interface StrategyVersionActivateRequest {
   version: number
 }
 
+export interface StrategyVersionStatusRequest extends StrategyVersionActivateRequest {
+  status: string
+}
+
 export interface ValidationReview {
   id: string
   subject_type: string
@@ -107,6 +114,21 @@ export interface ValidationReview {
   gates: Record<string, unknown>
   metrics: Record<string, unknown>
   recommendation: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RecommendationHindsight {
+  id: string
+  recommendation_date: string
+  horizon_days: number
+  next_date: string
+  n_holdings: number
+  n_eval: number
+  weighted_return?: number | null
+  equal_weight_return?: number | null
+  hit_rate?: number | null
+  payload: Record<string, unknown>
   created_at: string
   updated_at: string
 }
@@ -497,11 +519,32 @@ export async function activateStrategyVersion(request: StrategyVersionActivateRe
   return getSettings()
 }
 
+export async function setStrategyVersionStatus(request: StrategyVersionStatusRequest): Promise<StrategyVersion[]> {
+  if (window.go?.main?.App?.SetStrategyVersionStatus) {
+    return (await window.go.main.App.SetStrategyVersionStatus(request)) || []
+  }
+  return []
+}
+
 export async function reviewStrategyVersion(request: StrategyVersionActivateRequest): Promise<ValidationReview> {
   if (window.go?.main?.App?.ReviewStrategyVersion) {
     return window.go.main.App.ReviewStrategyVersion(request)
   }
   return { id: '', subject_type: 'strategy_version', subject_id: `${request.strategy}@${request.version}`, strategy: request.strategy, strategy_version: request.version, source_run_id: '', status: 'research', score: 0, gates: {}, metrics: {}, recommendation: '开发模式占位', created_at: '', updated_at: '' }
+}
+
+export async function refreshRecommendationHindsight(): Promise<RecommendationHindsight[]> {
+  if (window.go?.main?.App?.RefreshRecommendationHindsight) {
+    return (await window.go.main.App.RefreshRecommendationHindsight()) || []
+  }
+  return []
+}
+
+export async function listRecommendationHindsight(): Promise<RecommendationHindsight[]> {
+  if (window.go?.main?.App?.ListRecommendationHindsight) {
+    return (await window.go.main.App.ListRecommendationHindsight()) || []
+  }
+  return []
 }
 
 export async function analyzePortfolioTask(id: string): Promise<TaskDTO> {
