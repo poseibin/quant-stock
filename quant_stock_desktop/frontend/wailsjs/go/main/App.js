@@ -46,12 +46,24 @@ export function GetDataUpdateStatus() {
   return window['go']['main']['App']['GetDataUpdateStatus']();
 }
 
+export function GetLatestPolicySupportSignal() {
+  return window['go']['main']['App']['GetLatestPolicySupportSignal']();
+}
+
 export function GetLimitBreakoutRunStatus() {
   return window['go']['main']['App']['GetLimitBreakoutRunStatus']();
 }
 
+export function GetLimitSignalEvaluationRunStatus() {
+  return window['go']['main']['App']['GetLimitSignalEvaluationRunStatus']();
+}
+
 export function GetLimitUpMomentumRunStatus() {
   return window['go']['main']['App']['GetLimitUpMomentumRunStatus']();
+}
+
+export function GetPolicySupportAnalysisStatus() {
+  return window['go']['main']['App']['GetPolicySupportAnalysisStatus']();
 }
 
 export function GetPositionHistory() {
@@ -76,6 +88,10 @@ export function GetSettings() {
 
 export function GetSignalRunStatus() {
   return window['go']['main']['App']['GetSignalRunStatus']();
+}
+
+export function GetStateTeamAnalysisStatus() {
+  return window['go']['main']['App']['GetStateTeamAnalysisStatus']();
 }
 
 export function GetStockValuation(arg1) {
@@ -118,6 +134,10 @@ export function ListLimitBreakoutCandidates(arg1) {
   return window['go']['main']['App']['ListLimitBreakoutCandidates'](arg1);
 }
 
+export function ListLimitSignalEvaluationSummary() {
+  return window['go']['main']['App']['ListLimitSignalEvaluationSummary']();
+}
+
 export function ListLimitUpMomentumCandidates(arg1) {
   return window['go']['main']['App']['ListLimitUpMomentumCandidates'](arg1);
 }
@@ -126,8 +146,16 @@ export function ListMarketDataFiles() {
   return window['go']['main']['App']['ListMarketDataFiles']();
 }
 
+export function ListPolicySupportCandidates(arg1) {
+  return window['go']['main']['App']['ListPolicySupportCandidates'](arg1);
+}
+
 export function ListRecommendationHindsight() {
   return window['go']['main']['App']['ListRecommendationHindsight']();
+}
+
+export function ListStateTeamHolderChanges(arg1) {
+  return window['go']['main']['App']['ListStateTeamHolderChanges'](arg1);
 }
 
 export function ListStockBasic(arg1) {
@@ -176,6 +204,18 @@ export function ReviewStrategyVersion(arg1) {
 
 export function RunDataUpdate(arg1) {
   return window['go']['main']['App']['RunDataUpdate'](arg1);
+}
+
+export function RunLimitSignalEvaluation() {
+  return window['go']['main']['App']['RunLimitSignalEvaluation']();
+}
+
+export function RunPolicySupportAnalysis() {
+  return window['go']['main']['App']['RunPolicySupportAnalysis']();
+}
+
+export function RunStateTeamAnalysis() {
+  return window['go']['main']['App']['RunStateTeamAnalysis']();
 }
 
 export function SaveSettings(arg1) {

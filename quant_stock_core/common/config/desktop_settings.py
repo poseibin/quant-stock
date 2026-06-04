@@ -12,6 +12,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from common.infra.db import connect_db, write_transaction
+
 from .settings import DATA_ROOT
 
 
@@ -183,7 +185,7 @@ def load_settings() -> dict[str, Any]:
     if not db_path.exists():
         return settings
     try:
-        with sqlite3.connect(str(db_path), timeout=10.0) as conn:
+        with connect_db(db_path) as conn:
             row = conn.execute("SELECT value FROM app_settings WHERE key = ?", ("settings",)).fetchone()
     except sqlite3.Error:
         return settings
@@ -200,7 +202,7 @@ def save_settings(settings: dict[str, Any]) -> None:
     payload = json.dumps(_deep_merge(_default_settings(), settings), ensure_ascii=False)
     db_path = config_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path), timeout=10.0) as conn:
+    with write_transaction(db_path) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -273,7 +275,7 @@ def _load_versioned_strategy_settings(base: dict[str, dict[str, Any]]) -> dict[s
     mode = os.getenv("QUANT_STRATEGY_VERSION_MODE", "active").strip().lower() or "active"
     version_spec = _strategy_version_spec()
     try:
-        with sqlite3.connect(str(db_path), timeout=10.0) as conn:
+        with connect_db(db_path) as conn:
             has_table = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'strategy_settings_versions'"
             ).fetchone()

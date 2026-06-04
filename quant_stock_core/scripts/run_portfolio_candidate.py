@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.config.desktop_settings import load_portfolio_risk
+from common.infra.db import write_transaction
 from trading.strategy import registry
 from scripts.optimize_portfolio import (
     _combine_candidate,
@@ -150,7 +150,7 @@ def main() -> None:
 
 def save_candidate(db_path: Path, run_id: str, row: dict[str, Any]) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path), timeout=30.0) as conn:
+    with write_transaction(db_path) as conn:
         conn.execute(
             """
             INSERT INTO portfolio_optimization_candidates(

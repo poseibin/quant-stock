@@ -30,9 +30,15 @@ export function GetAppInfo():Promise<main.AppInfo>;
 
 export function GetDataUpdateStatus():Promise<datafetch.RunStatus>;
 
+export function GetLatestPolicySupportSignal():Promise<main.PolicySupportSignalDTO>;
+
 export function GetLimitBreakoutRunStatus():Promise<position.RunStatus>;
 
+export function GetLimitSignalEvaluationRunStatus():Promise<position.RunStatus>;
+
 export function GetLimitUpMomentumRunStatus():Promise<position.RunStatus>;
+
+export function GetPolicySupportAnalysisStatus():Promise<position.RunStatus>;
 
 export function GetPositionHistory():Promise<Array<position.HistoryPoint>>;
 
@@ -45,6 +51,8 @@ export function GetPositionSummary():Promise<position.Summary>;
 export function GetSettings():Promise<main.SettingsResponse>;
 
 export function GetSignalRunStatus():Promise<position.RunStatus>;
+
+export function GetStateTeamAnalysisStatus():Promise<position.RunStatus>;
 
 export function GetStockValuation(arg1:market.ValuationQuery):Promise<market.StockValuation>;
 
@@ -66,11 +74,17 @@ export function ListGovernanceDashboard():Promise<main.GovernanceDashboardDTO>;
 
 export function ListLimitBreakoutCandidates(arg1:market.BreakoutQuery):Promise<Array<market.LimitBreakoutCandidate>>;
 
+export function ListLimitSignalEvaluationSummary():Promise<Array<market.LimitSignalEvaluationSummary>>;
+
 export function ListLimitUpMomentumCandidates(arg1:market.LimitUpMomentumQuery):Promise<Array<market.LimitUpMomentumCandidate>>;
 
 export function ListMarketDataFiles():Promise<Array<market.DataFileDTO>>;
 
+export function ListPolicySupportCandidates(arg1:number):Promise<Array<main.PolicySupportCandidateDTO>>;
+
 export function ListRecommendationHindsight():Promise<Array<main.RecommendationHindsightDTO>>;
+
+export function ListStateTeamHolderChanges(arg1:main.StateTeamQuery):Promise<Array<main.StateTeamChangeDTO>>;
 
 export function ListStockBasic(arg1:market.StockBasicQuery):Promise<Array<market.StockBasic>>;
 
@@ -95,6 +109,12 @@ export function RefreshTaskStatus(arg1:string):Promise<task.DTO>;
 export function ReviewStrategyVersion(arg1:main.StrategyVersionActivateRequest):Promise<main.ValidationReviewDTO>;
 
 export function RunDataUpdate(arg1:datafetch.UpdateRequest):Promise<void>;
+
+export function RunLimitSignalEvaluation():Promise<void>;
+
+export function RunPolicySupportAnalysis():Promise<void>;
+
+export function RunStateTeamAnalysis():Promise<void>;
 
 export function SaveSettings(arg1:config.Settings):Promise<main.SettingsResponse>;
 

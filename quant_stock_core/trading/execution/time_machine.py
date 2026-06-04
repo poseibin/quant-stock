@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +25,7 @@ import pandas as pd
 
 from common.config import BACKTEST_DIR, RAW_DIR
 from common.config.desktop_settings import load_exit_rules
+from common.infra.db import write_transaction
 from research.data.storage import duckdb_query as dq
 from trading.execution import position_pool as pp
 from trading.execution import signal as sig_mod
@@ -91,7 +91,7 @@ def _sync_task_to_sqlite(run_id: str, fields: dict) -> None:
     if fields.get("summary"):
         summary.update(fields["summary"])
     try:
-        with sqlite3.connect(db_path, timeout=30) as conn:
+        with write_transaction(db_path) as conn:
             row = conn.execute(
                 "SELECT id, summary_json FROM evaluation_tasks WHERE external_run_id = ?",
                 (run_id,),
@@ -131,7 +131,7 @@ def _persist_snapshot_sqlite(run_id: str, row: dict) -> None:
         return
     now = datetime.now().isoformat()
     try:
-        with sqlite3.connect(db_path, timeout=30) as conn:
+        with write_transaction(db_path) as conn:
             conn.execute(
                 """INSERT INTO time_machine_snapshots (
                        run_id, trade_date, cash, market_value, equity, n_holdings,
@@ -170,7 +170,7 @@ def _persist_trades_sqlite(run_id: str, date: str, trades: list[dict]) -> None:
         return
     now = datetime.now().isoformat()
     try:
-        with sqlite3.connect(db_path, timeout=30) as conn:
+        with write_transaction(db_path) as conn:
             rows = []
             for t in trades:
                 rows.append((
@@ -206,7 +206,7 @@ def _persist_positions_sqlite(run_id: str, date: str, positions: list[dict]) -> 
         return
     now = datetime.now().isoformat()
     try:
-        with sqlite3.connect(db_path, timeout=30) as conn:
+        with write_transaction(db_path) as conn:
             conn.execute(
                 "DELETE FROM time_machine_positions WHERE run_id = ? AND trade_date = ?",
                 (run_id, str(date)),

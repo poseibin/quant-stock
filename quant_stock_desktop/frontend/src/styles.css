@@ -51,7 +51,16 @@ button:active:not(:disabled) {
 }
 
 .sidebar {
+  position: sticky;
+  top: 0;
+  flex: 0 0 auto;
+  align-self: flex-start;
   width: 260px;
+  min-width: 260px;
+  height: 100vh;
+  max-height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 52px 18px 24px;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(12, 15, 22, 0.78);
@@ -2422,6 +2431,151 @@ th {
   opacity: 0.45;
 }
 
+.stateTeamPage {
+  max-width: 1480px;
+}
+
+.stateTeamFilters {
+  gap: 8px;
+}
+
+.stateTeamSelect,
+.searchBox input {
+  height: 34px;
+  color: #eef2ff;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(8, 11, 18, 0.46);
+  outline: none;
+}
+
+.stateTeamSelect {
+  min-width: 104px;
+  padding: 0 34px 0 12px;
+  appearance: none;
+  border-color: rgba(255, 176, 0, 0.18);
+  background:
+    linear-gradient(45deg, transparent 50%, #ffcf66 50%) calc(100% - 17px) 14px / 6px 6px no-repeat,
+    linear-gradient(135deg, #ffcf66 50%, transparent 50%) calc(100% - 12px) 14px / 6px 6px no-repeat,
+    linear-gradient(180deg, rgba(24, 31, 44, 0.98), rgba(8, 12, 20, 0.98));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  font-weight: 720;
+}
+
+.stateTeamSelect:hover,
+.stateTeamSelect:focus {
+  border-color: rgba(255, 176, 0, 0.42);
+  box-shadow: 0 0 0 3px rgba(255, 176, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.stateTeamSelect option {
+  color: #eef2ff;
+  background: #111722;
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 260px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(8, 11, 18, 0.46);
+}
+
+.searchBox input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.stateTeamQueryButton {
+  min-width: 108px;
+  height: 34px;
+  color: #201704;
+  border-color: rgba(255, 209, 92, 0.72);
+  background: linear-gradient(180deg, #ffd86f, #ffb000);
+  box-shadow: 0 8px 18px rgba(255, 176, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.34);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.stateTeamQueryButton:hover {
+  color: #161006;
+  border-color: rgba(255, 226, 135, 0.9);
+  background: linear-gradient(180deg, #ffe28f, #ffc033);
+  box-shadow: 0 10px 22px rgba(255, 176, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.stateTeamAnalyzeButton {
+  min-width: 132px;
+}
+
+.stateTeamProgress {
+  margin-top: 14px;
+}
+
+.stateTeamBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  height: 24px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.stateTeamBadge.new,
+.stateTeamBadge.add {
+  color: #ffd8d8;
+  background: rgba(239, 83, 80, 0.16);
+}
+
+.stateTeamBadge.trim,
+.stateTeamBadge.exit {
+  color: #c9f8e2;
+  background: rgba(38, 194, 129, 0.14);
+}
+
+.codeButton {
+  height: auto;
+  min-width: 112px;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 7px 10px;
+}
+
+.codeButton strong {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.codeButton span {
+  color: #8f9ab3;
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-size: 11px;
+}
+
+.holdersCell {
+  max-width: 320px;
+  overflow: hidden;
+  color: #c7d0e3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.noteCell {
+  max-width: 280px;
+  color: #8f9ab3;
+  line-height: 1.45;
+}
+
 .taskActions {
   display: flex;
   align-items: center;
@@ -3328,6 +3482,85 @@ th {
   color: #ffdf7e;
 }
 
+.limitEvaluationPanel {
+  margin-bottom: 18px;
+}
+
+.limitEvaluationGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.limitEvaluationCard {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: rgba(8, 11, 18, 0.35);
+}
+
+.limitEvaluationTopline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.limitEvaluationTopline span {
+  min-width: 0;
+  overflow: hidden;
+  color: #eef2ff;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.limitEvaluationTopline b {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+}
+
+.limitEvaluationMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.limitEvaluationCard p {
+  margin: 12px 0 8px;
+  color: #a8b3c7;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.limitEvaluationCard code {
+  display: block;
+  overflow: hidden;
+  color: #8f9ab3;
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.positiveText {
+  color: #18d39a;
+}
+
+.negativeText {
+  color: #ff5f6d;
+}
+
+.warningText {
+  color: #ffdf7e;
+}
+
 .breakoutLayout {
   display: grid;
   grid-template-columns: minmax(620px, 1.05fr) minmax(420px, 0.95fr);
@@ -3698,6 +3931,229 @@ th {
 .snapshotSummary b {
   color: #eef2ff;
   font-size: 12px;
+}
+
+.policySupportPage {
+  display: grid;
+  gap: 16px;
+  max-width: 1480px;
+}
+
+.policyHero {
+  background:
+    radial-gradient(circle at 12% 18%, rgba(38, 194, 129, 0.16), transparent 30%),
+    linear-gradient(rgba(23, 29, 41, 0.88), rgba(11, 15, 24, 0.9));
+}
+
+.policyRunButton {
+  border-color: rgba(38, 194, 129, 0.6);
+  background: linear-gradient(#07835f, #036849);
+  color: #eefaf5;
+  box-shadow: 0 16px 36px rgba(3, 104, 73, 0.28);
+}
+
+.policyOverview {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) repeat(4, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.policyScoreCard,
+.policyMetric {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: linear-gradient(rgba(24, 31, 44, 0.92), rgba(10, 15, 24, 0.92));
+  padding: 16px;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.policyScoreCard {
+  border-left: 4px solid #8f9ab3;
+}
+
+.policyScoreCard.high {
+  border-left-color: #26c281;
+}
+
+.policyScoreCard.medium {
+  border-left-color: #ffb000;
+}
+
+.policyScoreCard.low {
+  border-left-color: #ef5350;
+}
+
+.policyScoreCard span,
+.policyMetric span,
+.policyEvidenceGrid span {
+  color: #8f9ab3;
+  display: block;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.policyScoreCard b {
+  color: #eef2ff;
+  display: block;
+  font-size: 32px;
+  line-height: 1.1;
+  margin-top: 10px;
+}
+
+.policyScoreCard strong {
+  color: #ffdf7e;
+  display: block;
+  font-family: JetBrains Mono, Menlo, monospace;
+  font-size: 22px;
+  margin-top: 8px;
+}
+
+.policyScoreCard em {
+  color: #8f9ab3;
+  display: block;
+  font-size: 12px;
+  font-style: normal;
+  margin-top: 8px;
+}
+
+.policyMetric b {
+  color: #eef2ff;
+  display: block;
+  font-family: JetBrains Mono, Menlo, monospace;
+  font-size: 24px;
+  margin: 10px 0 12px;
+}
+
+.policyMetric div {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.policyMetric i {
+  background: linear-gradient(90deg, #26c281, #ffb000);
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+}
+
+.policySignalCard,
+.policyCandidatesCard {
+  overflow: hidden;
+}
+
+.policySignalDate,
+.policyCandidateCount {
+  color: #8f9ab3;
+  font-family: JetBrains Mono, Menlo, monospace;
+  font-size: 12px;
+}
+
+.policyReason {
+  color: #d7deec;
+  background: rgba(3, 8, 18, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  line-height: 1.7;
+  margin-top: 12px;
+  padding: 14px;
+}
+
+.policyEvidenceGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.policyEvidenceGrid div {
+  background: rgba(8, 11, 18, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.policyEvidenceGrid b {
+  color: #eef2ff;
+  display: block;
+  font-family: JetBrains Mono, Menlo, monospace;
+  font-size: 18px;
+  margin-top: 8px;
+}
+
+.policyTable .dataTableHead,
+.policyTable .dataTableRow {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(150px, 1.1fr) minmax(100px, 0.8fr) 92px 72px 78px 78px 100px minmax(220px, 1.6fr);
+}
+
+.policyTable {
+  min-width: 980px;
+}
+
+.policyTable .dataTableHead {
+  color: #8f9ab3;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 12px 0;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.policyTable .dataTableRow {
+  min-height: 58px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  padding: 10px 0;
+}
+
+.policyRow {
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.policyRow:hover {
+  background: rgba(255, 176, 0, 0.08);
+}
+
+.policyRow b,
+.policyRow em,
+.policyRow i {
+  display: block;
+  font-style: normal;
+}
+
+.policyRow b {
+  color: #eef2ff;
+}
+
+.policyRow em {
+  color: #8f9ab3;
+  font-family: JetBrains Mono, Menlo, monospace;
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.policyRow i {
+  color: #ffdf7e;
+  background: rgba(255, 176, 0, 0.12);
+  border-radius: 999px;
+  padding: 4px 7px;
+  width: fit-content;
+}
+
+.emptyTableRow {
+  color: #8f9ab3;
+  padding: 22px 0;
+  text-align: center;
 }
 
 @media (max-width: 1320px) {

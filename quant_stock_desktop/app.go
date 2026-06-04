@@ -111,6 +111,64 @@ type StrategyVersionStatusRequest struct {
 	Status   string `json:"status"`
 }
 
+type StateTeamQuery struct {
+	Period  string `json:"period"`
+	Action  string `json:"action"`
+	Keyword string `json:"keyword"`
+	Limit   int    `json:"limit"`
+}
+
+type StateTeamChangeDTO struct {
+	TSCode              string  `json:"ts_code"`
+	Name                string  `json:"name"`
+	Industry            string  `json:"industry"`
+	Action              string  `json:"action"`
+	CurrentPeriod       string  `json:"current_period"`
+	PreviousPeriod      string  `json:"previous_period"`
+	CurrentHolderCount  int     `json:"current_holder_count"`
+	PreviousHolderCount int     `json:"previous_holder_count"`
+	CurrentHoldAmount   float64 `json:"current_hold_amount"`
+	PreviousHoldAmount  float64 `json:"previous_hold_amount"`
+	CurrentHoldRatio    float64 `json:"current_hold_ratio"`
+	PreviousHoldRatio   float64 `json:"previous_hold_ratio"`
+	HoldRatioDelta      float64 `json:"hold_ratio_delta"`
+	CurrentFloatRatio   float64 `json:"current_float_ratio"`
+	PreviousFloatRatio  float64 `json:"previous_float_ratio"`
+	CurrentHolders      string  `json:"current_holders"`
+	PreviousHolders     string  `json:"previous_holders"`
+	Note                string  `json:"note"`
+	UpdatedAt           string  `json:"updated_at"`
+}
+
+type PolicySupportSignalDTO struct {
+	TradeDate          string  `json:"trade_date"`
+	SignalLevel        string  `json:"signal_level"`
+	TotalScore         float64 `json:"total_score"`
+	MarketStressScore  float64 `json:"market_stress_score"`
+	SupportScore       float64 `json:"support_score"`
+	InstitutionScore   float64 `json:"institution_score"`
+	WeightSupportScore float64 `json:"weight_support_score"`
+	Direction          string  `json:"direction"`
+	Reason             string  `json:"reason"`
+	EvidenceJSON       string  `json:"evidence_json"`
+	UpdatedAt          string  `json:"updated_at"`
+}
+
+type PolicySupportCandidateDTO struct {
+	TradeDate         string  `json:"trade_date"`
+	TSCode            string  `json:"ts_code"`
+	Name              string  `json:"name"`
+	Industry          string  `json:"industry"`
+	CandidateType     string  `json:"candidate_type"`
+	Score             float64 `json:"score"`
+	PctChg            float64 `json:"pct_chg"`
+	AmountRatio       float64 `json:"amount_ratio"`
+	TurnoverRate      float64 `json:"turnover_rate"`
+	InstitutionNetBuy float64 `json:"institution_net_buy"`
+	Reason            string  `json:"reason"`
+	UpdatedAt         string  `json:"updated_at"`
+}
+
 type ValidationReviewDTO struct {
 	ID              string         `json:"id"`
 	SubjectType     string         `json:"subject_type"`
@@ -532,6 +590,347 @@ func (app *App) GetStockValuation(query market.ValuationQuery) (market.StockValu
 	return app.marketService.GetStockValuation(app.settings.DataPath, query)
 }
 
+func (app *App) ListStateTeamHolderChanges(query StateTeamQuery) ([]StateTeamChangeDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []StateTeamChangeDTO{}, err
+	}
+	db := app.database.Conn()
+	period := strings.TrimSpace(query.Period)
+	if period == "" {
+		if err := db.QueryRow(`SELECT COALESCE(MAX(current_period), '') FROM state_team_holder_changes`).Scan(&period); err != nil {
+			return []StateTeamChangeDTO{}, err
+		}
+	}
+	if period == "" {
+		return []StateTeamChangeDTO{}, nil
+	}
+	limit := query.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 300
+	}
+	conditions := []string{"current_period = ?"}
+	args := []any{period}
+	action := strings.ToUpper(strings.TrimSpace(query.Action))
+	if action != "" && action != "ALL" {
+		conditions = append(conditions, "action = ?")
+		args = append(args, action)
+	}
+	keyword := strings.ToLower(strings.TrimSpace(query.Keyword))
+	if keyword != "" {
+		conditions = append(conditions, "(lower(ts_code) LIKE ? OR lower(name) LIKE ? OR lower(industry) LIKE ? OR lower(current_holders) LIKE ? OR lower(previous_holders) LIKE ?)")
+		like := "%" + keyword + "%"
+		args = append(args, like, like, like, like, like)
+	}
+	args = append(args, limit)
+	rows, err := db.Query(`SELECT
+			ts_code, name, industry, action, current_period, previous_period,
+			current_holder_count, previous_holder_count,
+			current_hold_amount, previous_hold_amount,
+			current_hold_ratio, previous_hold_ratio, hold_ratio_delta,
+			current_float_ratio, previous_float_ratio,
+			current_holders, previous_holders, note, updated_at
+		FROM state_team_holder_changes
+		WHERE `+strings.Join(conditions, " AND ")+`
+		ORDER BY
+			CASE action WHEN 'NEW' THEN 1 WHEN 'ADD' THEN 2 WHEN 'TRIM' THEN 3 WHEN 'EXIT' THEN 4 ELSE 5 END,
+			ABS(hold_ratio_delta) DESC,
+			current_hold_ratio DESC
+		LIMIT ?`, args...)
+	if err != nil {
+		return []StateTeamChangeDTO{}, err
+	}
+	defer rows.Close()
+	out := make([]StateTeamChangeDTO, 0)
+	for rows.Next() {
+		var item StateTeamChangeDTO
+		if err := rows.Scan(
+			&item.TSCode,
+			&item.Name,
+			&item.Industry,
+			&item.Action,
+			&item.CurrentPeriod,
+			&item.PreviousPeriod,
+			&item.CurrentHolderCount,
+			&item.PreviousHolderCount,
+			&item.CurrentHoldAmount,
+			&item.PreviousHoldAmount,
+			&item.CurrentHoldRatio,
+			&item.PreviousHoldRatio,
+			&item.HoldRatioDelta,
+			&item.CurrentFloatRatio,
+			&item.PreviousFloatRatio,
+			&item.CurrentHolders,
+			&item.PreviousHolders,
+			&item.Note,
+			&item.UpdatedAt,
+		); err != nil {
+			return []StateTeamChangeDTO{}, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) GetStateTeamAnalysisStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("state_team_analysis")
+}
+
+func (app *App) RunStateTeamAnalysis() error {
+	if err := app.ensureDatabase(); err != nil {
+		return err
+	}
+	if status, err := app.GetStateTeamAnalysisStatus(); err == nil && status.State == "running" {
+		return errors.New("国家队分析正在运行")
+	}
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return errors.New("数据路径未设置")
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(dataPath, "meta.db")
+	logDir := filepath.Join(dataPath, "logs", "state_team")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(logDir, time.Now().Format("20060102_150405")+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
+		 VALUES('state_team_analysis','running',0,6,'prepare','启动 Python 分析脚本','',?,?,'')
+		 ON CONFLICT(task) DO UPDATE SET state='running', idx=0, total=6, stage='prepare', name='启动 Python 分析脚本', message='', started_at=excluded.started_at, updated_at=excluded.updated_at, finished_at=''`,
+		now,
+		now,
+	)
+	args := []string{
+		"scripts/analyze_state_team_holders.py",
+		"--mode", "changes",
+		"--data-root", dataPath,
+		"--db-path", dbPath,
+		"--json",
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(),
+		"DATA_ROOT="+dataPath,
+		"DESKTOP_DB_PATH="+dbPath,
+		"DESKTOP_CONFIG_DB_PATH="+dbPath,
+	)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		finishedAt := time.Now().Format(time.RFC3339)
+		_, _ = app.database.Conn().Exec(
+			`UPDATE py_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='state_team_analysis'`,
+			err.Error(),
+			finishedAt,
+			finishedAt,
+		)
+		return err
+	}
+	go app.waitStateTeamAnalysis(cmd, logFile, logPath)
+	return nil
+}
+
+func (app *App) waitStateTeamAnalysis(cmd *exec.Cmd, logFile *os.File, logPath string) {
+	err := cmd.Wait()
+	_ = logFile.Close()
+	if err == nil || app.database == nil {
+		return
+	}
+	status, statusErr := app.GetStateTeamAnalysisStatus()
+	if statusErr == nil && status.State != "running" {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
+		 VALUES('state_team_analysis','error',0,0,'','',?,?,?,?)
+		 ON CONFLICT(task) DO UPDATE SET state='error', message=excluded.message, updated_at=excluded.updated_at, finished_at=excluded.finished_at`,
+		"更新进程已退出: "+err.Error()+"，日志: "+logPath,
+		now,
+		now,
+		now,
+	)
+}
+
+func (app *App) GetLatestPolicySupportSignal() (PolicySupportSignalDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return PolicySupportSignalDTO{}, err
+	}
+	var item PolicySupportSignalDTO
+	err := app.database.Conn().QueryRow(`SELECT
+			trade_date, signal_level, total_score, market_stress_score, support_score,
+			institution_score, weight_support_score, direction, reason, evidence_json, updated_at
+		FROM policy_support_signals
+		ORDER BY trade_date DESC
+		LIMIT 1`).Scan(
+		&item.TradeDate,
+		&item.SignalLevel,
+		&item.TotalScore,
+		&item.MarketStressScore,
+		&item.SupportScore,
+		&item.InstitutionScore,
+		&item.WeightSupportScore,
+		&item.Direction,
+		&item.Reason,
+		&item.EvidenceJSON,
+		&item.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PolicySupportSignalDTO{}, nil
+	}
+	return item, err
+}
+
+func (app *App) ListPolicySupportCandidates(limit int) ([]PolicySupportCandidateDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []PolicySupportCandidateDTO{}, err
+	}
+	if limit <= 0 || limit > 300 {
+		limit = 80
+	}
+	var tradeDate string
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date), '') FROM policy_support_signals`).Scan(&tradeDate); err != nil {
+		return []PolicySupportCandidateDTO{}, err
+	}
+	if tradeDate == "" {
+		return []PolicySupportCandidateDTO{}, nil
+	}
+	rows, err := app.database.Conn().Query(`SELECT
+			trade_date, ts_code, name, industry, candidate_type, score, pct_chg,
+			amount_ratio, turnover_rate, institution_net_buy, reason, updated_at
+		FROM policy_support_candidates
+		WHERE trade_date = ?
+		ORDER BY score DESC
+		LIMIT ?`, tradeDate, limit)
+	if err != nil {
+		return []PolicySupportCandidateDTO{}, err
+	}
+	defer rows.Close()
+	out := make([]PolicySupportCandidateDTO, 0)
+	for rows.Next() {
+		var item PolicySupportCandidateDTO
+		if err := rows.Scan(
+			&item.TradeDate,
+			&item.TSCode,
+			&item.Name,
+			&item.Industry,
+			&item.CandidateType,
+			&item.Score,
+			&item.PctChg,
+			&item.AmountRatio,
+			&item.TurnoverRate,
+			&item.InstitutionNetBuy,
+			&item.Reason,
+			&item.UpdatedAt,
+		); err != nil {
+			return []PolicySupportCandidateDTO{}, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) GetPolicySupportAnalysisStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("policy_support_analysis")
+}
+
+func (app *App) RunPolicySupportAnalysis() error {
+	if err := app.ensureDatabase(); err != nil {
+		return err
+	}
+	if status, err := app.GetPolicySupportAnalysisStatus(); err == nil && status.State == "running" {
+		return errors.New("政策资金托底分析正在运行")
+	}
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return errors.New("数据路径未设置")
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(dataPath, "meta.db")
+	logDir := filepath.Join(dataPath, "logs", "policy_support")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(logDir, time.Now().Format("20060102_150405")+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
+		 VALUES('policy_support_analysis','running',0,5,'prepare','启动政策资金托底分析','',?,?,'')
+		 ON CONFLICT(task) DO UPDATE SET state='running', idx=0, total=5, stage='prepare', name='启动政策资金托底分析', message='', started_at=excluded.started_at, updated_at=excluded.updated_at, finished_at=''`,
+		now,
+		now,
+	)
+	args := []string{
+		"scripts/analyze_policy_support.py",
+		"--data-root", dataPath,
+		"--db-path", dbPath,
+		"--json",
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(),
+		"DATA_ROOT="+dataPath,
+		"DESKTOP_DB_PATH="+dbPath,
+		"DESKTOP_CONFIG_DB_PATH="+dbPath,
+	)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		finishedAt := time.Now().Format(time.RFC3339)
+		_, _ = app.database.Conn().Exec(
+			`UPDATE py_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='policy_support_analysis'`,
+			err.Error(),
+			finishedAt,
+			finishedAt,
+		)
+		return err
+	}
+	go app.waitPythonStatusTask(cmd, logFile, logPath, "policy_support_analysis")
+	return nil
+}
+
+func (app *App) waitPythonStatusTask(cmd *exec.Cmd, logFile *os.File, logPath string, taskName string) {
+	err := cmd.Wait()
+	_ = logFile.Close()
+	if err == nil || app.database == nil {
+		return
+	}
+	status, statusErr := app.positionService.GetRunStatus(taskName)
+	if statusErr == nil && status.State != "running" {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
+		 VALUES(?,'error',0,0,'','',?,?,?,?)
+		 ON CONFLICT(task) DO UPDATE SET state='error', message=excluded.message, updated_at=excluded.updated_at, finished_at=excluded.finished_at`,
+		taskName,
+		"分析进程已退出: "+err.Error()+"，日志: "+logPath,
+		now,
+		now,
+		now,
+	)
+}
+
 func (app *App) ListLimitBreakoutCandidates(query market.BreakoutQuery) ([]market.LimitBreakoutCandidate, error) {
 	if err := app.ensureMarketService(); err != nil {
 		return nil, err
@@ -658,6 +1057,104 @@ func (app *App) GetLimitUpMomentumRunStatus() (position.RunStatus, error) {
 		return position.RunStatus{}, err
 	}
 	return app.positionService.GetRunStatus("limit_up_momentum")
+}
+
+func (app *App) ListLimitSignalEvaluationSummary() ([]market.LimitSignalEvaluationSummary, error) {
+	if err := app.ensureMarketService(); err != nil {
+		return []market.LimitSignalEvaluationSummary{}, err
+	}
+	return app.marketService.ListLimitSignalEvaluationSummary()
+}
+
+func (app *App) GetLimitSignalEvaluationRunStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("limit_signal_evaluation")
+}
+
+func (app *App) RunLimitSignalEvaluation() error {
+	if err := app.ensureDatabase(); err != nil {
+		return err
+	}
+	if status, err := app.GetLimitSignalEvaluationRunStatus(); err == nil && status.State == "running" {
+		return errors.New("涨停策略评估正在运行")
+	}
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return errors.New("数据路径未设置")
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(dataPath, "meta.db")
+	logDir := filepath.Join(dataPath, "logs", "limit_signal_evaluation")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(logDir, time.Now().Format("20060102_150405")+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
+		 VALUES('limit_signal_evaluation','running',0,100,'prepare','启动涨停回看评估','',?,?,'')
+		 ON CONFLICT(task) DO UPDATE SET state='running', idx=0, total=100, stage='prepare',
+		 name='启动涨停回看评估', message='', started_at=excluded.started_at, updated_at=excluded.updated_at, finished_at=''`,
+		now,
+		now,
+	)
+	args := []string{
+		"scripts/evaluate_limit_signals.py",
+		"--data-path", dataPath,
+		"--db-path", dbPath,
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(),
+		"DATA_ROOT="+dataPath,
+		"DESKTOP_DB_PATH="+dbPath,
+		"DESKTOP_CONFIG_DB_PATH="+dbPath,
+	)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		finishedAt := time.Now().Format(time.RFC3339)
+		_, _ = app.database.Conn().Exec(
+			`UPDATE py_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='limit_signal_evaluation'`,
+			err.Error(),
+			finishedAt,
+			finishedAt,
+		)
+		return err
+	}
+	go app.waitLimitSignalEvaluation(cmd, logFile, logPath)
+	return nil
+}
+
+func (app *App) waitLimitSignalEvaluation(cmd *exec.Cmd, logFile *os.File, logPath string) {
+	err := cmd.Wait()
+	_ = logFile.Close()
+	if err == nil || app.database == nil {
+		return
+	}
+	status, statusErr := app.GetLimitSignalEvaluationRunStatus()
+	if statusErr == nil && status.State != "running" {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
+		 VALUES('limit_signal_evaluation','error',0,0,'','',?,?,?,?)
+		 ON CONFLICT(task) DO UPDATE SET state='error', message=excluded.message,
+		 updated_at=excluded.updated_at, finished_at=excluded.finished_at`,
+		"评估进程已退出: "+err.Error()+"，日志: "+logPath,
+		now,
+		now,
+		now,
+	)
 }
 
 func (app *App) GetPositionSummary() (position.Summary, error) {

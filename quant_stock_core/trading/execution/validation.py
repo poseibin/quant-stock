@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pandas as pd
 
-from common.infra.db import desktop_db_path
+from common.infra.db import desktop_db_path, write_transaction
 from common.config import RAW_DIR
 from research.data.storage import duckdb_query as dq
 from trading.execution import signal as sig
@@ -204,8 +203,7 @@ def persist_history(db_path: str | None = None, horizon_days: int = 1) -> list[d
     path = db_path or str(desktop_db_path())
     now = _now()
     rows: list[dict] = []
-    with sqlite3.connect(path, timeout=30.0) as conn:
-        conn.execute("PRAGMA busy_timeout=30000")
+    with write_transaction(path) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS recommendation_hindsight (

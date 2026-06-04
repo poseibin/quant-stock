@@ -21,6 +21,8 @@ from common.infra import status as run_status
 
 
 TASK_NAME = "limit_up_momentum"
+SIGNAL_TYPE = "limit_up_momentum"
+STRATEGY_VERSION = "v1"
 
 
 @dataclass
@@ -399,6 +401,64 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
             generated_at TEXT NOT NULL, updated_at TEXT NOT NULL
         )"""
     )
+    ensure_prediction_tables(conn)
+
+
+def ensure_prediction_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS limit_signal_predictions (
+            id TEXT PRIMARY KEY,
+            signal_type TEXT NOT NULL,
+            strategy_version TEXT NOT NULL DEFAULT 'v1',
+            parameter_key TEXT NOT NULL,
+            cache_key TEXT NOT NULL,
+            rank INTEGER NOT NULL DEFAULT 0,
+            ts_code TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            industry TEXT NOT NULL DEFAULT '',
+            signal_date TEXT NOT NULL,
+            signal_price REAL NOT NULL DEFAULT 0,
+            score REAL NOT NULL DEFAULT 0,
+            recommendation TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            ret_1d REAL,
+            ret_3d REAL,
+            ret_5d REAL,
+            ret_10d REAL,
+            max_drawdown_5d REAL,
+            hit_limit_up_5d INTEGER,
+            target_hit INTEGER,
+            outcome_json TEXT NOT NULL DEFAULT '{}',
+            evaluated_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(signal_type, parameter_key, ts_code, signal_date)
+        )"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_limit_signal_predictions_type_date
+           ON limit_signal_predictions(signal_type, signal_date)"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS limit_signal_evaluation_summary (
+            signal_type TEXT NOT NULL,
+            strategy_version TEXT NOT NULL DEFAULT 'v1',
+            parameter_key TEXT NOT NULL,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            pending_count INTEGER NOT NULL DEFAULT 0,
+            hit_rate REAL NOT NULL DEFAULT 0,
+            avg_return_1d REAL NOT NULL DEFAULT 0,
+            avg_return_3d REAL NOT NULL DEFAULT 0,
+            avg_return_5d REAL NOT NULL DEFAULT 0,
+            avg_return_10d REAL NOT NULL DEFAULT 0,
+            avg_max_drawdown_5d REAL NOT NULL DEFAULT 0,
+            avg_score REAL NOT NULL DEFAULT 0,
+            recommendation TEXT NOT NULL DEFAULT '',
+            parameter_hint TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(signal_type, strategy_version, parameter_key)
+        )"""
+    )
 
 
 def write_cache(db_path: Path, cache_key: str, items: list[MomentumCandidate]) -> None:
@@ -422,6 +482,32 @@ def write_cache(db_path: Path, cache_key: str, items: list[MomentumCandidate]) -
                 cache_key, rank, ts_code, trade_date, score, payload_json, generated_at, updated_at
             ) VALUES(?,?,?,?,?,?,?,?)""",
             rows,
+        )
+        prediction_rows = []
+        for idx, item in enumerate(items, start=1):
+            payload = json.dumps(asdict(item), ensure_ascii=False, separators=(",", ":"))
+            pred_id = f"{SIGNAL_TYPE}:{cache_key}:{item.ts_code}:{item.trade_date}"
+            prediction_rows.append((
+                pred_id, SIGNAL_TYPE, STRATEGY_VERSION, cache_key, cache_key, idx,
+                item.ts_code, item.name, item.industry, item.trade_date, item.close, item.score,
+                item.recommendation, payload, ts, ts,
+            ))
+        conn.executemany(
+            """INSERT INTO limit_signal_predictions(
+                id, signal_type, strategy_version, parameter_key, cache_key, rank, ts_code,
+                name, industry, signal_date, signal_price, score, recommendation, payload_json,
+                created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(signal_type, parameter_key, ts_code, signal_date) DO UPDATE SET
+                rank=excluded.rank,
+                name=excluded.name,
+                industry=excluded.industry,
+                signal_price=excluded.signal_price,
+                score=excluded.score,
+                recommendation=excluded.recommendation,
+                payload_json=excluded.payload_json,
+                updated_at=excluded.updated_at""",
+            prediction_rows,
         )
 
 

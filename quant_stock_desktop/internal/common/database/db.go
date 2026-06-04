@@ -29,6 +29,19 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
+	conn.SetConnMaxLifetime(0)
+	for _, pragma := range []string{
+		"PRAGMA busy_timeout=30000",
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA foreign_keys=ON",
+	} {
+		if _, err := conn.Exec(pragma); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("%s: %w", pragma, err)
+		}
+	}
 	db := &DB{conn: conn}
 	if err := db.Migrate(); err != nil {
 		_ = conn.Close()
@@ -449,6 +462,72 @@ func (db *DB) Migrate() error {
 			UNIQUE(strategy, strategy_version, param_set)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_parameter_experiments_strategy ON parameter_experiments(strategy, strategy_version);`,
+		`CREATE TABLE IF NOT EXISTS state_team_holder_snapshots (
+			ts_code TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			industry TEXT NOT NULL DEFAULT '',
+			end_date TEXT NOT NULL,
+			ann_date TEXT NOT NULL DEFAULT '',
+			holder_count INTEGER NOT NULL DEFAULT 0,
+			hold_amount REAL NOT NULL DEFAULT 0,
+			hold_ratio REAL NOT NULL DEFAULT 0,
+			hold_float_ratio REAL NOT NULL DEFAULT 0,
+			holders TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(ts_code, end_date)
+		);`,
+		`CREATE TABLE IF NOT EXISTS state_team_holder_changes (
+			ts_code TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			industry TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL,
+			current_period TEXT NOT NULL,
+			previous_period TEXT NOT NULL,
+			current_holder_count INTEGER NOT NULL DEFAULT 0,
+			previous_holder_count INTEGER NOT NULL DEFAULT 0,
+			current_hold_amount REAL NOT NULL DEFAULT 0,
+			previous_hold_amount REAL NOT NULL DEFAULT 0,
+			current_hold_ratio REAL NOT NULL DEFAULT 0,
+			previous_hold_ratio REAL NOT NULL DEFAULT 0,
+			hold_ratio_delta REAL NOT NULL DEFAULT 0,
+			current_float_ratio REAL NOT NULL DEFAULT 0,
+			previous_float_ratio REAL NOT NULL DEFAULT 0,
+			current_holders TEXT NOT NULL DEFAULT '',
+			previous_holders TEXT NOT NULL DEFAULT '',
+			note TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(ts_code, current_period, previous_period)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_state_team_changes_period_action ON state_team_holder_changes(current_period, action);`,
+		`CREATE TABLE IF NOT EXISTS policy_support_signals (
+			trade_date TEXT PRIMARY KEY,
+			signal_level TEXT NOT NULL,
+			total_score REAL NOT NULL DEFAULT 0,
+			market_stress_score REAL NOT NULL DEFAULT 0,
+			support_score REAL NOT NULL DEFAULT 0,
+			institution_score REAL NOT NULL DEFAULT 0,
+			weight_support_score REAL NOT NULL DEFAULT 0,
+			direction TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			evidence_json TEXT NOT NULL DEFAULT '{}',
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS policy_support_candidates (
+			trade_date TEXT NOT NULL,
+			ts_code TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			industry TEXT NOT NULL DEFAULT '',
+			candidate_type TEXT NOT NULL DEFAULT '',
+			score REAL NOT NULL DEFAULT 0,
+			pct_chg REAL NOT NULL DEFAULT 0,
+			amount_ratio REAL NOT NULL DEFAULT 0,
+			turnover_rate REAL NOT NULL DEFAULT 0,
+			institution_net_buy REAL NOT NULL DEFAULT 0,
+			reason TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(trade_date, ts_code)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_support_candidates_score ON policy_support_candidates(trade_date, score DESC);`,
 		`CREATE TABLE IF NOT EXISTS py_run_lock (
 			name TEXT PRIMARY KEY,
 			pid INTEGER NOT NULL,

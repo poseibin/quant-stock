@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import os
 import signal
-import sqlite3
 import sys
 import time
 from dataclasses import dataclass
@@ -19,6 +18,12 @@ from typing import Any
 
 import pandas as pd
 import requests
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from common.infra.db import connect_db
 
 TASK = "data_update"
 DATA_START_DATE = "20100101"
@@ -47,6 +52,7 @@ DATASETS: dict[str, DatasetSpec] = {
     "fina_indicator": DatasetSpec("fina_indicator", "finance", "year", ("ts_code", "end_date"), "end_date"),
     "forecast": DatasetSpec("forecast", "finance", "year", ("ts_code", "ann_date", "end_date"), "ann_date"),
     "stk_holdertrade": DatasetSpec("stk_holdertrade", "event", "year", ("ts_code", "ann_date", "holder_name", "in_de"), "ann_date"),
+    "top10_holders": DatasetSpec("top10_holders", "event", "year", ("ts_code", "end_date", "holder_name"), "end_date"),
     "top_list": DatasetSpec("top_list", "event", "year", ("ts_code", "trade_date", "reason"), "trade_date"),
     "top_inst": DatasetSpec("top_inst", "event", "year", ("ts_code", "trade_date", "exalter", "reason"), "trade_date"),
 }
@@ -55,7 +61,7 @@ PHASES: dict[str, list[str]] = {
     "basic": ["stock_basic", "trade_cal"],
     "price": ["daily", "daily_basic", "adj_factor"],
     "finance": ["income", "balancesheet", "cashflow", "fina_indicator", "forecast"],
-    "event": ["stk_holdertrade", "top_list", "top_inst"],
+    "event": ["stk_holdertrade", "top10_holders", "top_list", "top_inst"],
 }
 
 API_INTERVAL = {
@@ -75,6 +81,7 @@ API_INTERVAL = {
     "forecast": 2.0,
     "forecast_vip": 2.0,
     "stk_holdertrade": 2.5,
+    "top10_holders": 2.5,
     "top_list": 2.0,
     "top_inst": 2.0,
 }
@@ -190,9 +197,7 @@ def year_ranges_between(start: str, end: str) -> list[tuple[str, str]]:
 class StatusStore:
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(db_path), timeout=30.0, isolation_level=None)
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA busy_timeout=30000")
+        self.conn = connect_db(db_path, isolation_level=None)
         self.ensure_tables()
 
     def ensure_tables(self) -> None:
@@ -448,6 +453,8 @@ class Worker:
             return self.update_ann_range(name, ["forecast_vip", "forecast"])
         if name == "stk_holdertrade":
             return self.update_ann_range(name, ["stk_holdertrade"])
+        if name == "top10_holders":
+            return self.update_top10_holders()
         if name in ("top_list", "top_inst"):
             return self.update_by_trade_date(name, backfill_history=False)
         raise RuntimeError(f"unknown dataset {name}")
@@ -470,6 +477,49 @@ class Worker:
         )
         self.status.dataset_progress("trade_cal", 1, 1, f"rows={len(df)}")
         return self.store.write_upsert("trade_cal", df, overwrite=True)
+
+    def update_top10_holders(self) -> int:
+        start = self.store.latest_date("top10_holders", "end_date")
+        if start:
+            start = shift_date(start, -120)
+        else:
+            # top10_holders requires ts_code, so an all-history first run would
+            # call the API once per stock over many years. Keep the default
+            # first run practical; pass --start-date for deeper backfill.
+            start = self.start_date or shift_date(today(), -760)
+        end = today()
+        if start > end:
+            return 0
+        stock_basic = self.store.read_file(self.store.file_path("stock_basic"))
+        if stock_basic.empty or "ts_code" not in stock_basic.columns:
+            raise RuntimeError("top10_holders 需要 stock_basic 股票列表，请先更新股票基础信息")
+        if "list_status" in stock_basic.columns:
+            stock_basic = stock_basic[stock_basic["list_status"].astype(str).isin(["L", "P"])]
+        stocks = sorted({str(v).strip() for v in stock_basic["ts_code"].dropna().tolist() if str(v).strip()})
+        if not stocks:
+            raise RuntimeError("top10_holders 未找到可查询股票代码")
+        total = 0
+        soft_errors: list[str] = []
+        fields = "ts_code,ann_date,end_date,holder_name,hold_amount,hold_ratio,hold_float_ratio,hold_change,holder_type"
+        for i, ts_code in enumerate(stocks, start=1):
+            self.status.dataset_progress("top10_holders", i, len(stocks), f"{ts_code} {start}..{end} rows={total}")
+            try:
+                df = self.client.call_paged(
+                    "top10_holders",
+                    {"ts_code": ts_code, "start_date": start, "end_date": end},
+                    fields,
+                )
+            except Exception as exc:
+                if is_hard_limit(exc):
+                    raise TushareError(f"top10_holders {ts_code} {exc}") from exc
+                soft_errors.append(f"{ts_code}: {exc}")
+                continue
+            if not df.empty:
+                total += self.store.write_upsert("top10_holders", df)
+        if total == 0 and soft_errors:
+            raise RuntimeError("; ".join(soft_errors[:5]))
+        self.status.dataset_progress("top10_holders", len(stocks), len(stocks), f"rows={total}")
+        return total
 
     def trade_dates(self, start: str, end: str) -> list[str]:
         df = self.store.read_file(self.store.file_path("trade_cal"))

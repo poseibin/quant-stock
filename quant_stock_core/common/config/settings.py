@@ -47,6 +47,7 @@ DATASETS = {
     "cashflow":      {"partition": "year"},
     "fina_indicator": {"partition": "year"},
     "forecast":      {"partition": "year"},
+    "top10_holders": {"partition": "year"},
     "stk_holdertrade": {"partition": "year"},
     "top_list":      {"partition": "year"},
     "top_inst":      {"partition": "year"},

@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.config.desktop_settings import load_portfolio_risk, load_strategy_settings
+from common.infra.db import write_transaction
 from common.utils import get_logger
 from trading.backtest import BacktestConfig, CostModel, run as bt_run
 from trading.strategy import registry
@@ -324,7 +325,7 @@ def _resolve_db_path(value: str | None) -> Path:
 def save_portfolio_optimization(db_path: Path, run_id: str, payload: dict[str, Any]) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     generated_at = pd.Timestamp.now().isoformat()
-    with sqlite3.connect(str(db_path), timeout=30.0) as conn:
+    with write_transaction(db_path) as conn:
         _ensure_tables(conn)
         conn.execute("DELETE FROM portfolio_optimization_candidates WHERE run_id = ?", (run_id,))
         conn.execute(

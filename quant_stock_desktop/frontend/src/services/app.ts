@@ -32,12 +32,22 @@ declare global {
           ListDailyBars: (query: DailyQuery) => Promise<DailyBar[]>
           ListFinancialIndicators: (query: FinancialQuery) => Promise<FinancialIndicator[]>
           GetStockValuation: (query: ValuationQuery) => Promise<StockValuation>
+          GetLatestPolicySupportSignal: () => Promise<PolicySupportSignal>
+          ListPolicySupportCandidates: (limit: number) => Promise<PolicySupportCandidate[]>
+          RunPolicySupportAnalysis: () => Promise<void>
+          GetPolicySupportAnalysisStatus: () => Promise<RunStatus>
+          ListStateTeamHolderChanges: (query: StateTeamQuery) => Promise<StateTeamChange[]>
+          RunStateTeamAnalysis: () => Promise<void>
+          GetStateTeamAnalysisStatus: () => Promise<RunStatus>
           ListLimitBreakoutCandidates: (query: BreakoutQuery) => Promise<LimitBreakoutCandidate[]>
           RefreshLimitBreakoutCandidates: (query: BreakoutQuery) => Promise<LimitBreakoutCandidate[]>
           GetLimitBreakoutRunStatus: () => Promise<RunStatus>
           ListLimitUpMomentumCandidates: (query: LimitUpMomentumQuery) => Promise<LimitUpMomentumCandidate[]>
           RefreshLimitUpMomentumCandidates: (query: LimitUpMomentumQuery) => Promise<LimitUpMomentumCandidate[]>
           GetLimitUpMomentumRunStatus: () => Promise<RunStatus>
+          RunLimitSignalEvaluation: () => Promise<void>
+          GetLimitSignalEvaluationRunStatus: () => Promise<RunStatus>
+          ListLimitSignalEvaluationSummary: () => Promise<LimitSignalEvaluationSummary[]>
           GetPositionSummary: () => Promise<PositionSummary>
           GetPositionHistory: () => Promise<PositionHistoryPoint[]>
           GetPositionHoldings: () => Promise<PositionItem[]>
@@ -549,6 +559,24 @@ export interface LimitUpMomentumCandidate {
   projected_bars?: BreakoutBar[]
 }
 
+export interface LimitSignalEvaluationSummary {
+  signal_type: string
+  strategy_version: string
+  parameter_key: string
+  sample_count: number
+  pending_count: number
+  hit_rate: number
+  avg_return_1d: number
+  avg_return_3d: number
+  avg_return_5d: number
+  avg_return_10d: number
+  avg_max_drawdown_5d: number
+  avg_score: number
+  recommendation: string
+  parameter_hint: string
+  updated_at: string
+}
+
 export async function getAppInfo(): Promise<AppInfo> {
   if (window.go?.main?.App?.GetAppInfo) {
     return window.go.main.App.GetAppInfo()
@@ -841,6 +869,112 @@ export async function getStockValuation(query: ValuationQuery): Promise<StockVal
   return null
 }
 
+export interface PolicySupportSignal {
+  trade_date: string
+  signal_level: string
+  total_score: number
+  market_stress_score: number
+  support_score: number
+  institution_score: number
+  weight_support_score: number
+  direction: string
+  reason: string
+  evidence_json: string
+  updated_at: string
+}
+
+export interface PolicySupportCandidate {
+  trade_date: string
+  ts_code: string
+  name: string
+  industry: string
+  candidate_type: string
+  score: number
+  pct_chg: number
+  amount_ratio: number
+  turnover_rate: number
+  institution_net_buy: number
+  reason: string
+  updated_at: string
+}
+
+export async function getLatestPolicySupportSignal(): Promise<PolicySupportSignal | null> {
+  if (window.go?.main?.App?.GetLatestPolicySupportSignal) {
+    const signal = await window.go.main.App.GetLatestPolicySupportSignal()
+    return signal?.trade_date ? signal : null
+  }
+  return null
+}
+
+export async function listPolicySupportCandidates(limit = 80): Promise<PolicySupportCandidate[]> {
+  if (window.go?.main?.App?.ListPolicySupportCandidates) {
+    return (await window.go.main.App.ListPolicySupportCandidates(limit)) || []
+  }
+  return []
+}
+
+export async function runPolicySupportAnalysis(): Promise<void> {
+  if (window.go?.main?.App?.RunPolicySupportAnalysis) {
+    await window.go.main.App.RunPolicySupportAnalysis()
+  }
+}
+
+export async function getPolicySupportAnalysisStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetPolicySupportAnalysisStatus) {
+    return window.go.main.App.GetPolicySupportAnalysisStatus()
+  }
+  return { task: 'policy_support_analysis', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+}
+
+export interface StateTeamQuery {
+  period?: string
+  action?: string
+  keyword?: string
+  limit?: number
+}
+
+export interface StateTeamChange {
+  ts_code: string
+  name: string
+  industry: string
+  action: string
+  current_period: string
+  previous_period: string
+  current_holder_count: number
+  previous_holder_count: number
+  current_hold_amount: number
+  previous_hold_amount: number
+  current_hold_ratio: number
+  previous_hold_ratio: number
+  hold_ratio_delta: number
+  current_float_ratio: number
+  previous_float_ratio: number
+  current_holders: string
+  previous_holders: string
+  note: string
+  updated_at: string
+}
+
+export async function listStateTeamHolderChanges(query: StateTeamQuery = {}): Promise<StateTeamChange[]> {
+  if (window.go?.main?.App?.ListStateTeamHolderChanges) {
+    return (await window.go.main.App.ListStateTeamHolderChanges(query)) || []
+  }
+  return []
+}
+
+export async function runStateTeamAnalysis(): Promise<void> {
+  if (window.go?.main?.App?.RunStateTeamAnalysis) {
+    await window.go.main.App.RunStateTeamAnalysis()
+  }
+}
+
+export async function getStateTeamAnalysisStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetStateTeamAnalysisStatus) {
+    return window.go.main.App.GetStateTeamAnalysisStatus()
+  }
+  return { task: 'state_team_analysis', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+}
+
 export async function listLimitBreakoutCandidates(query: BreakoutQuery = {}): Promise<LimitBreakoutCandidate[]> {
   if (window.go?.main?.App?.ListLimitBreakoutCandidates) {
     return (await window.go.main.App.ListLimitBreakoutCandidates(query)) || []
@@ -1076,6 +1210,26 @@ export async function getLimitUpMomentumRunStatus(): Promise<RunStatus> {
     return window.go.main.App.GetLimitUpMomentumRunStatus()
   }
   return { task: 'limit_up_momentum', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+}
+
+export async function runLimitSignalEvaluation(): Promise<void> {
+  if (window.go?.main?.App?.RunLimitSignalEvaluation) {
+    return window.go.main.App.RunLimitSignalEvaluation()
+  }
+}
+
+export async function getLimitSignalEvaluationRunStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetLimitSignalEvaluationRunStatus) {
+    return window.go.main.App.GetLimitSignalEvaluationRunStatus()
+  }
+  return { task: 'limit_signal_evaluation', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+}
+
+export async function listLimitSignalEvaluationSummary(): Promise<LimitSignalEvaluationSummary[]> {
+  if (window.go?.main?.App?.ListLimitSignalEvaluationSummary) {
+    return (await window.go.main.App.ListLimitSignalEvaluationSummary()) || []
+  }
+  return []
 }
 
 export async function previewDataset(query: DatasetPreviewQuery): Promise<DatasetPreview> {

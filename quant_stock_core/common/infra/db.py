@@ -9,9 +9,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from common.config.settings import DATA_ROOT
 
@@ -27,9 +29,58 @@ def open_db() -> sqlite3.Connection:
     path = desktop_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=30.0, isolation_level=None)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
+    configure_connection(conn)
     return conn
+
+
+def configure_connection(conn: sqlite3.Connection) -> sqlite3.Connection:
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def connect_db(path: str | Path | None = None, *, isolation_level: str | None = None) -> sqlite3.Connection:
+    db_path = Path(path).expanduser().resolve() if path else desktop_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), timeout=30.0, isolation_level=isolation_level)
+    return configure_connection(conn)
+
+
+@contextmanager
+def write_transaction(
+    path: str | Path | None = None,
+    *,
+    retries: int = 5,
+    retry_delay: float = 0.25,
+) -> Iterator[sqlite3.Connection]:
+    conn: sqlite3.Connection | None = None
+    for attempt in range(retries + 1):
+        candidate = connect_db(path, isolation_level=None)
+        try:
+            candidate.execute("BEGIN IMMEDIATE")
+            conn = candidate
+            break
+        except sqlite3.OperationalError as exc:
+            candidate.close()
+            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                raise
+            if attempt >= retries:
+                raise
+            time.sleep(retry_delay * (attempt + 1))
+    if conn is None:
+        raise sqlite3.OperationalError("failed to begin sqlite write transaction")
+    try:
+        yield conn
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        conn.close()
 
 
 def _now() -> str:

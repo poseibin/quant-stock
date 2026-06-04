@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.config.desktop_settings import load_strategy_settings
+from common.infra.db import write_transaction
 from common.utils import get_logger
 from research.data.storage import duckdb_query as dq
 from trading.backtest import BacktestConfig, CostModel, run as bt_run
@@ -450,7 +451,7 @@ def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]
     benchmark = str(payload.get("benchmark") or "")
     baseline = str(payload.get("baseline") or "")
     rows = list(payload.get("rows") or [])
-    with sqlite3.connect(str(db_path), timeout=30.0) as conn:
+    with write_transaction(db_path) as conn:
         _ensure_strategy_evaluation_table(conn)
         if delete_existing:
             conn.execute("DELETE FROM strategy_evaluation WHERE run_id = ?", (run_id,))
