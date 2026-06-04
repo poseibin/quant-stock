@@ -247,6 +247,12 @@ export interface GovernanceDashboard {
   promotion: PromotionDecision[]
   walk: WalkForwardWindow[]
   params: ParameterExperiment[]
+  data_quality: Record<string, unknown>
+  parameter_recommendations: Array<Record<string, unknown>>
+  retirement: Array<Record<string, unknown>>
+  portfolio_attribution: Array<Record<string, unknown>>
+  recovery: Record<string, unknown>
+  reports: ResearchReport[]
 }
 
 export interface ValidationIssue {
@@ -694,14 +700,31 @@ export async function refreshGovernanceAudit(): Promise<GovernanceDashboard> {
   if (window.go?.main?.App?.RefreshGovernanceAudit) {
     return window.go.main.App.RefreshGovernanceAudit()
   }
-  return { hindsight: [], risk: [], paper: [], promotion: [], walk: [], params: [] }
+  return emptyGovernanceDashboard()
 }
 
 export async function listGovernanceDashboard(): Promise<GovernanceDashboard> {
   if (window.go?.main?.App?.ListGovernanceDashboard) {
     return window.go.main.App.ListGovernanceDashboard()
   }
-  return { hindsight: [], risk: [], paper: [], promotion: [], walk: [], params: [] }
+  return emptyGovernanceDashboard()
+}
+
+function emptyGovernanceDashboard(): GovernanceDashboard {
+  return {
+    hindsight: [],
+    risk: [],
+    paper: [],
+    promotion: [],
+    walk: [],
+    params: [],
+    data_quality: {},
+    parameter_recommendations: [],
+    retirement: [],
+    portfolio_attribution: [],
+    recovery: {},
+    reports: []
+  }
 }
 
 export async function analyzePortfolioTask(id: string): Promise<TaskDTO> {

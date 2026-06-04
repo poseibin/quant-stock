@@ -243,12 +243,18 @@ type ParameterExperimentDTO struct {
 }
 
 type GovernanceDashboardDTO struct {
-	Hindsight []RecommendationHindsightDTO `json:"hindsight"`
-	Risk      []RiskExposureDTO            `json:"risk"`
-	Paper     []PaperTradingLogDTO         `json:"paper"`
-	Promotion []PromotionDecisionDTO       `json:"promotion"`
-	Walk      []WalkForwardWindowDTO       `json:"walk"`
-	Params    []ParameterExperimentDTO     `json:"params"`
+	Hindsight                []RecommendationHindsightDTO `json:"hindsight"`
+	Risk                     []RiskExposureDTO            `json:"risk"`
+	Paper                    []PaperTradingLogDTO         `json:"paper"`
+	Promotion                []PromotionDecisionDTO       `json:"promotion"`
+	Walk                     []WalkForwardWindowDTO       `json:"walk"`
+	Params                   []ParameterExperimentDTO     `json:"params"`
+	DataQuality              map[string]any               `json:"data_quality"`
+	ParameterRecommendations []map[string]any             `json:"parameter_recommendations"`
+	Retirement               []map[string]any             `json:"retirement"`
+	PortfolioAttribution     []map[string]any             `json:"portfolio_attribution"`
+	Recovery                 map[string]any               `json:"recovery"`
+	Reports                  []ResearchReportDTO          `json:"reports"`
 }
 
 func (app *App) GetAppInfo() AppInfo {
@@ -2518,8 +2524,14 @@ func (app *App) RefreshGovernanceAudit() (GovernanceDashboardDTO, error) {
 	if err := app.refreshWalkForwardAndParameterExperiments(); err != nil {
 		return GovernanceDashboardDTO{}, err
 	}
-	app.saveResearchReport("governance", "latest", "governance_audit", "量化治理审计", "已刷新多周期推荐回看、风险暴露、模拟盘信号日志和策略晋级决策。", map[string]any{"refreshed_at": time.Now().Format(time.RFC3339)})
-	return app.ListGovernanceDashboard()
+	dashboard, err := app.ListGovernanceDashboard()
+	if err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	report := app.buildGovernanceAuditReport(dashboard)
+	app.saveResearchReport("governance", "latest", "governance_audit", "量化治理审计", report, map[string]any{"refreshed_at": time.Now().Format(time.RFC3339), "dashboard": dashboard})
+	dashboard.Reports, _ = app.listResearchReports("governance", "latest", 6)
+	return dashboard, nil
 }
 
 func (app *App) ListRecommendationHindsight() ([]RecommendationHindsightDTO, error) {
@@ -2580,7 +2592,25 @@ func (app *App) ListGovernanceDashboard() (GovernanceDashboardDTO, error) {
 	if err != nil {
 		return GovernanceDashboardDTO{}, err
 	}
-	return GovernanceDashboardDTO{Hindsight: hindsight, Risk: risk, Paper: paper, Promotion: promotion, Walk: walk, Params: params}, nil
+	dataQuality, err := app.dataQualitySummary()
+	if err != nil {
+		return GovernanceDashboardDTO{}, err
+	}
+	reports, _ := app.listResearchReports("governance", "latest", 6)
+	return GovernanceDashboardDTO{
+		Hindsight:                hindsight,
+		Risk:                     risk,
+		Paper:                    paper,
+		Promotion:                promotion,
+		Walk:                     walk,
+		Params:                   params,
+		DataQuality:              dataQuality,
+		ParameterRecommendations: app.parameterRecommendations(params),
+		Retirement:               app.retirementDecisions(promotion, walk, params),
+		PortfolioAttribution:     app.portfolioAttribution(risk),
+		Recovery:                 app.recoverySummary(),
+		Reports:                  reports,
+	}, nil
 }
 
 func (app *App) ListValidationEvidence(query ValidationEvidenceQuery) (ValidationEvidenceDTO, error) {
@@ -3041,6 +3071,323 @@ func (app *App) listPromotionDecisions() ([]PromotionDecisionDTO, error) {
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (app *App) dataQualitySummary() (map[string]any, error) {
+	rows, err := app.database.Conn().Query(`SELECT data_type, COUNT(*), COALESCE(SUM(row_count), 0), COALESCE(MAX(updated_at), '') FROM market_data_files GROUP BY data_type ORDER BY data_type`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	datasets := map[string]any{}
+	for rows.Next() {
+		var dataType, updatedAt string
+		var files int
+		var rowCount int64
+		if err := rows.Scan(&dataType, &files, &rowCount, &updatedAt); err != nil {
+			return nil, err
+		}
+		datasets[dataType] = map[string]any{"files": files, "rows": rowCount, "updated_at": updatedAt}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	required := stringListFromAny(app.governanceRules()["data_quality_required"])
+	if len(required) == 0 {
+		required = []string{"stock_basic", "daily"}
+	}
+	missing := []string{}
+	for _, name := range required {
+		item, ok := datasets[name].(map[string]any)
+		if !ok || int64(floatValue(item["rows"], 0)) <= 0 {
+			missing = append(missing, name)
+		}
+	}
+	status := "pass"
+	if len(missing) > 0 {
+		status = "blocked"
+	}
+	return map[string]any{"status": status, "required": required, "missing": missing, "datasets": datasets, "checked_at": time.Now().Format(time.RFC3339)}, nil
+}
+
+func (app *App) parameterRecommendations(params []ParameterExperimentDTO) []map[string]any {
+	type agg struct {
+		Strategy string
+		Total    int
+		Stable   int
+		Best     ParameterExperimentDTO
+		HasBest  bool
+		Values   map[string][]float64
+	}
+	groups := map[string]*agg{}
+	for _, item := range params {
+		group := groups[item.Strategy]
+		if group == nil {
+			group = &agg{Strategy: item.Strategy, Values: map[string][]float64{}}
+			groups[item.Strategy] = group
+		}
+		group.Total++
+		if !group.HasBest || item.Score > group.Best.Score {
+			group.Best = item
+			group.HasBest = true
+		}
+		if item.Status != "stable" && item.Status != "pass" {
+			continue
+		}
+		group.Stable++
+		flattenNumericParams("", item.Params, group.Values)
+	}
+	out := make([]map[string]any, 0, len(groups))
+	for _, group := range groups {
+		ranges := []map[string]any{}
+		for key, values := range group.Values {
+			if len(values) == 0 {
+				continue
+			}
+			sort.Float64s(values)
+			ranges = append(ranges, map[string]any{"path": key, "min": values[0], "max": values[len(values)-1], "samples": len(values)})
+		}
+		sort.Slice(ranges, func(i, j int) bool { return fmt.Sprint(ranges[i]["path"]) < fmt.Sprint(ranges[j]["path"]) })
+		recommendation := "继续研究"
+		if group.Total > 0 && float64(group.Stable)/float64(group.Total) >= numberParam(app.governanceRules(), "min_parameter_stable_rate", 0.5) {
+			recommendation = "参数区间稳定，可进入下一轮样本外验证"
+		}
+		out = append(out, map[string]any{"strategy": group.Strategy, "total": group.Total, "stable": group.Stable, "stable_rate": safeRatio(group.Stable, group.Total), "best_param_set": group.Best.ParamSet, "best_score": group.Best.Score, "ranges": ranges, "recommendation": recommendation})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return floatValue(out[i]["stable_rate"], 0) > floatValue(out[j]["stable_rate"], 0)
+	})
+	return out
+}
+
+func (app *App) retirementDecisions(promotions []PromotionDecisionDTO, walk []WalkForwardWindowDTO, params []ParameterExperimentDTO) []map[string]any {
+	walkStats := statusRatesByStrategyFromWalk(walk)
+	paramStats := statusRatesByStrategyFromParams(params)
+	out := []map[string]any{}
+	for _, item := range promotions {
+		walkRate := floatValue(walkStats[item.Strategy]["pass_rate"], 0)
+		paramRate := floatValue(paramStats[item.Strategy]["stable_rate"], 0)
+		action := "保留观察"
+		reason := item.Reason
+		if item.RecommendedStatus == "rejected" || (item.Score > 0 && item.Score < numberParam(app.governanceRules(), "min_research_score", 0.55)) {
+			action = "建议退役"
+			reason = "晋级分低于研究门槛"
+		} else if floatValue(walkStats[item.Strategy]["total"], 0) >= 2 && walkRate < 0.34 {
+			action = "降权复核"
+			reason = "walk-forward 多窗口通过率偏低"
+		} else if floatValue(paramStats[item.Strategy]["total"], 0) >= 3 && paramRate < 0.34 {
+			action = "冻结参数"
+			reason = "参数邻域稳定性不足"
+		}
+		out = append(out, map[string]any{"strategy": item.Strategy, "version": item.StrategyVersion, "action": action, "score": item.Score, "walk_pass_rate": walkRate, "parameter_stable_rate": paramRate, "reason": reason})
+	}
+	sort.Slice(out, func(i, j int) bool { return fmt.Sprint(out[i]["action"]) > fmt.Sprint(out[j]["action"]) })
+	return out
+}
+
+func (app *App) portfolioAttribution(risk []RiskExposureDTO) []map[string]any {
+	if len(risk) == 0 {
+		return []map[string]any{}
+	}
+	out := []map[string]any{}
+	for name, raw := range risk[0].Strategy {
+		weight := floatValue(raw, 0)
+		if weight == 0 {
+			continue
+		}
+		out = append(out, map[string]any{"strategy": name, "weight": weight, "as_of_date": risk[0].AsOfDate})
+	}
+	sort.Slice(out, func(i, j int) bool { return floatValue(out[i]["weight"], 0) > floatValue(out[j]["weight"], 0) })
+	return out
+}
+
+func (app *App) recoverySummary() map[string]any {
+	statuses := map[string]int{}
+	total := 0
+	retryable := 0
+	blocked := 0
+	rows, err := app.database.Conn().Query(`SELECT status, attempt, max_attempts FROM evaluation_tasks WHERE task_type IN (?, ?, ?, ?, ?)`,
+		string(task.TypeEvaluationTimeMachine), string(task.TypeStrategyEvaluation), string(task.TypePortfolioOptimization), string(task.TypeWalkForwardEvaluation), string(task.TypeParameterExperiment))
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var status string
+			var attempt, maxAttempts int
+			if err := rows.Scan(&status, &attempt, &maxAttempts); err != nil {
+				continue
+			}
+			total++
+			statuses[status]++
+			if status == string(task.StatusFailed) && (maxAttempts <= 0 || attempt < maxAttempts) {
+				retryable++
+			}
+			if status == string(task.StatusFailed) && maxAttempts > 0 && attempt >= maxAttempts {
+				blocked++
+			}
+		}
+	}
+	return map[string]any{"total": total, "statuses": statuses, "retryable_failed": retryable, "blocked_failed": blocked, "checked_at": time.Now().Format(time.RFC3339)}
+}
+
+func (app *App) listResearchReports(subjectType string, subjectID string, limit int) ([]ResearchReportDTO, error) {
+	if limit <= 0 {
+		limit = 6
+	}
+	query := `SELECT id, subject_type, subject_id, report_type, title, model, content_md, COALESCE(payload_json, '{}'), created_at FROM research_reports`
+	where := []string{}
+	args := []any{}
+	if subjectType != "" {
+		where = append(where, "subject_type = ?")
+		args = append(args, subjectType)
+	}
+	if subjectID != "" {
+		where = append(where, "subject_id = ?")
+		args = append(args, subjectID)
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY datetime(created_at) DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := app.database.Conn().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ResearchReportDTO{}
+	for rows.Next() {
+		var item ResearchReportDTO
+		var payloadJSON string
+		if err := rows.Scan(&item.ID, &item.SubjectType, &item.SubjectID, &item.ReportType, &item.Title, &item.Model, &item.ContentMD, &payloadJSON, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.Payload = map[string]any{}
+		_ = json.Unmarshal([]byte(payloadJSON), &item.Payload)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func flattenNumericParams(prefix string, value any, out map[string][]float64) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			next := key
+			if prefix != "" {
+				next = prefix + "." + key
+			}
+			flattenNumericParams(next, item, out)
+		}
+	case float64, float32, int, int64, json.Number:
+		if prefix != "" {
+			out[prefix] = append(out[prefix], floatValue(typed, 0))
+		}
+	}
+}
+
+func statusRatesByStrategyFromWalk(rows []WalkForwardWindowDTO) map[string]map[string]any {
+	stats := map[string]map[string]any{}
+	for _, row := range rows {
+		strategy := strings.Split(row.SubjectID, "@")[0]
+		if strategy == "" {
+			strategy = row.SubjectID
+		}
+		item := stats[strategy]
+		if item == nil {
+			item = map[string]any{"total": 0, "pass": 0}
+			stats[strategy] = item
+		}
+		item["total"] = int(floatValue(item["total"], 0)) + 1
+		if row.Status == "pass" {
+			item["pass"] = int(floatValue(item["pass"], 0)) + 1
+		}
+		item["pass_rate"] = safeRatio(int(floatValue(item["pass"], 0)), int(floatValue(item["total"], 0)))
+	}
+	return stats
+}
+
+func statusRatesByStrategyFromParams(rows []ParameterExperimentDTO) map[string]map[string]any {
+	stats := map[string]map[string]any{}
+	for _, row := range rows {
+		item := stats[row.Strategy]
+		if item == nil {
+			item = map[string]any{"total": 0, "stable": 0}
+			stats[row.Strategy] = item
+		}
+		item["total"] = int(floatValue(item["total"], 0)) + 1
+		if row.Status == "stable" || row.Status == "pass" {
+			item["stable"] = int(floatValue(item["stable"], 0)) + 1
+		}
+		item["stable_rate"] = safeRatio(int(floatValue(item["stable"], 0)), int(floatValue(item["total"], 0)))
+	}
+	return stats
+}
+
+func safeRatio(numerator int, denominator int) any {
+	if denominator <= 0 {
+		return nil
+	}
+	return float64(numerator) / float64(denominator)
+}
+
+func stringListFromAny(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" && text != "<nil>" {
+				out = append(out, text)
+			}
+		}
+		return out
+	case string:
+		parts := strings.Split(typed, ",")
+		out := []string{}
+		for _, part := range parts {
+			text := strings.TrimSpace(part)
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func (app *App) buildGovernanceAuditReport(dashboard GovernanceDashboardDTO) string {
+	lines := []string{"治理审计已完成。"}
+	if status := fmt.Sprint(dashboard.DataQuality["status"]); status != "" {
+		lines = append(lines, fmt.Sprintf("数据质量：%s，缺失 %v。", status, dashboard.DataQuality["missing"]))
+	}
+	lines = append(lines, fmt.Sprintf("策略晋级：%d 条建议；退役/降权：%d 条；参数推荐：%d 条。", len(dashboard.Promotion), len(dashboard.Retirement), len(dashboard.ParameterRecommendations)))
+	if len(dashboard.PortfolioAttribution) > 0 {
+		top := dashboard.PortfolioAttribution[0]
+		lines = append(lines, fmt.Sprintf("组合归因：当前最大策略暴露为 %s，权重 %.2f%%。", fmt.Sprint(top["strategy"]), floatValue(top["weight"], 0)*100))
+	}
+	if retryable := int(floatValue(dashboard.Recovery["retryable_failed"], 0)); retryable > 0 {
+		lines = append(lines, fmt.Sprintf("任务恢复：存在 %d 个失败任务仍可重跑。", retryable))
+	}
+	lines = append(lines, "下一步建议：优先处理数据缺口、重跑可恢复失败任务，再根据参数区间推荐创建下一轮 walk-forward。")
+	return strings.Join(lines, "\n")
+}
+
+func (app *App) ensureDataQualityForEvaluation() error {
+	summary, err := app.dataQualitySummary()
+	if err != nil {
+		return err
+	}
+	if fmt.Sprint(summary["status"]) == "pass" {
+		return nil
+	}
+	missing := stringListFromAny(summary["missing"])
+	if len(missing) == 0 {
+		return errors.New("数据质量闸门未通过，请先刷新数据")
+	}
+	return fmt.Errorf("数据质量闸门未通过，缺少必要数据集：%s。请先在数据管理更新数据", strings.Join(missing, ", "))
 }
 
 func (app *App) persistValidationReview(review ValidationReviewDTO) (ValidationReviewDTO, error) {
@@ -4227,6 +4574,9 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	}
 	if t.TaskType != task.TypeEvaluationTimeMachine && t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment {
 		return task.DTO{}, errors.New("only evaluation tasks can be started")
+	}
+	if err := app.ensureDataQualityForEvaluation(); err != nil {
+		return task.DTO{}, err
 	}
 	running, err := app.taskService.Repository().HasRunningEvaluation(t.ID)
 	if err != nil {

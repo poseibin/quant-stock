@@ -231,6 +231,13 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   const recentPaper = (governance.paper || []).slice(0, 6)
   const walkSummary = summarizeStatus(governance.walk || [], 'pass')
   const paramSummary = summarizeStatus(governance.params || [], 'stable')
+  const dataQuality = governance.data_quality || {}
+  const missingData = asStringArray(dataQuality.missing)
+  const recovery = governance.recovery || {}
+  const parameterRecommendations = governance.parameter_recommendations || []
+  const retirementRows = governance.retirement || []
+  const attributionRows = governance.portfolio_attribution || []
+  const reports = governance.reports || []
 
   return (
     <div className="positionPage">
@@ -299,6 +306,61 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
           </button>
         </div>
         <div className="governanceGrid">
+          <div className="governanceBlock">
+            <div className="miniCardTitle">数据质量闸门</div>
+            <div className="riskMetrics">
+              <span>状态 {String(dataQuality.status || '—')}</span>
+              <span>缺失 {missingData.length}</span>
+              <span>必要 {asStringArray(dataQuality.required).length}</span>
+              <span>数据集 {Object.keys(asRecord(dataQuality.datasets) || {}).length}</span>
+            </div>
+            {missingData.length ? <div className="mutedText">缺少：{missingData.join('、')}</div> : <div className="mutedText">必要数据集已通过</div>}
+          </div>
+          <div className="governanceBlock">
+            <div className="miniCardTitle">任务恢复</div>
+            <div className="riskMetrics">
+              <span>总任务 {num(recovery.total)}</span>
+              <span>可重跑 {num(recovery.retryable_failed)}</span>
+              <span>阻断 {num(recovery.blocked_failed)}</span>
+              <span>运行 {num(asRecord(recovery.statuses)?.running)}</span>
+            </div>
+          </div>
+          <div className="governanceBlock">
+            <div className="miniCardTitle">组合归因</div>
+            {attributionRows.length ? attributionRows.slice(0, 6).map((item, index) => (
+              <div className="governanceRow" key={`${String(item.strategy)}-${index}`}>
+                <span>{strategyLabel(String(item.strategy || ''))}</span>
+                <b>{percent(num(item.weight))}</b>
+              </div>
+            )) : <div className="mutedText">暂无组合归因</div>}
+          </div>
+          <div className="governanceBlock">
+            <div className="miniCardTitle">参数区间推荐</div>
+            {parameterRecommendations.length ? parameterRecommendations.slice(0, 5).map((item) => (
+              <div className="governanceRow" key={String(item.strategy)}>
+                <span>{strategyLabel(String(item.strategy || ''))} · {String(item.best_param_set || '—')}</span>
+                <b>{formatNullablePercent(maybeNumber(item.stable_rate), 100)}</b>
+              </div>
+            )) : <div className="mutedText">暂无参数推荐</div>}
+          </div>
+          <div className="governanceBlock">
+            <div className="miniCardTitle">退役/降权建议</div>
+            {retirementRows.length ? retirementRows.slice(0, 6).map((item, index) => (
+              <div className="governanceRow" key={`${String(item.strategy)}-${index}`}>
+                <span>{strategyLabel(String(item.strategy || ''))}</span>
+                <b>{String(item.action || '—')}</b>
+              </div>
+            )) : <div className="mutedText">暂无退役建议</div>}
+          </div>
+          <div className="governanceBlock">
+            <div className="miniCardTitle">研究报告</div>
+            {reports.length ? reports.slice(0, 3).map((item) => (
+              <div className="governanceRow" key={item.id}>
+                <span>{item.title}</span>
+                <b>{item.created_at.slice(0, 10)}</b>
+              </div>
+            )) : <div className="mutedText">暂无治理报告</div>}
+          </div>
           <div className="governanceBlock">
             <div className="miniCardTitle">风险暴露</div>
             {latestRisk ? (
@@ -485,7 +547,7 @@ function promotionLabel(status: string) {
 }
 
 function emptyGovernance(): GovernanceDashboard {
-  return { hindsight: [], risk: [], paper: [], promotion: [], walk: [], params: [] }
+  return { hindsight: [], risk: [], paper: [], promotion: [], walk: [], params: [], data_quality: {}, parameter_recommendations: [], retirement: [], portfolio_attribution: [], recovery: {}, reports: [] }
 }
 
 function summarizeStatus(rows: Array<{ status: string }>, passStatus: string) {
@@ -521,4 +583,21 @@ function summarizeHindsight(rows: RecommendationHindsight[]) {
     equalReturn: equalCount ? equalSum / equalCount : null,
     hitRate: hitCount ? hitSum / hitCount : null
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => String(item)).filter(Boolean)
+}
+
+function num(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function maybeNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
