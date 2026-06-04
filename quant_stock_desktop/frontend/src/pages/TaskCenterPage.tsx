@@ -124,7 +124,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     try {
       const updated = await analyzePortfolioTask(id)
       setSelectedTask(updated)
-      setNotice('AI 分析已生成')
+      setNotice('量化优化分析已生成')
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -176,7 +176,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     const nextConfig = asRecord(task.summary.ai_next_eval_config) || asRecord(asRecord(task.summary.ai_recommendation)?.next_eval_config)
     const params = asRecord(nextConfig?.params)
     if (!nextConfig || !params) {
-      setError('AI 还没有给出可创建的下一轮评估配置，请先运行 AI 分析')
+      setError('优化器还没有给出可创建的下一轮评估配置，请先运行量化优化')
       return
     }
     setError('')
@@ -834,7 +834,7 @@ function PortfolioOptimizationDetail({ task, childTasks, onBack, onRefresh, onSt
           <button className="secondaryButton quietButton" onClick={onBack}><ArrowLeft size={15} />返回</button>
           <button className="secondaryButton quietButton" onClick={onRefresh}><RefreshCw size={15} />刷新</button>
           <button className="secondaryButton startButton" onClick={onAnalyze} disabled={aiAnalyzing || !canAnalyze}>
-            <Sparkles size={15} />{aiAnalyzing ? '分析中' : 'AI 分析'}
+            <Sparkles size={15} />{aiAnalyzing ? '优化中' : '量化优化'}
           </button>
           {isRunnable && <button className="secondaryButton startButton" onClick={onStart}><Play size={15} />启动</button>}
           {isRunning && <button className="secondaryButton dangerButton" onClick={onCancel}><Square size={15} />取消</button>}
@@ -859,8 +859,8 @@ function PortfolioOptimizationDetail({ task, childTasks, onBack, onRefresh, onSt
       <div className="detailCard">
         <div className="tableHeader">
           <div>
-            <div className="formTitle">AI 实验迭代</div>
-            <p className="recommendationMeta">把本轮方案结果、子任务状态、入场策略和出场架构发给 DeepSeek，生成下一轮可回测配置</p>
+            <div className="formTitle">量化实验迭代</div>
+            <p className="recommendationMeta">根据回测指标、风险惩罚、策略贡献和参数邻域生成下一轮可回测配置；LLM 只作为解释辅助，不直接优化参数</p>
           </div>
           <button className="secondaryButton startButton" onClick={onCreateNext} disabled={!hasNextEvalConfig || nextEvalCreating}>
             {nextEvalCreating ? '创建中' : '创建下一轮评估'}
@@ -887,12 +887,12 @@ function PortfolioOptimizationDetail({ task, childTasks, onBack, onRefresh, onSt
                     <div><span>滑点</span><b>{percent(numberOf(nextParams.slippage, numberOf(task.params.slippage, 0.003)))}</b></div>
                   </div>
                 ) : (
-                  <div className="emptyCell compactEmpty">AI 返回了分析，但没有可创建的下一轮配置</div>
+                  <div className="emptyCell compactEmpty">优化器返回了分析，但没有可创建的下一轮配置</div>
                 )}
               </div>
             </div>
           </div>
-        ) : <div className="emptyCell">暂无 AI 分析，时光机成功并产生结果后点击 AI 分析</div>}
+        ) : <div className="emptyCell">暂无量化优化分析，时光机成功并产生结果后点击量化优化</div>}
       </div>
 
       <div className="detailCard">

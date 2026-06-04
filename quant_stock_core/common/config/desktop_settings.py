@@ -223,7 +223,11 @@ def save_settings(settings: dict[str, Any]) -> None:
 
 
 def load_strategy_settings() -> dict[str, dict[str, Any]]:
-    return load_settings().get("strategies", {}) or {}
+    settings = deepcopy(load_settings().get("strategies", {}) or {})
+    for name, override in _strategy_overrides().items():
+        if isinstance(override, dict) and isinstance(settings.get(name), dict):
+            settings[name] = _deep_merge(settings[name], override)
+    return settings
 
 
 def load_strategy(name: str) -> dict[str, Any]:
@@ -249,3 +253,14 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             out[key] = value
     return out
+
+
+def _strategy_overrides() -> dict[str, Any]:
+    raw = os.getenv("QUANT_STRATEGY_OVERRIDES_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}

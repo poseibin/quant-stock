@@ -549,6 +549,27 @@ func numberParam(params map[string]any, key string, fallback float64) float64 {
 	}
 }
 
+func mapParam(params map[string]any, key string) map[string]any {
+	value, ok := params[key]
+	if !ok || value == nil {
+		return map[string]any{}
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneAnyMap(typed)
+	case string:
+		text := strings.TrimSpace(typed)
+		if text == "" {
+			return map[string]any{}
+		}
+		out := map[string]any{}
+		if err := json.Unmarshal([]byte(text), &out); err == nil {
+			return out
+		}
+	}
+	return map[string]any{}
+}
+
 func strategyParam(value any) string {
 	switch items := value.(type) {
 	case []any:
@@ -1087,13 +1108,14 @@ func (app *App) initializeStrategyEvaluation(parent task.Task) error {
 }
 
 type portfolioCandidatePlan struct {
-	ID               string             `json:"candidate_id"`
-	Name             string             `json:"name"`
-	Weights          map[string]float64 `json:"weights"`
-	ExitArchitecture map[string]any     `json:"exit_architecture"`
-	PositionRule     map[string]any     `json:"position_rule"`
-	RebalanceFreq    int                `json:"rebalance_freq"`
-	RiskRule         map[string]any     `json:"risk_rule"`
+	ID                string             `json:"candidate_id"`
+	Name              string             `json:"name"`
+	Weights           map[string]float64 `json:"weights"`
+	ExitArchitecture  map[string]any     `json:"exit_architecture"`
+	PositionRule      map[string]any     `json:"position_rule"`
+	RebalanceFreq     int                `json:"rebalance_freq"`
+	RiskRule          map[string]any     `json:"risk_rule"`
+	StrategyOverrides map[string]any     `json:"strategy_overrides,omitempty"`
 }
 
 type portfolioBaseGroup struct {
@@ -1130,6 +1152,7 @@ func (app *App) initializePortfolioEvaluation(parent task.Task) error {
 	benchmark := stringParam(params, "benchmark", "000905.SH")
 	topN := int(numberParam(params, "top_n", 40))
 	maxCandidates := int(numberParam(params, "max_candidates", 0))
+	strategyOverrides := mapParam(params, "strategy_overrides")
 	strategyNames := app.resolvePortfolioStrategyNames(params["strategies"])
 	admissionFiltered := false
 	if admittedNames, ok := app.admittedPortfolioStrategyNames(strategyNames); ok {
@@ -1140,23 +1163,27 @@ func (app *App) initializePortfolioEvaluation(parent task.Task) error {
 	if len(candidates) == 0 {
 		return errors.New("no portfolio candidates generated")
 	}
+	for idx := range candidates {
+		candidates[idx].StrategyOverrides = cloneAnyMap(strategyOverrides)
+	}
 
 	now := time.Now()
 	parent.Total = len(candidates)
 	parent.Progress = 0
 	parent.SummaryJSON = mustJSON(map[string]any{
-		"start":           startDate,
-		"end":             endDate,
-		"objective":       objective,
-		"benchmark":       benchmark,
-		"strategy_count":  len(strategyNames),
-		"candidate_count": len(candidates),
-		"planned_count":   len(candidates),
-		"completed_count": 0,
-		"failed_count":    0,
-		"top_n":           topN,
-		"admission_used":  admissionFiltered,
-		"rows":            []any{},
+		"start":              startDate,
+		"end":                endDate,
+		"objective":          objective,
+		"benchmark":          benchmark,
+		"strategy_count":     len(strategyNames),
+		"candidate_count":    len(candidates),
+		"planned_count":      len(candidates),
+		"completed_count":    0,
+		"failed_count":       0,
+		"top_n":              topN,
+		"admission_used":     admissionFiltered,
+		"strategy_overrides": strategyOverrides,
+		"rows":               []any{},
 	})
 	parent.UpdatedAt = now
 	if err := app.taskService.Repository().UpdateRuntime(parent); err != nil {
@@ -1171,20 +1198,21 @@ func (app *App) initializePortfolioEvaluation(parent task.Task) error {
 
 	for idx, candidate := range candidates {
 		childParams := map[string]any{
-			"start_date":        startDate,
-			"end_date":          endDate,
-			"candidate_id":      candidate.ID,
-			"candidate_name":    candidate.Name,
-			"weights":           candidate.Weights,
-			"entry":             map[string]any{"type": "strategy_weight_mix", "weights": candidate.Weights},
-			"exit_architecture": candidate.ExitArchitecture,
-			"position_rule":     candidate.PositionRule,
-			"rebalance_freq":    candidate.RebalanceFreq,
-			"risk_rule":         candidate.RiskRule,
-			"scheme":            candidate.toSchemePayload(),
-			"objective":         objective,
-			"benchmark":         benchmark,
-			"slippage":          numberParam(params, "slippage", 0.002),
+			"start_date":         startDate,
+			"end_date":           endDate,
+			"candidate_id":       candidate.ID,
+			"candidate_name":     candidate.Name,
+			"weights":            candidate.Weights,
+			"entry":              map[string]any{"type": "strategy_weight_mix", "weights": candidate.Weights},
+			"exit_architecture":  candidate.ExitArchitecture,
+			"position_rule":      candidate.PositionRule,
+			"rebalance_freq":     candidate.RebalanceFreq,
+			"risk_rule":          candidate.RiskRule,
+			"strategy_overrides": candidate.StrategyOverrides,
+			"scheme":             candidate.toSchemePayload(),
+			"objective":          objective,
+			"benchmark":          benchmark,
+			"slippage":           numberParam(params, "slippage", 0.002),
 		}
 		paramsData, err := json.Marshal(childParams)
 		if err != nil {
@@ -1401,14 +1429,15 @@ func interleaveBaseGroups(groups []portfolioBaseGroup) []portfolioCandidatePlan 
 
 func (candidate portfolioCandidatePlan) toSchemePayload() map[string]any {
 	return map[string]any{
-		"scheme_type":       "trading_scheme",
-		"name":              candidate.Name,
-		"entry":             map[string]any{"type": "strategy_weight_mix", "weights": candidate.Weights},
-		"exit_architecture": candidate.ExitArchitecture,
-		"position_rule":     candidate.PositionRule,
-		"rebalance_freq":    candidate.RebalanceFreq,
-		"risk_rule":         candidate.RiskRule,
-		"research_space":    portfolioResearchSpace(),
+		"scheme_type":        "trading_scheme",
+		"name":               candidate.Name,
+		"entry":              map[string]any{"type": "strategy_weight_mix", "weights": candidate.Weights},
+		"exit_architecture":  candidate.ExitArchitecture,
+		"position_rule":      candidate.PositionRule,
+		"rebalance_freq":     candidate.RebalanceFreq,
+		"risk_rule":          candidate.RiskRule,
+		"strategy_overrides": candidate.StrategyOverrides,
+		"research_space":     portfolioResearchSpace(),
 	}
 }
 
@@ -1490,6 +1519,21 @@ func cloneMap(value map[string]any) map[string]any {
 	out := make(map[string]any, len(value))
 	for key, item := range value {
 		out[key] = item
+	}
+	return out
+}
+
+func cloneAnyMap(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return map[string]any{}
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return cloneMap(value)
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return cloneMap(value)
 	}
 	return out
 }
@@ -1811,46 +1855,36 @@ func (app *App) AnalyzePortfolioTask(id string) (task.DTO, error) {
 		return task.DTO{}, errors.New("方案评估还没有初始化子任务")
 	}
 	if running > 0 {
-		return task.DTO{}, errors.New("方案评估还在运行，等全部子任务完成后再做 AI 分析")
+		return task.DTO{}, errors.New("方案评估还在运行，等全部子任务完成后再做量化优化分析")
 	}
 	if succeeded != planned {
-		return task.DTO{}, fmt.Errorf("方案评估结果不完整：计划 %d 个，成功 %d 个，失败/取消 %d 个。请先重跑失败子任务，否则模型无法判断完整方案效果", planned, succeeded, failed)
-	}
-	token := strings.TrimSpace(app.settings.DeepSeekToken)
-	if token == "" {
-		return task.DTO{}, errors.New("请先在设置里填写 DeepSeek Token")
+		return task.DTO{}, fmt.Errorf("方案评估结果不完整：计划 %d 个，成功 %d 个，失败/取消 %d 个。请先重跑失败子任务，否则优化器不会基于残缺结果给出下一轮配置", planned, succeeded, failed)
 	}
 	contextPayload, err := app.buildPortfolioAnalysisContext(t, children)
 	if err != nil {
 		return task.DTO{}, err
 	}
-	analysis, recommendation, err := app.callDeepSeekForPortfolioAnalysis(contextPayload)
+	analysis, recommendation := app.buildQuantPortfolioRecommendation(t, contextPayload)
 	now := time.Now()
 	summary := map[string]any{}
 	if t.SummaryJSON != "" {
 		_ = json.Unmarshal([]byte(t.SummaryJSON), &summary)
 	}
-	if err != nil {
-		summary["ai_analysis_error"] = err.Error()
-	} else {
-		summary["ai_analysis"] = analysis
-		summary["ai_recommendation"] = recommendation
-		if nextEval, ok := recommendation["next_eval_config"].(map[string]any); ok {
-			summary["ai_next_eval_config"] = normalizeNextEvalConfig(t, nextEval)
-		}
-		summary["ai_analysis_error"] = ""
-		summary["ai_analysis_model"] = app.deepSeekModel()
-		summary["ai_analysis_at"] = now.Format(time.RFC3339)
+	summary["ai_analysis"] = analysis
+	summary["ai_recommendation"] = recommendation
+	if nextEval, ok := recommendation["next_eval_config"].(map[string]any); ok {
+		summary["ai_next_eval_config"] = normalizeNextEvalConfig(t, nextEval)
 	}
+	summary["ai_analysis_error"] = ""
+	summary["ai_analysis_model"] = "quant_robust_rules_v1"
+	summary["ai_analysis_at"] = now.Format(time.RFC3339)
+	summary["quant_optimizer"] = "quant_robust_rules_v1"
 	data, _ := json.Marshal(summary)
 	t.SummaryJSON = string(data)
 	t.UpdatedAt = now
 	_ = app.taskService.Repository().UpdateStatus(t)
 	if t.ExternalRunID != "" {
 		_, _ = app.database.Conn().Exec(`UPDATE portfolio_optimization_runs SET summary_json = ?, updated_at = datetime('now') WHERE run_id = ?`, string(data), t.ExternalRunID)
-	}
-	if err != nil {
-		return task.ToDTO(t), err
 	}
 	return task.ToDTO(t), nil
 }
@@ -1877,13 +1911,20 @@ func (app *App) buildPortfolioAnalysisContext(parent task.Task, children []task.
 	if topN <= 0 {
 		topN = 40
 	}
+	analysisLimit := topN
+	if analysisLimit < 200 {
+		analysisLimit = 200
+	}
+	if analysisLimit > 500 {
+		analysisLimit = 500
+	}
 	rows := make([]map[string]any, 0)
 	if app.database != nil && runID != "" {
 		dbRows, err := app.database.Conn().Query(`SELECT rank, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json
 			FROM portfolio_optimization_candidates
 			WHERE run_id = ?
 			ORDER BY CASE WHEN rank > 0 THEN rank ELSE 999999 END ASC, score DESC
-			LIMIT ?`, runID, topN)
+			LIMIT ?`, runID, analysisLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -1998,6 +2039,343 @@ func (app *App) buildPortfolioAnalysisContext(parent task.Task, children []task.
 		"portfolio_risk":              app.settings.PortfolioRisk,
 		"exit_rules":                  app.settings.ExitRules,
 	}, nil
+}
+
+type quantCandidateScore struct {
+	Row    map[string]any
+	Score  float64
+	Reason string
+}
+
+func (app *App) buildQuantPortfolioRecommendation(parent task.Task, contextPayload map[string]any) (string, map[string]any) {
+	params := task.ToDTO(parent).Params
+	rows := rowsFromContext(contextPayload["candidate_results"])
+	scored := make([]quantCandidateScore, 0, len(rows))
+	for _, row := range rows {
+		if strings.TrimSpace(fmt.Sprint(row["status"])) != "ok" {
+			continue
+		}
+		score, reason := robustCandidateScore(row)
+		scored = append(scored, quantCandidateScore{Row: row, Score: score, Reason: reason})
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].Score > scored[j].Score
+	})
+	topWindow := 20
+	if len(scored) < topWindow {
+		topWindow = len(scored)
+	}
+	selectedStrategies := app.selectStrategiesForNextRound(scored, topWindow)
+	if len(selectedStrategies) == 0 {
+		selectedStrategies = app.resolvePortfolioStrategyNames(params["strategies"])
+	}
+	overrides := app.quantStrategyOverrides(scored, topWindow)
+	best := map[string]any{}
+	if len(scored) > 0 {
+		best = scored[0].Row
+	}
+	nextParams := map[string]any{
+		"start_date":         params["start_date"],
+		"end_date":           params["end_date"],
+		"strategies":         selectedStrategies,
+		"objective":          stringParam(params, "objective", "平衡"),
+		"max_candidates":     0,
+		"top_n":              params["top_n"],
+		"benchmark":          params["benchmark"],
+		"slippage":           params["slippage"],
+		"strategy_overrides": overrides,
+		"optimizer":          map[string]any{"type": "quant_robust_rules_v1", "llm_role": "research_assistant_only"},
+		"validation":         []string{"全量候选回测", "样本外滚动验证", "参数邻域稳定性检查", "交易成本和滑点压力测试"},
+	}
+	nextConfig := map[string]any{
+		"name":      parent.Name + " - 量化优化下一轮",
+		"task_type": "portfolio_optimization",
+		"params":    nextParams,
+	}
+	diagnosis, keep, change, remove, validation := app.quantRecommendationText(scored, topWindow, selectedStrategies, overrides)
+	analysis := app.quantAnalysisMarkdown(parent, scored, topWindow, selectedStrategies, overrides)
+	recommendation := map[string]any{
+		"analysis_md":        analysis,
+		"diagnosis":          diagnosis,
+		"keep":               keep,
+		"change":             change,
+		"remove":             remove,
+		"validation_plan":    validation,
+		"next_eval_config":   nextConfig,
+		"optimizer_type":     "quant_robust_rules_v1",
+		"llm_role":           "LLM 不直接优化参数，只用于后续报告解释、研报/公告解析和代码审查",
+		"best_candidate":     summarizeCandidate(best),
+		"candidate_coverage": contextPayload["coverage"],
+	}
+	return analysis, recommendation
+}
+
+func robustCandidateScore(row map[string]any) (float64, string) {
+	rawScore := floatValue(row["score"], 0)
+	annual := floatValue(row["annual_return"], 0)
+	excess := floatValue(row["excess_annual_return"], 0)
+	drawdown := floatValue(row["max_drawdown"], 0)
+	sharpe := floatValue(row["sharpe"], 0)
+	calmar := floatValue(row["calmar"], 0)
+	turnover := floatValue(row["avg_turnover"], 0)
+	holdings := floatValue(row["avg_holdings"], 0)
+	score := rawScore + annual*0.8 + excess*0.5 + sharpe*0.08 + calmar*0.05
+	score -= absFloat(drawdown) * 0.7
+	if turnover > 0.30 {
+		score -= (turnover - 0.30) * 0.8
+	}
+	if holdings > 0 && holdings < 8 {
+		score -= (8 - holdings) * 0.03
+	}
+	reason := fmt.Sprintf("年化 %.2f%%，回撤 %.2f%%，夏普 %.2f，换手 %.2f%%", annual*100, drawdown*100, sharpe, turnover*100)
+	return score, reason
+}
+
+func (app *App) selectStrategiesForNextRound(scored []quantCandidateScore, topWindow int) []string {
+	type agg struct {
+		Name      string
+		Count     int
+		WeightSum float64
+		ScoreSum  float64
+		AnnualSum float64
+		BestScore float64
+	}
+	stats := map[string]*agg{}
+	for idx := 0; idx < topWindow; idx++ {
+		item := scored[idx]
+		weights := mapFromAny(item.Row["weights"])
+		for name, weightAny := range weights {
+			weight := floatValue(weightAny, 0)
+			if weight <= 0 {
+				continue
+			}
+			stat := stats[name]
+			if stat == nil {
+				stat = &agg{Name: name, BestScore: item.Score}
+				stats[name] = stat
+			}
+			stat.Count++
+			stat.WeightSum += weight
+			stat.ScoreSum += item.Score * weight
+			stat.AnnualSum += floatValue(item.Row["annual_return"], 0)
+			if item.Score > stat.BestScore {
+				stat.BestScore = item.Score
+			}
+		}
+	}
+	items := make([]*agg, 0, len(stats))
+	for _, stat := range stats {
+		items = append(items, stat)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		left := items[i].ScoreSum + float64(items[i].Count)*0.05
+		right := items[j].ScoreSum + float64(items[j].Count)*0.05
+		if left == right {
+			return items[i].Name < items[j].Name
+		}
+		return left > right
+	})
+	limit := 6
+	if len(items) < limit {
+		limit = len(items)
+	}
+	out := make([]string, 0, limit)
+	for idx := 0; idx < limit; idx++ {
+		if items[idx].Count > 0 {
+			out = append(out, items[idx].Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (app *App) quantStrategyOverrides(scored []quantCandidateScore, topWindow int) map[string]any {
+	overrides := map[string]any{}
+	if topWindow == 0 {
+		return overrides
+	}
+	avgDrawdown := 0.0
+	avgTurnover := 0.0
+	avgHoldings := 0.0
+	for idx := 0; idx < topWindow; idx++ {
+		row := scored[idx].Row
+		avgDrawdown += absFloat(floatValue(row["max_drawdown"], 0))
+		avgTurnover += floatValue(row["avg_turnover"], 0)
+		avgHoldings += floatValue(row["avg_holdings"], 0)
+	}
+	avgDrawdown /= float64(topWindow)
+	avgTurnover /= float64(topWindow)
+	avgHoldings /= float64(topWindow)
+	if avgTurnover > 0.30 {
+		overrides["event_enhanced"] = map[string]any{"filters": map[string]any{"holding_days": 20}, "position": map[string]any{"max_single_weight": 0.025}}
+		overrides["earnings_revision"] = map[string]any{"filters": map[string]any{"holding_days": 45}}
+	}
+	if avgDrawdown > 0.18 {
+		mergeOverride(overrides, "trend_pullback", map[string]any{"filters": map[string]any{"max_short_return": 0.15, "max_20d_return": 0.25}, "position": map[string]any{"max_single_weight": 0.04}})
+		mergeOverride(overrides, "small_cap_quality", map[string]any{"universe": map[string]any{"max_20d_return": 0.25}, "position": map[string]any{"max_single_weight": 0.04}})
+	}
+	if avgHoldings > 0 && avgHoldings < 10 {
+		mergeOverride(overrides, "multi_factor_composite", map[string]any{"position": map[string]any{"n_holdings": 35, "max_single_weight": 0.04}})
+		mergeOverride(overrides, "industry_prosperity", map[string]any{"selection": map[string]any{"top_n_industries": 5}})
+	}
+	return overrides
+}
+
+func (app *App) quantRecommendationText(scored []quantCandidateScore, topWindow int, selected []string, overrides map[string]any) ([]string, []string, []string, []string, []string) {
+	diagnosis := []string{"优化器按稳健分排序：原始评分 + 年化/超额/夏普/Calmar，扣减回撤、过高换手和过低持仓分散度。"}
+	keep := []string{"下一轮只收窄策略池，不收窄出场、调仓、市场过滤和仓位上限矩阵，继续由回测全量验证。"}
+	change := []string{"参数只做邻域调整，并通过 strategy_overrides 注入到单次实验，不写回全局策略配置。"}
+	remove := []string{"不根据单次最高收益永久删除策略；低贡献策略只在下一轮降权或暂不进入收窄策略池。"}
+	validation := []string{"必须比较本轮 Top 方案与下一轮 Top 方案的样本外表现，不能只看训练区间。", "对新增参数做邻域稳定性检查：相邻阈值表现不能断崖式下降。", "所有结论需要带手续费、滑点、停牌/涨跌停约束后再进入模拟盘。"}
+	if len(scored) > 0 {
+		best := scored[0].Row
+		diagnosis = append(diagnosis, fmt.Sprintf("当前稳健分第一：%s，%s。", fmt.Sprint(best["name"]), scored[0].Reason))
+	}
+	if topWindow > 0 {
+		diagnosis = append(diagnosis, fmt.Sprintf("本次归因窗口使用前 %d 个成功候选，降低只看冠军方案造成的选择偏差。", topWindow))
+	}
+	if len(selected) > 0 {
+		keep = append(keep, "下一轮策略池："+strings.Join(app.strategyLabels(selected), "、"))
+	}
+	if len(overrides) > 0 {
+		change = append(change, fmt.Sprintf("生成 %d 个策略参数覆盖，重点约束追高、换手、单票权重和持仓分散度。", len(overrides)))
+	}
+	return diagnosis, keep, change, remove, validation
+}
+
+func (app *App) quantAnalysisMarkdown(parent task.Task, scored []quantCandidateScore, topWindow int, selected []string, overrides map[string]any) string {
+	var builder strings.Builder
+	builder.WriteString("### 量化优化结论\n")
+	builder.WriteString("本轮没有把参数优化交给大模型；优化器只使用回测指标、风险惩罚和候选贡献归因生成下一轮实验配置。")
+	if len(scored) == 0 {
+		builder.WriteString("\n\n没有可用的成功候选，不能生成有效优化结论。")
+		return builder.String()
+	}
+	best := scored[0].Row
+	builder.WriteString(fmt.Sprintf("\n\n最佳稳健候选：%s；年化 %.2f%%，累计 %.2f%%，最大回撤 %.2f%%，夏普 %.2f，Calmar %.2f。",
+		fmt.Sprint(best["name"]),
+		floatValue(best["annual_return"], 0)*100,
+		floatValue(best["total_return"], 0)*100,
+		floatValue(best["max_drawdown"], 0)*100,
+		floatValue(best["sharpe"], 0),
+		floatValue(best["calmar"], 0),
+	))
+	builder.WriteString(fmt.Sprintf("\n\n归因窗口：前 %d 个成功候选。下一轮保留策略池：%s。", topWindow, strings.Join(app.strategyLabels(selected), "、")))
+	if len(overrides) > 0 {
+		builder.WriteString(fmt.Sprintf("\n\n参数改进：生成 %d 组实验覆盖，只用于下一轮回测；这些覆盖需要通过样本外、walk-forward 和参数邻域稳定性验证后，才允许考虑固化。", len(overrides)))
+	} else {
+		builder.WriteString("\n\n参数改进：本轮未发现足够明确的风险/换手/分散度问题，下一轮优先验证策略组合与出场架构。")
+	}
+	builder.WriteString("\n\n过拟合控制：不采用 LLM 直接挑参数；不因单次冠军方案下结论；不把单点阈值当长期最优。")
+	return builder.String()
+}
+
+func rowsFromContext(value any) []map[string]any {
+	items, ok := value.([]map[string]any)
+	if ok {
+		return items
+	}
+	rawItems, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(rawItems))
+	for _, item := range rawItems {
+		if row, ok := item.(map[string]any); ok {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func mapFromAny(value any) map[string]any {
+	if out, ok := value.(map[string]any); ok {
+		return out
+	}
+	return map[string]any{}
+}
+
+func floatValue(value any, fallback float64) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		if parsed, err := typed.Float64(); err == nil {
+			return parsed
+		}
+	case string:
+		if parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func absFloat(value float64) float64 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func mergeOverride(overrides map[string]any, name string, patch map[string]any) {
+	current, _ := overrides[name].(map[string]any)
+	if current == nil {
+		overrides[name] = patch
+		return
+	}
+	overrides[name] = deepMergeAny(current, patch)
+}
+
+func deepMergeAny(base map[string]any, patch map[string]any) map[string]any {
+	out := cloneAnyMap(base)
+	for key, value := range patch {
+		if valueMap, ok := value.(map[string]any); ok {
+			if existing, ok := out[key].(map[string]any); ok {
+				out[key] = deepMergeAny(existing, valueMap)
+				continue
+			}
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func summarizeCandidate(row map[string]any) map[string]any {
+	if len(row) == 0 {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"name":                 row["name"],
+		"score":                row["score"],
+		"annual_return":        row["annual_return"],
+		"total_return":         row["total_return"],
+		"excess_annual_return": row["excess_annual_return"],
+		"max_drawdown":         row["max_drawdown"],
+		"sharpe":               row["sharpe"],
+		"calmar":               row["calmar"],
+		"avg_turnover":         row["avg_turnover"],
+		"avg_holdings":         row["avg_holdings"],
+		"weights":              row["weights"],
+		"exit_architecture":    row["exit_architecture"],
+		"rebalance_freq":       row["rebalance_freq"],
+		"risk_rule":            row["risk_rule"],
+		"position_rule":        row["position_rule"],
+	}
+}
+
+func (app *App) strategyLabels(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, app.strategyDisplayName(name))
+	}
+	return out
 }
 
 func (app *App) callDeepSeekForPortfolioAnalysis(contextPayload map[string]any) (string, map[string]any, error) {
@@ -2121,14 +2499,15 @@ func normalizeNextEvalConfig(parent task.Task, config map[string]any) map[string
 		}
 	}
 	defaults := map[string]any{
-		"start_date":     params["start_date"],
-		"end_date":       params["end_date"],
-		"strategies":     params["strategies"],
-		"objective":      params["objective"],
-		"max_candidates": params["max_candidates"],
-		"top_n":          params["top_n"],
-		"benchmark":      params["benchmark"],
-		"slippage":       params["slippage"],
+		"start_date":         params["start_date"],
+		"end_date":           params["end_date"],
+		"strategies":         params["strategies"],
+		"objective":          params["objective"],
+		"max_candidates":     params["max_candidates"],
+		"top_n":              params["top_n"],
+		"benchmark":          params["benchmark"],
+		"slippage":           params["slippage"],
+		"strategy_overrides": params["strategy_overrides"],
 	}
 	for key, value := range defaults {
 		if nextParams[key] == nil || fmt.Sprint(nextParams[key]) == "" {
@@ -2149,6 +2528,12 @@ func normalizeNextEvalConfig(parent task.Task, config map[string]any) map[string
 	}
 	if nextParams["slippage"] == nil {
 		nextParams["slippage"] = 0.003
+	}
+	if optimizer, ok := config["optimizer"]; ok && nextParams["optimizer"] == nil {
+		nextParams["optimizer"] = optimizer
+	}
+	if validation, ok := config["validation"]; ok && nextParams["validation"] == nil {
+		nextParams["validation"] = validation
 	}
 	name := strings.TrimSpace(fmt.Sprint(config["name"]))
 	if name == "" || name == "<nil>" {
@@ -2851,6 +3236,10 @@ func (app *App) startPortfolioCandidateTaskSync(t task.Task) (task.Task, error) 
 	if err != nil {
 		return t, err
 	}
+	strategyOverridesJSON, err := json.Marshal(mapParam(params, "strategy_overrides"))
+	if err != nil {
+		return t, err
+	}
 	runPath := filepath.Join(app.settings.DataPath, "backtest_results", runID, candidateID)
 	logPath := filepath.Join(runPath, "worker.log")
 	if err := os.MkdirAll(runPath, 0o755); err != nil {
@@ -2871,6 +3260,7 @@ func (app *App) startPortfolioCandidateTaskSync(t task.Task) (task.Task, error) 
 		"--weights-json", string(weightsJSON),
 		"--scheme-json", string(schemeJSON),
 		"--exit-json", string(exitJSON),
+		"--strategy-overrides-json", string(strategyOverridesJSON),
 		"--rebalance-freq", strconv.Itoa(int(numberParam(params, "rebalance_freq", 5))),
 		"--run-id", runID,
 		"--benchmark", stringParam(params, "benchmark", "000905.SH"),

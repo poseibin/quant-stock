@@ -450,7 +450,7 @@ export async function analyzePortfolioTask(id: string): Promise<TaskDTO> {
     return window.go.main.App.AnalyzePortfolioTask(id)
   }
   const task = mockTask({ name: id, task_type: 'portfolio_optimization', params: {} })
-  return { ...task, summary: { ai_analysis: '开发模式占位：连接桌面应用后可调用 DeepSeek 生成组合分析。' } }
+  return { ...task, summary: { ai_analysis: '开发模式占位：连接桌面应用后可运行量化优化分析。' } }
 }
 
 export async function createTask(request: CreateTaskRequest): Promise<TaskDTO> {
