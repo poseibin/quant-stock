@@ -320,19 +320,26 @@ def _admission_decision(row: dict[str, Any], *, is_baseline: bool) -> dict[str, 
     }
     score = sum(components[key] * weight for key, weight in weights.items())
 
-    hard_reasons: list[str] = []
+    caution_reasons: list[str] = []
+    reject_reasons: list[str] = []
     if n_days and n_days < 120:
-        hard_reasons.append("交易日样本不足")
+        caution_reasons.append("交易日样本不足")
     if month_count and month_count < 6:
-        hard_reasons.append("月度样本不足")
+        caution_reasons.append("月度样本不足")
     if annual_return <= 0:
-        hard_reasons.append("年化收益未转正")
+        reject_reasons.append("年化收益未转正")
     if max_drawdown < -0.28:
-        hard_reasons.append("最大回撤超过硬风控线")
+        reject_reasons.append("最大回撤超过硬风控线")
     if sharpe < 0:
-        hard_reasons.append("夏普为负")
+        reject_reasons.append("夏普为负")
 
-    if hard_reasons:
+    if reject_reasons:
+        admission = "暂不启用"
+    elif caution_reasons and score >= 68:
+        admission = "限制启用"
+    elif caution_reasons and score >= 45:
+        admission = "继续观察"
+    elif caution_reasons:
         admission = "暂不启用"
     elif score >= 75:
         admission = "可启用"
@@ -343,7 +350,7 @@ def _admission_decision(row: dict[str, Any], *, is_baseline: bool) -> dict[str, 
     else:
         admission = "暂不启用"
 
-    return _admission_payload(admission, score, components, _admission_reason(components, hard_reasons))
+    return _admission_payload(admission, score, components, _admission_reason(components, reject_reasons + caution_reasons))
 
 
 def _admission_payload(admission: str, score: float, components: dict[str, float], reason: str) -> dict[str, Any]:
@@ -399,7 +406,7 @@ def _drawdown_score(value: float) -> float:
     if drawdown <= 0.18:
         return 60.0 + _inverse_linear_score(drawdown, 0.08, 0.18) * 0.35
     if drawdown <= 0.35:
-        return _inverse_linear_score(drawdown, 0.18, 0.35) * 50.0
+        return _inverse_linear_score(drawdown, 0.18, 0.35) * 0.50
     return 0.0
 
 

@@ -2114,7 +2114,8 @@ func (app *App) admittedPortfolioStrategyNames(names []string) ([]string, bool) 
 			return names, false
 		}
 		seen = true
-		if strings.TrimSpace(admission) == "可启用" {
+		switch strings.TrimSpace(admission) {
+		case "可启用", "限制启用":
 			allowed[strategyName] = true
 		}
 	}
