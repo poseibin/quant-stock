@@ -145,6 +145,54 @@ func (service *Service) ConfirmTrades(dataPath string, trades []TradeRequest) (S
 	return service.GetSummary(dataPath)
 }
 
+func (service *Service) ClearPool(dataPath string, initialCashValue float64) (Summary, error) {
+	if service.db == nil {
+		return Summary{}, errors.New("database is not initialized")
+	}
+	if initialCashValue <= 0 {
+		initialCashValue = initialCash
+	}
+	now := time.Now().Format(time.RFC3339)
+	tx, err := service.db.Begin()
+	if err != nil {
+		return Summary{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM pool_holdings`); err != nil {
+		return Summary{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM pool_trades`); err != nil {
+		return Summary{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO pool_summary (
+		id, initial_cash, current_cash, market_value, total_assets, total_cost, total_fee,
+		total_pnl, today_pnl, today_pct, unrealized_pnl, unrealized_pct, realized_pnl,
+		cum_return, n_closed, updated_at
+	) VALUES (1, ?, ?, 0, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		initial_cash = excluded.initial_cash,
+		current_cash = excluded.current_cash,
+		market_value = 0,
+		total_assets = excluded.total_assets,
+		total_cost = 0,
+		total_fee = 0,
+		total_pnl = 0,
+		today_pnl = 0,
+		today_pct = 0,
+		unrealized_pnl = 0,
+		unrealized_pct = 0,
+		realized_pnl = 0,
+		cum_return = 0,
+		n_closed = 0,
+		updated_at = excluded.updated_at`, initialCashValue, initialCashValue, initialCashValue, now); err != nil {
+		return Summary{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Summary{}, err
+	}
+	return service.GetSummary(dataPath)
+}
+
 func (service *Service) GetRecommendation(dataPath string) (Recommendation, error) {
 	if service.db == nil {
 		return Recommendation{}, errors.New("database is not initialized")

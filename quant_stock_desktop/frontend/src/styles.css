@@ -202,6 +202,11 @@ h1 {
   color: #8f9ab3;
 }
 
+.errorText {
+  margin-top: 10px;
+  color: #ff9a9a;
+}
+
 .emptyState h2 {
   margin: 0;
 }

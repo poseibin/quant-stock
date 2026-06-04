@@ -18,6 +18,10 @@ export function CancelTask(arg1) {
   return window['go']['main']['App']['CancelTask'](arg1);
 }
 
+export function ClearPositionPool() {
+  return window['go']['main']['App']['ClearPositionPool']();
+}
+
 export function ConfirmPositionTrades(arg1) {
   return window['go']['main']['App']['ConfirmPositionTrades'](arg1);
 }

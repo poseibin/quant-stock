@@ -674,6 +674,13 @@ func (app *App) ConfirmPositionTrades(trades []position.TradeRequest) (position.
 	return app.positionService.ConfirmTrades(app.settings.DataPath, trades)
 }
 
+func (app *App) ClearPositionPool() (position.Summary, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.Summary{}, err
+	}
+	return app.positionService.ClearPool(app.settings.DataPath, app.settings.DefaultInitialCash)
+}
+
 func (app *App) GetPositionRecommendation() (position.Recommendation, error) {
 	if err := app.ensurePositionService(); err != nil {
 		return position.Recommendation{}, err

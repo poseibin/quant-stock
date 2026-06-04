@@ -16,6 +16,8 @@ export function ApplyPortfolioCandidate(arg1:main.ApplyPortfolioCandidateRequest
 
 export function CancelTask(arg1:string):Promise<task.DTO>;
 
+export function ClearPositionPool():Promise<position.Summary>;
+
 export function ConfirmPositionTrades(arg1:Array<position.TradeRequest>):Promise<position.Summary>;
 
 export function CreateTask(arg1:task.CreateRequest):Promise<task.DTO>;

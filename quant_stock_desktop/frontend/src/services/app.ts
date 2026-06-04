@@ -43,6 +43,7 @@ declare global {
           GeneratePositionSignal: (req: GenerateSignalRequest) => Promise<GenerateSignalResponse>
           GetSignalRunStatus: () => Promise<RunStatus>
           ConfirmPositionTrades: (trades: TradeRequest[]) => Promise<PositionSummary>
+          ClearPositionPool: () => Promise<PositionSummary>
           PreviewDataset: (query: DatasetPreviewQuery) => Promise<DatasetPreview>
           RunDataUpdate: (req: DataUpdateRequest) => Promise<void>
           GetDataUpdateStatus: () => Promise<RunStatus>
@@ -1029,6 +1030,13 @@ export async function getPositionHoldings(): Promise<PositionItem[]> {
 export async function confirmPositionTrades(trades: TradeRequest[]): Promise<PositionSummary> {
   if (window.go?.main?.App?.ConfirmPositionTrades) {
     return window.go.main.App.ConfirmPositionTrades(trades)
+  }
+  return getPositionSummary()
+}
+
+export async function clearPositionPool(): Promise<PositionSummary> {
+  if (window.go?.main?.App?.ClearPositionPool) {
+    return window.go.main.App.ClearPositionPool()
   }
   return getPositionSummary()
 }

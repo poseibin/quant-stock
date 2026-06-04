@@ -33,6 +33,10 @@ function moneyYi(value: number) {
   return `${(value / 10000).toFixed(1)}亿`
 }
 
+function timeLabel() {
+  return new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
 export function LimitBreakoutPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
   const [activeTab, setActiveTab] = useState<TabKey>('momentum')
 
@@ -64,6 +68,8 @@ function MomentumPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
   const [items, setItems] = useState<LimitUpMomentumCandidate[]>([])
   const [selectedCode, setSelectedCode] = useState('')
   const [loading, setLoading] = useState(false)
+  const [refreshInfo, setRefreshInfo] = useState('')
+  const [error, setError] = useState('')
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([])
   const selected = items.find((item) => item.ts_code === selectedCode) || items[0] || null
   const topItems = items.slice(0, 3)
@@ -71,10 +77,18 @@ function MomentumPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
 
   const load = async (refresh = false) => {
     setLoading(true)
+    setError('')
     try {
+      const previousTop = items[0]?.ts_code || ''
       const next = refresh ? await refreshLimitUpMomentumCandidates(query) : await listLimitUpMomentumCandidates(query)
       setItems(next)
       setSelectedCode((prev) => prev || next[0]?.ts_code || '')
+      if (refresh) {
+        const unchanged = previousTop && previousTop === next[0]?.ts_code
+        setRefreshInfo(`已重新计算 ${timeLabel()} · 候选 ${next.length} 个${unchanged ? ' · 排名首位未变化' : ''}`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
     }
@@ -118,6 +132,7 @@ function MomentumPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
         <div>
           <div className="dashboardPanelTitle">涨停板推荐</div>
           <p>基于 daily、daily_basic、stock_basic、龙虎榜数据，按首板/二板事件提取位置、量能、趋势、流动性和资金确认特征。</p>
+          {(refreshInfo || error) && <p className={error ? 'errorText' : 'cardHint'}>{error || refreshInfo}</p>}
         </div>
         <button className="primaryButton" onClick={() => load(true)} disabled={loading}>{loading ? '计算中…' : '刷新推荐'}</button>
       </section>
@@ -220,15 +235,25 @@ function BreakoutPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
   const [items, setItems] = useState<LimitBreakoutCandidate[]>([])
   const [selectedCode, setSelectedCode] = useState('')
   const [loading, setLoading] = useState(false)
+  const [refreshInfo, setRefreshInfo] = useState('')
+  const [error, setError] = useState('')
   const selected = items.find((item) => item.ts_code === selectedCode) || items[0] || null
   const query = { limit: 40, lookback: 1250, recent_days: 20 }
 
   const load = async (refresh = false) => {
     setLoading(true)
+    setError('')
     try {
+      const previousTop = items[0]?.ts_code || ''
       const next = refresh ? await refreshLimitBreakoutCandidates(query) : await listLimitBreakoutCandidates(query)
       setItems(next)
       setSelectedCode((prev) => prev || next[0]?.ts_code || '')
+      if (refresh) {
+        const unchanged = previousTop && previousTop === next[0]?.ts_code
+        setRefreshInfo(`已重新扫描 ${timeLabel()} · 候选 ${next.length} 个${unchanged ? ' · 排名首位未变化' : ''}`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
     }
@@ -266,6 +291,7 @@ function BreakoutPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
         <div>
           <div className="dashboardPanelTitle">横盘突发预警</div>
           <p>扫描长期低波动箱体、近期突然放量拉升，并结合 ROE、净利率、资产负债率给出经营质量分。</p>
+          {(refreshInfo || error) && <p className={error ? 'errorText' : 'cardHint'}>{error || refreshInfo}</p>}
         </div>
         <button className="primaryButton" onClick={() => load(true)} disabled={loading}>{loading ? '扫描中…' : '重新扫描'}</button>
       </section>
