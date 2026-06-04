@@ -10,11 +10,10 @@ import { formatDate } from '../components/format'
 
 const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
 const evaluationHorizon = {
-  strategyAdmissionYears: 10,
-  portfolioYears: 5,
-  parameterYears: 5,
-  walkForwardYears: 8,
-  walkForwardWindowCount: 6
+  fullCycleStartDate: '20100101',
+  portfolioYears: 6,
+  parameterYears: 6,
+  walkForwardWindowCount: 8
 }
 
 echarts.use([CanvasRenderer, DataZoomComponent, GridComponent, LineChart, TitleComponent, TooltipComponent])
@@ -28,10 +27,10 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   const [aiAnalyzing, setAiAnalyzing] = useState(false)
   const [nextEvalCreating, setNextEvalCreating] = useState(false)
   const name = '时光机'
-  const admissionStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.strategyAdmissionYears)), [])
+  const admissionStartDate = evaluationHorizon.fullCycleStartDate
   const portfolioStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.portfolioYears)), [])
   const parameterStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.parameterYears)), [])
-  const walkForwardStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.walkForwardYears)), [])
+  const walkForwardStartDate = evaluationHorizon.fullCycleStartDate
   const endDate = useMemo(() => formatYYYYMMDD(new Date()), [])
   const initialCash = 500000
   const rebalanceFreq = 5
