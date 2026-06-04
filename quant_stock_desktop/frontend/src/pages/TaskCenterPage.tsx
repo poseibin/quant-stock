@@ -1191,9 +1191,14 @@ function buildStrategyAdmissionRows(childTasks: TaskDTO[], resultRows: Array<Rec
     const walkWindow = String(child.params.walk_window || '')
     const paramSet = String(child.params.param_set || '')
     const compoundKey = walkWindow ? `${strategy}:${walkWindow}` : paramSet ? `${strategy}:${paramSet}` : ''
-    const result = child.summary && Object.keys(child.summary).length > 0
-      ? child.summary
-      : (compoundKey ? resultByCompound.get(compoundKey) : null) || resultByStrategy.get(strategy) || {}
+    const fallbackResult = (compoundKey ? resultByCompound.get(compoundKey) : null) || resultByStrategy.get(strategy)
+    const childSummaryHasEvalResult = child.summary && (
+      child.summary.status != null ||
+      child.summary.admission_score != null ||
+      child.summary.score != null ||
+      child.summary.admission != null
+    )
+    const result = childSummaryHasEvalResult ? child.summary : fallbackResult || child.summary || {}
     return {
       ...result,
       key: child.id,

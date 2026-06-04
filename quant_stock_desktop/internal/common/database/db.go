@@ -6,12 +6,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type DB struct {
 	conn *sql.DB
+}
+
+type migration struct {
+	version int
+	name    string
+	up      func(*DB) error
 }
 
 func Open(path string) (*DB, error) {
@@ -529,56 +536,240 @@ func (db *DB) Migrate() error {
 			return err
 		}
 	}
-	alterStatements := []string{
-		`ALTER TABLE pool_summary ADD COLUMN total_cost REAL NOT NULL DEFAULT 0;`,
-		`ALTER TABLE pool_summary ADD COLUMN today_pct REAL NOT NULL DEFAULT 0;`,
-		`ALTER TABLE pool_summary ADD COLUMN unrealized_pnl REAL NOT NULL DEFAULT 0;`,
-		`ALTER TABLE pool_summary ADD COLUMN unrealized_pct REAL NOT NULL DEFAULT 0;`,
-		`ALTER TABLE pool_summary ADD COLUMN realized_pnl REAL NOT NULL DEFAULT 0;`,
-		`ALTER TABLE pool_summary ADD COLUMN cum_return REAL NOT NULL DEFAULT 0;`,
-		`ALTER TABLE pool_summary ADD COLUMN n_closed INTEGER NOT NULL DEFAULT 0;`,
-		`ALTER TABLE pool_summary ADD COLUMN total_fee REAL NOT NULL DEFAULT 0;`,
-		`ALTER TABLE pool_trades ADD COLUMN fee REAL NOT NULL DEFAULT 0;`,
-		`ALTER TABLE pool_trades ADD COLUMN net_amount REAL NOT NULL DEFAULT 0;`,
-		`ALTER TABLE time_machine_trades ADD COLUMN is_new INTEGER NOT NULL DEFAULT 0;`,
-		`ALTER TABLE evaluation_tasks ADD COLUMN parent_id TEXT;`,
-		`ALTER TABLE evaluation_tasks ADD COLUMN group_run_id TEXT;`,
-		`ALTER TABLE evaluation_tasks ADD COLUMN subtask_key TEXT;`,
-		`ALTER TABLE evaluation_tasks ADD COLUMN subtask_name TEXT;`,
-		`ALTER TABLE evaluation_tasks ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0;`,
-		`ALTER TABLE evaluation_tasks ADD COLUMN total INTEGER NOT NULL DEFAULT 0;`,
-		`ALTER TABLE evaluation_tasks ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;`,
-		`ALTER TABLE evaluation_tasks ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1;`,
-		`ALTER TABLE strategy_settings_versions ADD COLUMN promotion_status TEXT NOT NULL DEFAULT 'research';`,
-		`ALTER TABLE strategy_settings_versions ADD COLUMN validation_json TEXT NOT NULL DEFAULT '{}';`,
-		`ALTER TABLE portfolio_optimization_runs ADD COLUMN validation_status TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE portfolio_optimization_runs ADD COLUMN validation_json TEXT NOT NULL DEFAULT '{}';`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN total_return REAL;`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN excess_annual_return REAL;`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN win_rate REAL;`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN annual_volatility REAL;`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN exit_architecture_type TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN exit_architecture_label TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN exit_architecture_json TEXT NOT NULL DEFAULT '{}';`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN rebalance_freq INTEGER NOT NULL DEFAULT 0;`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN market_regime_filter TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN position_max_weight REAL;`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN validation_status TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE portfolio_optimization_candidates ADD COLUMN validation_json TEXT NOT NULL DEFAULT '{}';`,
+	if err := db.runSchemaMigrations(); err != nil {
+		return err
 	}
-	for _, statement := range alterStatements {
-		_, _ = db.conn.Exec(statement)
+	return nil
+}
+
+func (db *DB) runSchemaMigrations() error {
+	if _, err := db.conn.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY,
+		name TEXT NOT NULL,
+		applied_at TEXT NOT NULL
+	);`); err != nil {
+		return err
 	}
-	postAlterStatements := []string{
-		`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_parent_id ON evaluation_tasks(parent_id);`,
-		`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_group_run_id ON evaluation_tasks(group_run_id);`,
+	applied, err := db.appliedMigrations()
+	if err != nil {
+		return err
 	}
-	for _, statement := range postAlterStatements {
-		if _, err := db.conn.Exec(statement); err != nil {
+	for _, item := range db.schemaMigrations() {
+		if applied[item.version] {
+			continue
+		}
+		if db.isMigrationAlreadyApplied(item.version) {
+			if err := db.recordSchemaMigration(item); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := db.runSchemaMigration(item); err != nil {
 			return err
 		}
 	}
-	return db.migrateStrategyEvaluationSchema()
+	return nil
+}
+
+func (db *DB) runSchemaMigration(item migration) error {
+	if err := item.up(db); err != nil {
+		return fmt.Errorf("migration %d %s failed: %w", item.version, item.name, err)
+	}
+	return db.recordSchemaMigration(item)
+}
+
+func (db *DB) recordSchemaMigration(item migration) error {
+	_, err := db.conn.Exec(`INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`, item.version, item.name, time.Now().Format(time.RFC3339))
+	return err
+}
+
+func (db *DB) isMigrationAlreadyApplied(version int) bool {
+	switch version {
+	case 1:
+		return db.columnsExist("pool_summary", "total_cost", "today_pct", "unrealized_pnl", "unrealized_pct", "realized_pnl", "cum_return", "n_closed", "total_fee") && db.columnsExist("pool_trades", "fee", "net_amount")
+	case 2:
+		return db.columnsExist("time_machine_trades", "is_new")
+	case 3:
+		return db.columnsExist("evaluation_tasks", "parent_id", "group_run_id", "subtask_key", "subtask_name", "sequence", "total", "attempt", "max_attempts")
+	case 4:
+		return db.columnsExist("strategy_settings_versions", "promotion_status", "validation_json")
+	case 5:
+		return db.columnsExist("portfolio_optimization_runs", "validation_status", "validation_json") && db.columnsExist("portfolio_optimization_candidates", "total_return", "excess_annual_return", "win_rate", "annual_volatility", "exit_architecture_type", "exit_architecture_label", "exit_architecture_json", "rebalance_freq", "market_regime_filter", "position_max_weight", "validation_status", "validation_json")
+	case 6:
+		return db.columnsExist("strategy_evaluation", "admission_score", "month_count", "monthly_win_rate", "worst_month_return", "positive_3m_rate", "return_score", "drawdown_score", "risk_adjusted_score", "cost_score", "capacity_score", "stability_score", "independence_score")
+	default:
+		return false
+	}
+}
+
+func (db *DB) columnsExist(tableName string, names ...string) bool {
+	columns, err := db.tableColumns(tableName)
+	if err != nil {
+		return false
+	}
+	for _, name := range names {
+		if !columns[name] {
+			return false
+		}
+	}
+	return true
+}
+
+func (db *DB) appliedMigrations() (map[int]bool, error) {
+	rows, err := db.conn.Query(`SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	applied := map[int]bool{}
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			return nil, err
+		}
+		applied[version] = true
+	}
+	return applied, rows.Err()
+}
+
+func (db *DB) schemaMigrations() []migration {
+	return []migration{
+		{version: 1, name: "pool_accounting_columns", up: func(db *DB) error {
+			columns := []columnMigration{
+				{table: "pool_summary", name: "total_cost", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "pool_summary", name: "today_pct", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "pool_summary", name: "unrealized_pnl", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "pool_summary", name: "unrealized_pct", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "pool_summary", name: "realized_pnl", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "pool_summary", name: "cum_return", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "pool_summary", name: "n_closed", ddl: "INTEGER NOT NULL DEFAULT 0"},
+				{table: "pool_summary", name: "total_fee", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "pool_trades", name: "fee", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "pool_trades", name: "net_amount", ddl: "REAL NOT NULL DEFAULT 0"},
+			}
+			return db.addColumnsIfMissing(columns)
+		}},
+		{version: 2, name: "time_machine_trade_flags", up: func(db *DB) error {
+			return db.addColumnsIfMissing([]columnMigration{{table: "time_machine_trades", name: "is_new", ddl: "INTEGER NOT NULL DEFAULT 0"}})
+		}},
+		{version: 3, name: "evaluation_task_subtasks", up: func(db *DB) error {
+			columns := []columnMigration{
+				{table: "evaluation_tasks", name: "parent_id", ddl: "TEXT"},
+				{table: "evaluation_tasks", name: "group_run_id", ddl: "TEXT"},
+				{table: "evaluation_tasks", name: "subtask_key", ddl: "TEXT"},
+				{table: "evaluation_tasks", name: "subtask_name", ddl: "TEXT"},
+				{table: "evaluation_tasks", name: "sequence", ddl: "INTEGER NOT NULL DEFAULT 0"},
+				{table: "evaluation_tasks", name: "total", ddl: "INTEGER NOT NULL DEFAULT 0"},
+				{table: "evaluation_tasks", name: "attempt", ddl: "INTEGER NOT NULL DEFAULT 0"},
+				{table: "evaluation_tasks", name: "max_attempts", ddl: "INTEGER NOT NULL DEFAULT 1"},
+			}
+			if err := db.addColumnsIfMissing(columns); err != nil {
+				return err
+			}
+			return db.createEvaluationTaskIndexes()
+		}},
+		{version: 4, name: "strategy_version_validation", up: func(db *DB) error {
+			return db.addColumnsIfMissing([]columnMigration{
+				{table: "strategy_settings_versions", name: "promotion_status", ddl: "TEXT NOT NULL DEFAULT 'research'"},
+				{table: "strategy_settings_versions", name: "validation_json", ddl: "TEXT NOT NULL DEFAULT '{}'"},
+			})
+		}},
+		{version: 5, name: "portfolio_validation_columns", up: func(db *DB) error {
+			columns := []columnMigration{
+				{table: "portfolio_optimization_runs", name: "validation_status", ddl: "TEXT NOT NULL DEFAULT ''"},
+				{table: "portfolio_optimization_runs", name: "validation_json", ddl: "TEXT NOT NULL DEFAULT '{}'"},
+				{table: "portfolio_optimization_candidates", name: "total_return", ddl: "REAL"},
+				{table: "portfolio_optimization_candidates", name: "excess_annual_return", ddl: "REAL"},
+				{table: "portfolio_optimization_candidates", name: "win_rate", ddl: "REAL"},
+				{table: "portfolio_optimization_candidates", name: "annual_volatility", ddl: "REAL"},
+				{table: "portfolio_optimization_candidates", name: "exit_architecture_type", ddl: "TEXT NOT NULL DEFAULT ''"},
+				{table: "portfolio_optimization_candidates", name: "exit_architecture_label", ddl: "TEXT NOT NULL DEFAULT ''"},
+				{table: "portfolio_optimization_candidates", name: "exit_architecture_json", ddl: "TEXT NOT NULL DEFAULT '{}'"},
+				{table: "portfolio_optimization_candidates", name: "rebalance_freq", ddl: "INTEGER NOT NULL DEFAULT 0"},
+				{table: "portfolio_optimization_candidates", name: "market_regime_filter", ddl: "TEXT NOT NULL DEFAULT ''"},
+				{table: "portfolio_optimization_candidates", name: "position_max_weight", ddl: "REAL"},
+				{table: "portfolio_optimization_candidates", name: "validation_status", ddl: "TEXT NOT NULL DEFAULT ''"},
+				{table: "portfolio_optimization_candidates", name: "validation_json", ddl: "TEXT NOT NULL DEFAULT '{}'"},
+			}
+			return db.addColumnsIfMissing(columns)
+		}},
+		{version: 6, name: "strategy_evaluation_scores", up: func(db *DB) error {
+			return db.migrateStrategyEvaluationSchema()
+		}},
+	}
+}
+
+type columnMigration struct {
+	table string
+	name  string
+	ddl   string
+}
+
+func (db *DB) addColumnsIfMissing(columns []columnMigration) error {
+	cache := map[string]map[string]bool{}
+	for _, column := range columns {
+		tableColumns, ok := cache[column.table]
+		if !ok {
+			var err error
+			tableColumns, err = db.tableColumns(column.table)
+			if err != nil {
+				return err
+			}
+			cache[column.table] = tableColumns
+		}
+		if tableColumns[column.name] {
+			continue
+		}
+		if _, err := db.conn.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", column.table, column.name, column.ddl)); err != nil {
+			return err
+		}
+		tableColumns[column.name] = true
+	}
+	return nil
+}
+
+func (db *DB) createEvaluationTaskIndexes() error {
+	columns, err := db.tableColumns("evaluation_tasks")
+	if err != nil {
+		return err
+	}
+	if !columns["parent_id"] {
+		return fmt.Errorf("evaluation_tasks.parent_id column is missing")
+	}
+	if _, err := db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_parent_id ON evaluation_tasks(parent_id);`); err != nil {
+		return err
+	}
+	if !columns["group_run_id"] {
+		return fmt.Errorf("evaluation_tasks.group_run_id column is missing")
+	}
+	if _, err := db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_group_run_id ON evaluation_tasks(group_run_id);`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (db *DB) tableColumns(tableName string) (map[string]bool, error) {
+	rows, err := db.conn.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, tableName))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return nil, err
+		}
+		columns[name] = true
+	}
+	return columns, rows.Err()
 }
 
 func (db *DB) migrateStrategyEvaluationSchema() error {

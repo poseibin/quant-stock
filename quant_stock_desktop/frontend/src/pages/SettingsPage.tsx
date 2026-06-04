@@ -157,9 +157,6 @@ export function SettingsPage() {
       <div className="formCard">
         <div className="formTitle">本地运行配置</div>
         <div className="runtimeConfigGrid">
-          <Field label="数据目录" issue={findIssue(issues, 'data_path')} className="runtimeField runtimeFieldWide">
-            <input value={settings.data_path} onChange={(event) => update('data_path', event.target.value)} />
-          </Field>
           <Field label="Tushare Token" issue={findIssue(issues, 'tushare_token')} className="runtimeField runtimeFieldWide">
             <input
               type="password"

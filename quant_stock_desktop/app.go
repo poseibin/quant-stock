@@ -60,7 +60,9 @@ func (app *App) startup(ctx context.Context) {
 	app.ctx = ctx
 	_ = app.ensureDatabase()
 	if settings, err := app.configService.Load(app.settings); err == nil {
+		settings.DataPath = app.fixedDataPath()
 		app.settings = settings
+		_ = app.configService.Save(app.settings)
 	}
 }
 
@@ -270,7 +272,9 @@ func (app *App) GetSettings() SettingsResponse {
 	}
 	settings, err := app.configService.Load(app.settings)
 	if err == nil {
+		settings.DataPath = app.fixedDataPath()
 		app.settings = settings
+		_ = app.configService.Save(app.settings)
 	}
 	return SettingsResponse{
 		Settings: app.settings,
@@ -279,13 +283,7 @@ func (app *App) GetSettings() SettingsResponse {
 }
 
 func (app *App) SaveSettings(settings config.Settings) SettingsResponse {
-	if strings.TrimSpace(settings.DataPath) == "" {
-		if homeDir, err := os.UserHomeDir(); err == nil {
-			settings.DataPath = config.DefaultSettings(homeDir).DataPath
-		} else {
-			settings.DataPath = app.settings.DataPath
-		}
-	}
+	settings.DataPath = app.fixedDataPath()
 	issues := app.configService.Validate(settings)
 	if len(issues) > 0 {
 		return SettingsResponse{
@@ -293,13 +291,8 @@ func (app *App) SaveSettings(settings config.Settings) SettingsResponse {
 			Issues:   issues,
 		}
 	}
-	previousDataPath := app.settings.DataPath
 	app.settings = settings
-	if settings.DataPath != previousDataPath {
-		_ = app.reopenDatabase()
-	} else {
-		_ = app.ensureDatabase()
-	}
+	_ = app.ensureDatabase()
 	if app.database != nil {
 		app.configService.WithDB(app.database.Conn())
 	}
@@ -2174,14 +2167,52 @@ func (app *App) ListTasks(query task.Query) ([]task.DTO, error) {
 	if err := app.ensureTaskService(); err != nil {
 		return nil, err
 	}
-	return app.taskService.List(query)
+	items, err := app.taskService.List(query)
+	if err != nil {
+		return nil, err
+	}
+	if app.database == nil || app.database.Conn() == nil {
+		return items, nil
+	}
+	for index := range items {
+		if items[index].TaskType != task.TypeStrategyEvaluation || items[index].ParentID == "" || items[index].GroupRunID == "" {
+			continue
+		}
+		strategyName := stringParam(items[index].Params, "strategy", items[index].SubtaskKey)
+		if strategyName == "" {
+			continue
+		}
+		summaryJSON := readStrategyEvaluationRowSummaryFromDB(app.database.Conn(), items[index].GroupRunID, strategyName)
+		if summaryJSON == "" {
+			continue
+		}
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(summaryJSON), &summary); err == nil {
+			items[index].Summary = summary
+		}
+	}
+	return items, nil
 }
 
 func (app *App) GetTask(id string) (task.DTO, error) {
 	if err := app.ensureTaskService(); err != nil {
 		return task.DTO{}, err
 	}
-	return app.taskService.Get(id)
+	t, err := app.taskService.Repository().Get(id)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	if t.TaskType == task.TypeStrategyEvaluation && t.ParentID == "" {
+		children, childErr := app.taskService.Repository().ListChildren(t.ID)
+		if childErr == nil && len(children) > 0 {
+			t.SummaryJSON = app.strategyEvaluationSummaryForParent(t, children)
+			t.Progress = portfolioParentProgress(children)
+			t.UpdatedAt = time.Now()
+			_ = app.taskService.Repository().UpdateStatus(t)
+			_ = app.taskService.Repository().UpdateRuntime(t)
+		}
+	}
+	return task.ToDTO(t), nil
 }
 
 func (app *App) RefreshTaskStatus(id string) (task.DTO, error) {
@@ -4940,7 +4971,10 @@ func (app *App) persistStrategyExperimentArtifacts(child task.Task, strategyName
 }
 
 func (app *App) strategyEvaluationSummaryForParent(parent task.Task, children []task.Task) string {
-	summary := readStrategyEvaluationSummaryFromDB(app.database.Conn(), parent.ExternalRunID)
+	summary := ""
+	if app.database != nil && app.database.Conn() != nil && parent.ExternalRunID != "" {
+		summary = readStrategyEvaluationSummaryFromDB(app.database.Conn(), parent.ExternalRunID)
+	}
 	payload := map[string]any{}
 	if summary != "" {
 		_ = json.Unmarshal([]byte(summary), &payload)
@@ -5537,12 +5571,12 @@ func (app *App) quantStockCorePath() string {
 }
 
 func pythonPathForCore(quantRoot string) string {
-	if w := bundledWorkerPath(); w != "" {
-		return w
-	}
 	candidate := filepath.Join(quantRoot, ".venv", "bin", "python")
 	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 		return candidate
+	}
+	if w := bundledWorkerPath(); w != "" {
+		return w
 	}
 	return "python3"
 }
@@ -5621,9 +5655,7 @@ func (app *App) reopenDatabase() error {
 }
 
 func (app *App) ensureDatabase() error {
-	if app.settings.DataPath == "" {
-		return nil
-	}
+	app.settings.DataPath = app.fixedDataPath()
 	if app.database != nil {
 		return nil
 	}
@@ -5638,12 +5670,24 @@ func (app *App) ensureDatabase() error {
 	app.database = db
 	app.configService.WithDB(db.Conn())
 	if settings, err := app.configService.Load(app.settings); err == nil {
+		settings.DataPath = app.fixedDataPath()
 		app.settings = settings
+		_ = app.configService.Save(app.settings)
 	}
 	app.taskService = task.NewService(task.NewRepository(db.Conn()))
 	app.marketService = market.NewService(market.NewRepository(db.Conn()))
 	app.positionService = position.NewService(app.marketService, app.database.Conn())
 	return nil
+}
+
+func (app *App) fixedDataPath() string {
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		return config.DefaultSettings(homeDir).DataPath
+	}
+	if app.settings.DataPath != "" {
+		return app.settings.DataPath
+	}
+	return filepath.Join("data_store")
 }
 
 func mustGetwd() string {
