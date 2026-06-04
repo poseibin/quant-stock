@@ -21,7 +21,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   const [aiAnalyzing, setAiAnalyzing] = useState(false)
   const [nextEvalCreating, setNextEvalCreating] = useState(false)
   const name = '时光机'
-  const smokeStartDate = useMemo(() => formatYYYYMMDD(addMonths(new Date(), -6)), [])
+  const admissionStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -10)), [])
   const researchStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -3)), [])
   const endDate = useMemo(() => formatYYYYMMDD(new Date()), [])
   const initialCash = 500000
@@ -90,10 +90,10 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     setError('')
     try {
       await createTask({
-        name: `策略准入-${smokeStartDate}-${endDate}`,
+        name: `策略准入-${admissionStartDate}-${endDate}`,
         task_type: 'strategy_evaluation',
         params: {
-          start_date: smokeStartDate,
+          start_date: admissionStartDate,
           end_date: endDate,
           strategies: 'all',
           baseline: 'small_cap_quality',
@@ -1676,12 +1676,6 @@ function progressOf(summary: Record<string, unknown>) {
 function addYears(date: Date, years: number) {
   const copy = new Date(date)
   copy.setFullYear(copy.getFullYear() + years)
-  return copy
-}
-
-function addMonths(date: Date, months: number) {
-  const copy = new Date(date)
-  copy.setMonth(copy.getMonth() + months)
   return copy
 }
 
