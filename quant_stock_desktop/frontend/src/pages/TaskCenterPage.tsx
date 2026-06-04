@@ -9,6 +9,13 @@ import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, 
 import { formatDate } from '../components/format'
 
 const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
+const evaluationHorizon = {
+  strategyAdmissionYears: 10,
+  portfolioYears: 5,
+  parameterYears: 5,
+  walkForwardYears: 8,
+  walkForwardWindowCount: 6
+}
 
 echarts.use([CanvasRenderer, DataZoomComponent, GridComponent, LineChart, TitleComponent, TooltipComponent])
 
@@ -21,8 +28,10 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   const [aiAnalyzing, setAiAnalyzing] = useState(false)
   const [nextEvalCreating, setNextEvalCreating] = useState(false)
   const name = '时光机'
-  const admissionStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -10)), [])
-  const researchStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -3)), [])
+  const admissionStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.strategyAdmissionYears)), [])
+  const portfolioStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.portfolioYears)), [])
+  const parameterStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.parameterYears)), [])
+  const walkForwardStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.walkForwardYears)), [])
   const endDate = useMemo(() => formatYYYYMMDD(new Date()), [])
   const initialCash = 500000
   const rebalanceFreq = 5
@@ -70,7 +79,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
         name,
         task_type: 'portfolio_optimization',
         params: {
-          start_date: researchStartDate,
+          start_date: portfolioStartDate,
           end_date: endDate,
           strategies: 'enabled',
           objective: optimizationObjective,
@@ -112,16 +121,16 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     setError('')
     try {
       await createTask({
-        name: `Walk-forward-${researchStartDate}-${endDate}`,
+        name: `Walk-forward-${walkForwardStartDate}-${endDate}`,
         task_type: 'walk_forward_evaluation',
         params: {
-          start_date: researchStartDate,
+          start_date: walkForwardStartDate,
           end_date: endDate,
           strategies: 'all',
           baseline: 'small_cap_quality',
           benchmark: '000905.SH',
           slippage: slippageBp / 10000,
-          window_count: 4,
+          window_count: evaluationHorizon.walkForwardWindowCount,
           strategy_version_mode: 'latest'
         }
       })
@@ -136,10 +145,10 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     setError('')
     try {
       await createTask({
-        name: `参数实验-${researchStartDate}-${endDate}`,
+        name: `参数实验-${parameterStartDate}-${endDate}`,
         task_type: 'parameter_experiment',
         params: {
-          start_date: researchStartDate,
+          start_date: parameterStartDate,
           end_date: endDate,
           strategies: 'all',
           baseline: 'small_cap_quality',
