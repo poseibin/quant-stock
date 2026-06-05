@@ -336,28 +336,28 @@ def _quality_filter(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
     f = cfg.filters or {}
     out = df.copy()
     if f.get("min_roe") is not None:
-        out = out[pd.to_numeric(out.get("roe"), errors="coerce").fillna(-999) >= float(f["min_roe"]) * 100]
+        out = out[_num_col(out, "roe").fillna(-999) >= float(f["min_roe"]) * 100]
     if f.get("min_roe_ttm") is not None:
-        out = out[pd.to_numeric(out.get("roe"), errors="coerce").fillna(-999) >= float(f["min_roe_ttm"]) * 100]
+        out = out[_num_col(out, "roe").fillna(-999) >= float(f["min_roe_ttm"]) * 100]
     if f.get("max_debt_ratio") is not None:
-        out = out[pd.to_numeric(out.get("debt_to_assets"), errors="coerce").fillna(999) <= float(f["max_debt_ratio"]) * 100]
+        out = out[_num_col(out, "debt_to_assets").fillna(999) <= float(f["max_debt_ratio"]) * 100]
     return out
 
 
 def _trend_pullback_filter(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
     f = cfg.filters or {}
     out = _quality_filter(df, cfg)
-    out = out[pd.to_numeric(out.get("ret_60"), errors="coerce").fillna(-999) >= float(f.get("min_mid_return", 0.06))]
-    out = out[pd.to_numeric(out.get("ret_20"), errors="coerce").fillna(999) <= float(f.get("max_short_return", 0.18))]
-    out = out[pd.to_numeric(out.get("pullback_20"), errors="coerce").fillna(-999).between(-0.18, -0.02)]
+    out = out[_num_col(out, "ret_60").fillna(-999) >= float(f.get("min_mid_return", 0.06))]
+    out = out[_num_col(out, "ret_20").fillna(999) <= float(f.get("max_short_return", 0.18))]
+    out = out[_num_col(out, "pullback_20").fillna(-999).between(-0.18, -0.02)]
     return out
 
 
 def _dividend_filter(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
     f = cfg.filters or {}
     out = _quality_filter(df, cfg)
-    out = out[pd.to_numeric(out.get("dv_ttm"), errors="coerce").fillna(0) >= float(f.get("min_dv_ttm", 2.0))]
-    out = out[pd.to_numeric(out.get("pb"), errors="coerce").fillna(999) <= float(f.get("max_pb", 3.0))]
+    out = out[_num_col(out, "dv_ttm").fillna(0) >= float(f.get("min_dv_ttm", 2.0))]
+    out = out[_num_col(out, "pb").fillna(999) <= float(f.get("max_pb", 3.0))]
     return out
 
 
@@ -365,7 +365,7 @@ def _earnings_filter(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
     f = cfg.filters or {}
     growth = _num_col(df, "forecast_growth").fillna(_num_col(df, "netprofit_yoy"))
     out = df[growth >= float(f.get("min_profit_growth", 25.0))].copy()
-    out = out[pd.to_numeric(out.get("ret_20"), errors="coerce").fillna(999) <= float(f.get("max_post_ann_return", 0.15))]
+    out = out[_num_col(out, "ret_20").fillna(999) <= float(f.get("max_post_ann_return", 0.15))]
     return out
 
 
