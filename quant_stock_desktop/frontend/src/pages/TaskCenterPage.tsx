@@ -7,6 +7,7 @@ import { LineChart } from 'echarts/charts'
 import { CanvasRenderer } from 'echarts/renderers'
 import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getTimeMachineDetail, listTasks, listValidationEvidence, refreshTaskStatus, startTask, type TaskDTO, type TimeMachineDetail, type ValidationEvidence } from '../services/app'
 import { formatDate } from '../components/format'
+import { LimitSignalEvaluationPanel } from './LimitSignalEvaluationPanel'
 
 const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
 const evaluationHorizon = {
@@ -19,6 +20,7 @@ const evaluationHorizon = {
 echarts.use([CanvasRenderer, DataZoomComponent, GridComponent, LineChart, TitleComponent, TooltipComponent])
 
 export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
+  const [activeMode, setActiveMode] = useState<'timeMachine' | 'limitSignals'>('timeMachine')
   const [tasks, setTasks] = useState<TaskDTO[]>([])
   const [selectedTask, setSelectedTask] = useState<TaskDTO | null>(null)
   const [detail, setDetail] = useState<TimeMachineDetail | null>(null)
@@ -400,8 +402,13 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   return (
     <div className="taskPage">
       <div className="taskModeTabs">
-        <button className="active">时光机</button>
+        <button className={activeMode === 'timeMachine' ? 'active' : ''} onClick={() => setActiveMode('timeMachine')}>时光机评估</button>
+        <button className={activeMode === 'limitSignals' ? 'active' : ''} onClick={() => setActiveMode('limitSignals')}>涨停模型评估</button>
       </div>
+      {activeMode === 'limitSignals' ? (
+        <LimitSignalEvaluationPanel />
+      ) : (
+        <>
       <div className="formCard taskFormCard">
         <div className="taskAutoPanel">
           <div>
@@ -439,6 +446,8 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
           {tableRows.length === 0 && <div className="taskGridEmpty">暂无评估</div>}
         </div>
       </div>
+        </>
+      )}
     </div>
   )
 }
