@@ -190,6 +190,10 @@ func (service *Service) ClearPool(dataPath string, initialCashValue float64) (Su
 	if err := tx.Commit(); err != nil {
 		return Summary{}, err
 	}
+	legacyPoolPath := filepath.Join(dataPath, "positions", "pool.json")
+	if err := os.Remove(legacyPoolPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Summary{}, err
+	}
 	return service.GetSummary(dataPath)
 }
 

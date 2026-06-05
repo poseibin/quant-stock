@@ -138,8 +138,8 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   }
 
   const clearPositions = () => {
-    if (!summary || summary.n_holdings <= 0) return
-    const ok = window.confirm('确认清空当前持仓账户？这会删除持仓和交易流水，并把账户恢复为初始现金。')
+    if (!summary) return
+    const ok = window.confirm('确认重置当前持仓账户？这会删除持仓和交易流水，并把账户恢复为初始现金。')
     if (!ok) return
     setClearing(true)
     setError('')
@@ -205,7 +205,7 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
       : `信号日 ${recommendation.date} · 目标 ${recommendation.n_holdings} 只 / ${percent(recommendation.total_weight)} · 可执行 ${rebalanceCount} 笔 · 信号买 ${recommendation.n_buy} / 卖 ${recommendation.n_sell}`
     : ''
   const rebalanceDisabled = loading || saving || isRunning || rebalanceCount === 0 || rebalanced
-  const clearDisabled = loading || saving || clearing || isRunning || !summary || summary.n_holdings <= 0
+  const clearDisabled = loading || saving || clearing || isRunning || !summary
   return (
     <div className="positionPage">
       {error ? <div className="errorBanner">{error}</div> : null}
@@ -249,7 +249,7 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
                 {saving ? '调仓中...' : `一键调仓${rebalanceCount > 0 ? ` ${rebalanceCount}` : ''}`}
               </button>
             ) : null}
-            <button className="secondaryButton dangerButton" onClick={clearPositions} disabled={clearDisabled}>{clearing ? '清空中...' : '清空持仓'}</button>
+            <button className="secondaryButton dangerButton" onClick={clearPositions} disabled={clearDisabled}>{clearing ? '重置中...' : '重置账户'}</button>
             <button className="primaryButton" onClick={generate} disabled={isRunning}>{isRunning ? '生成中...' : '生成信号'}</button>
           </div>
         </div>

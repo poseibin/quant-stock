@@ -38,6 +38,14 @@ export function SettingsPage() {
     setSettings({ ...settings, [key]: value })
   }
 
+  const updatePortfolioRiskNumber = (key: string, value: number) => {
+    const nextRisk = { ...(settings.portfolio_risk || {}), [key]: value }
+    setSaved(false)
+    setSettings({ ...settings, portfolio_risk: nextRisk })
+    setJsonDrafts({ ...jsonDrafts, portfolio_risk: pretty(nextRisk) })
+    setJsonErrors({ ...jsonErrors, portfolio_risk: '' })
+  }
+
   const updateStrategy = (name: string, patch: Partial<StrategySettings>) => {
     setSaved(false)
     setSettings({
@@ -184,6 +192,15 @@ export function SettingsPage() {
           </Field>
           <Field label="默认调仓频率" issue={findIssue(issues, 'default_rebalance_freq')} className="runtimeField runtimeFieldCompact">
             <input type="number" value={settings.default_rebalance_freq} onChange={(event) => update('default_rebalance_freq', Number(event.target.value))} />
+          </Field>
+          <Field label="最大持仓数" issue={findIssue(issues, 'portfolio_risk.max_holdings')} className="runtimeField runtimeFieldCompact">
+            <input
+              type="number"
+              min={1}
+              max={300}
+              value={numberSetting(settings.portfolio_risk?.max_holdings, 50)}
+              onChange={(event) => updatePortfolioRiskNumber('max_holdings', Number(event.target.value))}
+            />
           </Field>
           <Field label="任务并发数" issue={findIssue(issues, 'task_concurrency')} className="runtimeField runtimeFieldCompact">
             <input type="number" min={1} max={8} value={settings.task_concurrency || 2} onChange={(event) => update('task_concurrency', Number(event.target.value))} />
@@ -332,6 +349,11 @@ function pretty(value: unknown) {
 
 function findIssue(issues: ValidationIssue[], field: string) {
   return issues.find((issue) => issue.field === field)
+}
+
+function numberSetting(value: unknown, fallback: number) {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : fallback
 }
 
 function statusLabel(status: string) {
