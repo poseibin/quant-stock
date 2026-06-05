@@ -164,6 +164,9 @@ func (service *Service) ClearPool(dataPath string, initialCashValue float64) (Su
 	if _, err := tx.Exec(`DELETE FROM pool_trades`); err != nil {
 		return Summary{}, err
 	}
+	if _, err := tx.Exec(`DELETE FROM daily_recommendation`); err != nil {
+		return Summary{}, err
+	}
 	if _, err := tx.Exec(`INSERT INTO pool_summary (
 		id, initial_cash, current_cash, market_value, total_assets, total_cost, total_fee,
 		total_pnl, today_pnl, today_pct, unrealized_pnl, unrealized_pct, realized_pnl,

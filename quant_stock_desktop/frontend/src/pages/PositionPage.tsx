@@ -54,6 +54,7 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   const [clearing, setClearing] = useState(false)
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null)
   const [error, setError] = useState('')
+  const [confirmReset, setConfirmReset] = useState(false)
   const prevStateRef = useRef<string>('')
 
   const load = () => {
@@ -139,16 +140,19 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
 
   const clearPositions = () => {
     if (!summary) return
-    const ok = window.confirm('确认重置当前持仓账户？这会删除持仓和交易流水，并把账户恢复为初始现金。')
-    if (!ok) return
+    if (!confirmReset) {
+      setConfirmReset(true)
+      setError('再次点击“确认重置”会清空持仓、交易流水和旧推荐信号。')
+      return
+    }
     setClearing(true)
     setError('')
     clearPositionPool()
       .then((nextSummary) => {
         setSummary(nextSummary)
-        return getPositionRecommendation()
+        setRecommendation(null)
+        setConfirmReset(false)
       })
-      .then((nextRecommendation) => setRecommendation(nextRecommendation))
       .catch((err: Error) => setError(err.message || '清空持仓失败'))
       .finally(() => setClearing(false))
   }
@@ -249,7 +253,7 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
                 {saving ? '调仓中...' : `一键调仓${rebalanceCount > 0 ? ` ${rebalanceCount}` : ''}`}
               </button>
             ) : null}
-            <button className="secondaryButton dangerButton" onClick={clearPositions} disabled={clearDisabled}>{clearing ? '重置中...' : '重置账户'}</button>
+            <button className="secondaryButton dangerButton" onClick={clearPositions} disabled={clearDisabled}>{clearing ? '重置中...' : confirmReset ? '确认重置' : '重置账户'}</button>
             <button className="primaryButton" onClick={generate} disabled={isRunning}>{isRunning ? '生成中...' : '生成信号'}</button>
           </div>
         </div>
