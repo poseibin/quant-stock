@@ -16,8 +16,8 @@ type Page = 'dashboard' | 'tasks' | 'positions' | 'research' | 'policySupport' |
 
 const pages: Array<{ id: Page; label: string; icon: typeof Activity }> = [
   { id: 'dashboard', label: '总览', icon: Activity },
-  { id: 'tasks', label: '评估中心', icon: ListChecks },
   { id: 'positions', label: '持仓管理', icon: WalletCards },
+  { id: 'tasks', label: '评估中心', icon: ListChecks },
   { id: 'research', label: '个股研究', icon: Search },
   { id: 'policySupport', label: '托底监测', icon: Radar },
   { id: 'breakout', label: '涨停预警', icon: Flame },
