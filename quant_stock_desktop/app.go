@@ -918,13 +918,20 @@ func (app *App) waitPythonStatusTask(cmd *exec.Cmd, logFile *os.File, logPath st
 	if statusErr == nil && status.State != "running" {
 		return
 	}
+	app.markPythonStatusTaskError(taskName, "分析进程已退出: "+err.Error()+"，日志: "+logPath)
+}
+
+func (app *App) markPythonStatusTaskError(taskName string, message string) {
+	if app.database == nil {
+		return
+	}
 	now := time.Now().Format(time.RFC3339)
 	_, _ = app.database.Conn().Exec(
 		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
 		 VALUES(?,'error',0,0,'','',?,?,?,?)
 		 ON CONFLICT(task) DO UPDATE SET state='error', message=excluded.message, updated_at=excluded.updated_at, finished_at=excluded.finished_at`,
 		taskName,
-		"分析进程已退出: "+err.Error()+"，日志: "+logPath,
+		message,
 		now,
 		now,
 		now,
@@ -983,6 +990,7 @@ func (app *App) RefreshLimitBreakoutCandidates(query market.BreakoutQuery) ([]ma
 		"DESKTOP_CONFIG_DB_PATH="+dbPath,
 	)
 	if err := cmd.Run(); err != nil {
+		app.markPythonStatusTaskError("limit_breakout", "涨停预警扫描失败: "+err.Error()+"，日志: "+logPath)
 		return nil, fmt.Errorf("涨停预警扫描失败: %w，请查看日志 %s", err, logPath)
 	}
 	return app.marketService.ListLimitBreakoutCandidates(dataPath, query)
@@ -1040,6 +1048,7 @@ func (app *App) RefreshLimitUpMomentumCandidates(query market.LimitUpMomentumQue
 		"DESKTOP_CONFIG_DB_PATH="+dbPath,
 	)
 	if err := cmd.Run(); err != nil {
+		app.markPythonStatusTaskError("limit_up_momentum", "涨停板推荐扫描失败: "+err.Error()+"，日志: "+logPath)
 		return nil, fmt.Errorf("涨停板推荐扫描失败: %w，请查看日志 %s", err, logPath)
 	}
 	return app.marketService.ListLimitUpMomentumCandidates(dataPath, query)
@@ -1057,6 +1066,43 @@ func (app *App) GetLimitUpMomentumRunStatus() (position.RunStatus, error) {
 		return position.RunStatus{}, err
 	}
 	return app.positionService.GetRunStatus("limit_up_momentum")
+}
+
+func (app *App) ClearLimitBreakoutCandidates() error {
+	if err := app.ensureMarketService(); err != nil {
+		return err
+	}
+	if err := app.marketService.ClearLimitBreakoutCandidates(); err != nil {
+		return err
+	}
+	app.clearRunStatus("limit_breakout")
+	return nil
+}
+
+func (app *App) ClearLimitUpMomentumCandidates() error {
+	if err := app.ensureMarketService(); err != nil {
+		return err
+	}
+	if err := app.marketService.ClearLimitUpMomentumCandidates(); err != nil {
+		return err
+	}
+	app.clearRunStatus("limit_up_momentum")
+	return nil
+}
+
+func (app *App) clearRunStatus(taskName string) {
+	if app.database == nil {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
+		 VALUES(?,'idle',0,0,'','','',?,?, '')
+		 ON CONFLICT(task) DO UPDATE SET state='idle', idx=0, total=0, stage='', name='', message='', updated_at=excluded.updated_at, finished_at=''`,
+		taskName,
+		now,
+		now,
+	)
 }
 
 func (app *App) ListLimitSignalEvaluationSummary() ([]market.LimitSignalEvaluationSummary, error) {
@@ -1634,6 +1680,7 @@ func (app *App) RunDataUpdate(req datafetch.UpdateRequest) error {
 	)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
+		app.markPythonStatusTaskError("data_update", "数据更新进程启动失败: "+err.Error()+"，日志: "+logPath)
 		return err
 	}
 	go app.waitDataUpdate(cmd, logFile, logPath)
@@ -6102,15 +6149,58 @@ func (app *App) CancelTask(id string) (task.DTO, error) {
 func (app *App) quantStockCorePath() string {
 	candidates := []string{
 		filepath.Join(filepath.Dir(app.settings.DataPath), "quant_stock_core"),
+		filepath.Join(mustGetwd(), "quant_stock_core"),
 		filepath.Join(mustGetwd(), "..", "quant_stock_core"),
 	}
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		for _, candidate := range quantCoreCandidatesFrom(filepath.Dir(exe)) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	candidates = append(candidates, quantCoreCandidatesFrom(mustGetwd())...)
 	for _, candidate := range candidates {
 		clean := filepath.Clean(candidate)
-		if info, err := os.Stat(filepath.Join(clean, "trading", "execution", "time_machine.py")); err == nil && !info.IsDir() {
+		if isQuantCoreRoot(clean) {
 			return clean
 		}
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(app.settings.DataPath), "quant_stock_core"))
+}
+
+func quantCoreCandidatesFrom(base string) []string {
+	out := make([]string, 0, 10)
+	seen := map[string]bool{}
+	dir := filepath.Clean(base)
+	for i := 0; i < 8 && dir != "." && dir != string(filepath.Separator); i++ {
+		for _, candidate := range []string{filepath.Join(dir, "quant_stock_core"), dir} {
+			clean := filepath.Clean(candidate)
+			if !seen[clean] {
+				seen[clean] = true
+				out = append(out, clean)
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return out
+}
+
+func isQuantCoreRoot(path string) bool {
+	for _, marker := range []string{
+		filepath.Join("scripts", "data_update_worker.py"),
+		filepath.Join("trading", "execution", "time_machine.py"),
+	} {
+		if info, err := os.Stat(filepath.Join(path, marker)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func pythonPathForCore(quantRoot string) string {

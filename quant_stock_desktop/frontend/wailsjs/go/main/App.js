@@ -18,6 +18,14 @@ export function CancelTask(arg1) {
   return window['go']['main']['App']['CancelTask'](arg1);
 }
 
+export function ClearLimitBreakoutCandidates() {
+  return window['go']['main']['App']['ClearLimitBreakoutCandidates']();
+}
+
+export function ClearLimitUpMomentumCandidates() {
+  return window['go']['main']['App']['ClearLimitUpMomentumCandidates']();
+}
+
 export function ClearPositionPool() {
   return window['go']['main']['App']['ClearPositionPool']();
 }

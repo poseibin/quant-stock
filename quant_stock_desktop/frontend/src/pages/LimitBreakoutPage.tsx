@@ -5,6 +5,8 @@ import { CandlestickChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import {
+  clearLimitBreakoutCandidates,
+  clearLimitUpMomentumCandidates,
   getLimitBreakoutRunStatus,
   getLimitUpMomentumRunStatus,
   listDailyBars,
@@ -132,6 +134,22 @@ function MomentumPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
     }
   }
 
+  const clearCache = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      await clearLimitUpMomentumCandidates()
+      setItems([])
+      setSelectedCode('')
+      setRefreshInfo('已清空涨停板推荐缓存')
+      setRunStatus(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const sortedItems = useMemo(() => sortMomentumItems(items, sortColumns), [items, sortColumns])
 
   useEffect(() => {
@@ -178,7 +196,10 @@ function MomentumPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
           <p>基于 daily、daily_basic、stock_basic、龙虎榜数据，按首板/二板事件提取位置、量能、趋势、流动性和资金确认特征。</p>
           {(refreshInfo || error) && <p className={error ? 'errorText' : 'cardHint'}>{error || refreshInfo}</p>}
         </div>
-        <button className="primaryButton" onClick={() => load(true)} disabled={loading}>{loading ? '计算中…' : '刷新推荐'}</button>
+        <div className="taskActions">
+          <button className="secondaryButton quietButton" onClick={clearCache} disabled={loading || items.length === 0}>清空</button>
+          <button className="primaryButton" onClick={() => load(true)} disabled={loading}>{loading ? '计算中…' : '刷新推荐'}</button>
+        </div>
       </section>
       <RunStatusProgress status={runStatus} />
 
@@ -315,6 +336,22 @@ function BreakoutPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
     }
   }
 
+  const clearCache = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      await clearLimitBreakoutCandidates()
+      setItems([])
+      setSelectedCode('')
+      setRefreshInfo('已清空横盘突发预警缓存')
+      setRunStatus(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
   useEffect(() => {
     load().catch((error) => console.error('[breakout] load failed', error))
   }, [])
@@ -355,7 +392,10 @@ function BreakoutPanel({ onOpenResearch }: { onOpenResearch?: (tsCode: string) =
           <p>扫描长期低波动箱体、近期突然放量拉升，并结合 ROE、净利率、资产负债率给出经营质量分。</p>
           {(refreshInfo || error) && <p className={error ? 'errorText' : 'cardHint'}>{error || refreshInfo}</p>}
         </div>
-        <button className="primaryButton" onClick={() => load(true)} disabled={loading}>{loading ? '扫描中…' : '重新扫描'}</button>
+        <div className="taskActions">
+          <button className="secondaryButton quietButton" onClick={clearCache} disabled={loading || items.length === 0}>清空</button>
+          <button className="primaryButton" onClick={() => load(true)} disabled={loading}>{loading ? '扫描中…' : '重新扫描'}</button>
+        </div>
       </section>
       <RunStatusProgress status={runStatus} />
 

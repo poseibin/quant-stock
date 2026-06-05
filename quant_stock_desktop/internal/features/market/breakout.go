@@ -98,6 +98,13 @@ func (service *Service) RefreshLimitBreakoutCandidates(dataPath string, query Br
 	return out, nil
 }
 
+func (service *Service) ClearLimitBreakoutCandidates() error {
+	if service == nil || service.repo == nil || service.repo.db == nil {
+		return nil
+	}
+	return service.repo.ClearLimitBreakoutCache()
+}
+
 func scanLimitBreakoutCandidates(dataPath string, query BreakoutQuery) ([]LimitBreakoutCandidate, error) {
 	stocks, err := readStockBasicMap(dataPath)
 	if err != nil {
@@ -221,6 +228,22 @@ func (repo *Repository) ReplaceLimitBreakoutCache(cacheKey string, items []Limit
 			_ = tx.Rollback()
 			return err
 		}
+	}
+	return tx.Commit()
+}
+
+func (repo *Repository) ClearLimitBreakoutCache() error {
+	tx, err := repo.db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM limit_breakout_cache`); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM limit_breakout_cache_meta`); err != nil {
+		_ = tx.Rollback()
+		return err
 	}
 	return tx.Commit()
 }

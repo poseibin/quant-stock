@@ -86,6 +86,13 @@ func (service *Service) ListLimitUpMomentumCandidates(dataPath string, query Lim
 	return service.repo.ListLimitUpMomentumCache(cacheKey, query.Limit)
 }
 
+func (service *Service) ClearLimitUpMomentumCandidates() error {
+	if service == nil || service.repo == nil || service.repo.db == nil {
+		return nil
+	}
+	return service.repo.ClearLimitUpMomentumCache()
+}
+
 func (repo *Repository) ListLimitUpMomentumCache(cacheKey string, limit int) ([]LimitUpMomentumCandidate, error) {
 	rows, err := repo.db.Query(`SELECT payload_json FROM limit_up_momentum_cache
 		WHERE cache_key = ? ORDER BY rank ASC LIMIT ?`, cacheKey, limit)
@@ -152,6 +159,22 @@ func (repo *Repository) ReplaceLimitUpMomentumCache(cacheKey string, items []Lim
 			_ = tx.Rollback()
 			return err
 		}
+	}
+	return tx.Commit()
+}
+
+func (repo *Repository) ClearLimitUpMomentumCache() error {
+	tx, err := repo.db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM limit_up_momentum_cache`); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM limit_up_momentum_cache_meta`); err != nil {
+		_ = tx.Rollback()
+		return err
 	}
 	return tx.Commit()
 }

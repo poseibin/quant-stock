@@ -16,6 +16,10 @@ export function ApplyPortfolioCandidate(arg1:main.ApplyPortfolioCandidateRequest
 
 export function CancelTask(arg1:string):Promise<task.DTO>;
 
+export function ClearLimitBreakoutCandidates():Promise<void>;
+
+export function ClearLimitUpMomentumCandidates():Promise<void>;
+
 export function ClearPositionPool():Promise<position.Summary>;
 
 export function ConfirmPositionTrades(arg1:Array<position.TradeRequest>):Promise<position.Summary>;

@@ -42,9 +42,11 @@ declare global {
           ListLimitBreakoutCandidates: (query: BreakoutQuery) => Promise<LimitBreakoutCandidate[]>
           RefreshLimitBreakoutCandidates: (query: BreakoutQuery) => Promise<LimitBreakoutCandidate[]>
           GetLimitBreakoutRunStatus: () => Promise<RunStatus>
+          ClearLimitBreakoutCandidates: () => Promise<void>
           ListLimitUpMomentumCandidates: (query: LimitUpMomentumQuery) => Promise<LimitUpMomentumCandidate[]>
           RefreshLimitUpMomentumCandidates: (query: LimitUpMomentumQuery) => Promise<LimitUpMomentumCandidate[]>
           GetLimitUpMomentumRunStatus: () => Promise<RunStatus>
+          ClearLimitUpMomentumCandidates: () => Promise<void>
           RunLimitSignalEvaluation: () => Promise<void>
           GetLimitSignalEvaluationRunStatus: () => Promise<RunStatus>
           ListLimitSignalEvaluationSummary: () => Promise<LimitSignalEvaluationSummary[]>
@@ -1205,11 +1207,23 @@ export async function getLimitBreakoutRunStatus(): Promise<RunStatus> {
   return { task: 'limit_breakout', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
 }
 
+export async function clearLimitBreakoutCandidates(): Promise<void> {
+  if (window.go?.main?.App?.ClearLimitBreakoutCandidates) {
+    return window.go.main.App.ClearLimitBreakoutCandidates()
+  }
+}
+
 export async function getLimitUpMomentumRunStatus(): Promise<RunStatus> {
   if (window.go?.main?.App?.GetLimitUpMomentumRunStatus) {
     return window.go.main.App.GetLimitUpMomentumRunStatus()
   }
   return { task: 'limit_up_momentum', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+}
+
+export async function clearLimitUpMomentumCandidates(): Promise<void> {
+  if (window.go?.main?.App?.ClearLimitUpMomentumCandidates) {
+    return window.go.main.App.ClearLimitUpMomentumCandidates()
+  }
 }
 
 export async function runLimitSignalEvaluation(): Promise<void> {
