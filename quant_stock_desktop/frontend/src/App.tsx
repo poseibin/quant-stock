@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react'
-import { Activity, Database, Flame, Landmark, ListChecks, Radar, Search, Settings as SettingsIcon, WalletCards } from 'lucide-react'
+import { Activity, Database, Flame, ListChecks, Radar, Search, Settings as SettingsIcon, WalletCards } from 'lucide-react'
 import { getAppInfo, getPositionRecommendation, type AppInfo } from './services/app'
 import { DashboardPage } from './pages/DashboardPage'
 import { DataExplorerPage } from './pages/DataExplorerPage'
 import { LimitBreakoutPage } from './pages/LimitBreakoutPage'
 import { PositionPage } from './pages/PositionPage'
 import { PolicySupportPage } from './pages/PolicySupportPage'
-import { StateTeamPage } from './pages/StateTeamPage'
 import { StockResearchPage } from './pages/StockResearchPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TaskCenterPage } from './pages/TaskCenterPage'
 import 'react-data-grid/lib/styles.css'
 import './styles.css'
 
-type Page = 'dashboard' | 'tasks' | 'positions' | 'research' | 'policySupport' | 'stateTeam' | 'breakout' | 'data' | 'settings'
+type Page = 'dashboard' | 'tasks' | 'positions' | 'research' | 'policySupport' | 'breakout' | 'data' | 'settings'
 
 const pages: Array<{ id: Page; label: string; icon: typeof Activity }> = [
   { id: 'dashboard', label: '总览', icon: Activity },
@@ -21,7 +20,6 @@ const pages: Array<{ id: Page; label: string; icon: typeof Activity }> = [
   { id: 'positions', label: '持仓管理', icon: WalletCards },
   { id: 'research', label: '个股研究', icon: Search },
   { id: 'policySupport', label: '托底监测', icon: Radar },
-  { id: 'stateTeam', label: '国家队跟踪', icon: Landmark },
   { id: 'breakout', label: '涨停预警', icon: Flame },
   { id: 'data', label: '数据管理', icon: Database },
   { id: 'settings', label: '设置', icon: SettingsIcon }
@@ -101,7 +99,6 @@ function titleOf(page: Page) {
     case 'positions': return '持仓管理'
     case 'research': return '个股研究'
     case 'policySupport': return '托底监测'
-    case 'stateTeam': return '国家队跟踪'
     case 'breakout': return '涨停预警'
     case 'data': return '数据管理'
     case 'settings': return '设置'
@@ -114,7 +111,6 @@ function renderPage(page: Page, appInfo: AppInfo, openResearch: (tsCode: string)
   if (page === 'positions') return <PositionPage onOpenResearch={openResearch} />
   if (page === 'research') return <StockResearchPage initialTsCode={researchCode} returnLabel={researchReturnPage ? titleOf(researchReturnPage) : ''} onBack={researchReturnPage ? backFromResearch : undefined} />
   if (page === 'policySupport') return <PolicySupportPage onOpenResearch={openResearch} />
-  if (page === 'stateTeam') return <StateTeamPage onOpenResearch={openResearch} />
   if (page === 'breakout') return <LimitBreakoutPage onOpenResearch={openResearch} />
   if (page === 'data') return <DataExplorerPage />
   if (page === 'settings') return <SettingsPage />
