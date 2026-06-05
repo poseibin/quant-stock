@@ -3486,6 +3486,14 @@ th {
   margin-bottom: 18px;
 }
 
+.limitEvaluationTabs {
+  margin-top: 16px;
+}
+
+.limitEvaluationTabs button {
+  min-width: 190px;
+}
+
 .limitEvaluationGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

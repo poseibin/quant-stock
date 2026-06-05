@@ -7,6 +7,21 @@ import {
   type RunStatus
 } from '../services/app'
 
+type SignalEvaluationTab = 'limit_up_momentum' | 'limit_breakout'
+
+const signalEvaluationTabs: Array<{ key: SignalEvaluationTab; label: string; empty: string }> = [
+  {
+    key: 'limit_up_momentum',
+    label: '涨停板推荐评估',
+    empty: '暂无涨停板推荐回看结果，先在涨停预警里刷新涨停板推荐，再点击评估验证'
+  },
+  {
+    key: 'limit_breakout',
+    label: '横盘突发预警评估',
+    empty: '暂无横盘突发预警回看结果，先在涨停预警里刷新横盘突发预警，再点击评估验证'
+  }
+]
+
 function pct(value: number) {
   return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
 }
@@ -37,6 +52,7 @@ function RunStatusProgress({ status }: { status: RunStatus | null }) {
 
 export function LimitSignalEvaluationPanel() {
   const [items, setItems] = useState<LimitSignalEvaluationSummary[]>([])
+  const [activeSignal, setActiveSignal] = useState<SignalEvaluationTab>('limit_up_momentum')
   const [status, setStatus] = useState<RunStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -74,22 +90,36 @@ export function LimitSignalEvaluationPanel() {
   }, [status?.state])
 
   const running = status?.state === 'running'
+  const activeTab = signalEvaluationTabs.find((tab) => tab.key === activeSignal) ?? signalEvaluationTabs[0]
+  const visibleItems = items.filter((item) => item.signal_type === activeSignal)
+
   return (
     <section className="dashboardPanel limitEvaluationPanel">
       <div className="tableHeader">
         <div>
           <div className="sectionLabel">LIMIT SIGNAL EVALUATION</div>
-          <div className="dashboardPanelTitle">涨停模型回看验证</div>
+          <div className="dashboardPanelTitle">{activeTab.label}</div>
           <div className="cardHint">候选生成时写入预测快照，回看 T+1/T+3/T+5/T+10 收益、5日回撤和涨停命中，再给参数版本建议。</div>
         </div>
         <button className="secondaryButton" onClick={run} disabled={loading || running}>{running ? '评估中...' : '评估验证'}</button>
       </div>
+      <div className="inlineTabs limitEvaluationTabs">
+        {signalEvaluationTabs.map((tab) => (
+          <button
+            key={tab.key}
+            className={activeSignal === tab.key ? 'active' : ''}
+            onClick={() => setActiveSignal(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
       {(error || status?.message) && <div className={error || status?.state === 'error' ? 'errorText' : 'cardHint'}>{error || status?.message}</div>}
       <RunStatusProgress status={status} />
       <div className="limitEvaluationGrid">
-        {items.length === 0 ? (
-          <div className="taskGridEmpty">暂无回看结果，先在涨停预警里刷新推荐/预警后点击评估验证</div>
-        ) : items.map((item) => (
+        {visibleItems.length === 0 ? (
+          <div className="taskGridEmpty">{activeTab.empty}</div>
+        ) : visibleItems.map((item) => (
           <div className="limitEvaluationCard" key={`${item.signal_type}-${item.strategy_version}-${item.parameter_key}`}>
             <div className="limitEvaluationTopline">
               <span>{signalLabel(item.signal_type)} · {item.strategy_version}</span>
