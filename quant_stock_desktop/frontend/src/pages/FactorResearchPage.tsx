@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, LineChart, Play, RefreshCw, ShieldCheck } from 'lucide-react'
+import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, Play, RefreshCw, ShieldCheck } from 'lucide-react'
 import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
 
 type FactorFamily = {
@@ -11,11 +11,12 @@ type FactorFamily = {
 }
 
 type PipelineStep = {
+  key: string
   title: string
   owner: string
   output: string
   detail: string
-  status: '已规划' | '开发中' | '待接入'
+  status: '已完成' | '运行中' | '排队中' | '待执行' | '失败' | '已取消'
 }
 
 type ResearchTab = 'overview' | 'runs' | 'factors' | 'model' | 'risk'
@@ -40,15 +41,15 @@ const factorFamilies: FactorFamily[] = [
   { name: '事件/预期', count: 11, examples: '业绩预告、预告利润、龙虎榜、机构净买、高管增减持', role: '作为低容量卫星信号，辅助模型识别催化', status: 'ready' }
 ]
 
-const pipeline: PipelineStep[] = [
-  { title: '时点特征面板', owner: '数据底座', output: 'monthly_factor_panel', detail: '按调仓日生成横截面，只使用当日之前可见数据。财务字段按 ann_date 对齐。', status: '开发中' },
-  { title: '因子清洗', owner: '研究引擎', output: 'rank / neutral', detail: '横截面方向 Rank，并保留行业、市值、流动性中性化版本。', status: '开发中' },
-  { title: '中性化', owner: '研究引擎', output: 'neutralized_factors', detail: '行业、市值、流动性中性化，同时保留未中性化版本做对照。', status: '开发中' },
-  { title: '因子检验', owner: '评估引擎', output: 'ic_report / quantile_report', detail: 'IC、Rank IC、ICIR、分层收益、多空收益、单调性已写入 MySQL。', status: '开发中' },
-  { title: '特征筛选', owner: '模型引擎', output: 'feature_set_v1', detail: '按 IC 排序、家族配额和相关性去冗余保留最多 45 个特征。', status: '开发中' },
-  { title: 'LightGBM', owner: '模型引擎', output: 'ml_factor_ranker', detail: '已用 walk-forward 预测未来 20 日行业相对收益，并落库 OOS 候选。', status: '开发中' },
-  { title: '组合构建', owner: '组合引擎', output: 'topN portfolio', detail: '已生成研究策略，支持单票、行业、交易宇宙约束和弱市降仓。', status: '开发中' },
-  { title: 'WF 准入', owner: '评估中心', output: 'model_admission', detail: '已接入策略准入，并按模型预测覆盖期修正有效年化口径。', status: '开发中' }
+const pipelineBase: Array<Omit<PipelineStep, 'status'>> = [
+  { key: 'build_factor_panel', title: '生成因子面板', owner: 'Python 研究引擎', output: 'monthly_factor_panel', detail: '按调仓日生成 point-in-time 横截面，财务和事件字段只使用调仓日前可见数据。' },
+  { key: 'evaluate_factors', title: '因子检验', owner: 'Python 研究引擎', output: 'factor_ic_results', detail: '计算 IC、Rank IC、ICIR、分层收益、多空收益和市场状态下的因子强弱。' },
+  { key: 'factor_correlation_report', title: '相关性去冗余', owner: 'Python 研究引擎', output: 'factor_correlation_report', detail: '按 Spearman 相关性识别重复特征，给训练特征写入保留和剔除依据。' },
+  { key: 'train_lgbm', title: '训练 LightGBM', owner: 'Python 模型引擎', output: 'factor_model_runs', detail: '用 walk-forward 预测未来 20 日行业相对收益，落库 OOS 预测和特征重要度。' },
+  { key: 'latest_inference', title: '最新截面推理', owner: 'Python 模型引擎', output: 'factor_latest_predictions', detail: '使用最新生效模型对当前截面打分，输出 Top20% 候选池。' },
+  { key: 'stress_report', title: '压力分段报告', owner: 'Python 评估引擎', output: 'factor_model_stress_results', detail: '按股灾、弱势、流动性挤压、年度等分段检查模型失效区间。' },
+  { key: 'strategy_admission', title: '策略准入评估', owner: 'Go 编排 + 评估中心', output: 'eval_strategy_admission', detail: '把 ml_factor_ranker 接入准入表，统一输出可启用、观察或拒绝的依据。' },
+  { key: 'validate_research_run', title: '产物完整性检查', owner: 'Python 研究引擎', output: 'factor_research_stage_results', detail: '检查面板、IC、模型、推理、压力报告和准入结果是否齐全。' }
 ]
 
 const validationRows = [
@@ -61,8 +62,9 @@ const validationRows = [
 ]
 
 function statusClass(status: FactorFamily['status'] | PipelineStep['status']) {
-  if (status === 'ready' || status === '已规划') return 'success'
-  if (status === 'design' || status === '开发中') return 'running'
+  if (status === 'ready' || status === '已完成') return 'success'
+  if (status === 'design' || status === '运行中' || status === '排队中') return 'running'
+  if (status === '失败' || status === '已取消') return 'failed'
   return 'created'
 }
 
@@ -101,6 +103,20 @@ export function FactorResearchPage() {
     .filter((row) => row.bucket_type !== 'full')
     .sort((a, b) => a.annual_return - b.annual_return)
     .slice(0, 4), [stressRows])
+  const latestTask = tasks[0]
+  const pipelineSteps = useMemo(() => buildPipelineSteps({
+    task: latestTask,
+    latestRun: runs[0],
+    icRows,
+    correlations,
+    model,
+    latestPredictions,
+    stressRows,
+    admissionRows
+  }), [latestTask, runs, icRows, correlations, model, latestPredictions, stressRows, admissionRows])
+  const runningTasks = tasks.filter((task) => task.status === 'running').length
+  const queuedTasks = tasks.filter((task) => task.status === 'queued' || task.status === 'created').length
+  const failedTasks = tasks.filter((task) => task.status === 'failed' || task.status === 'interrupted').length
   const totalFactors = factorFamilies.reduce((sum, item) => sum + item.count, 0)
   const readyFactors = factorFamilies.filter((item) => item.status === 'ready').reduce((sum, item) => sum + item.count, 0)
   const endDate = useMemo(() => '20251231', [])
@@ -225,18 +241,17 @@ export function FactorResearchPage() {
 
       {activeTab === 'overview' ? (
         <>
-      <div className="factorLayout">
-        <section className="detailCard">
+      <section className="detailCard">
           <div className="tableHeader">
             <div>
               <div className="sectionLabel">PIPELINE</div>
               <h3>自动研究流水线</h3>
             </div>
-            <span>先把底座跑稳，再接模型训练和评估中心准入</span>
+            <span>{latestTask ? `${latestTask.name} · ${statusLabel(latestTask.status)}` : '暂无进行中的因子研究任务'}</span>
           </div>
           <div className="factorPipeline">
-            {pipeline.map((step, index) => (
-              <div className="factorStep" key={step.title}>
+            {pipelineSteps.map((step, index) => (
+              <div className="factorStep" key={step.key}>
                 <div className="factorStepIcon">{index + 1}</div>
                 <div>
                   <div className="factorStepTitle">
@@ -252,29 +267,69 @@ export function FactorResearchPage() {
               </div>
             ))}
           </div>
-        </section>
+      </section>
+        </>
+      ) : null}
 
-        <section className="detailCard factorModelCard">
-          <div className="tableHeader">
-            <div>
-              <div className="sectionLabel">MODEL</div>
-              <h3>LightGBM 设计</h3>
-            </div>
-            <BrainCircuit size={22} />
+      {activeTab === 'runs' ? (
+        <>
+      <section className="detailCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">RUNS</div>
+            <h3>任务执行监控</h3>
           </div>
-          <div className="modelChecklist">
-            <div><CheckCircle2 size={16} /><span>Label 使用未来 20 日行业相对收益</span></div>
-            <div><ShieldCheck size={16} /><span>训练集按 walk-forward 滚动，禁止随机切分</span></div>
-            <div><Layers3 size={16} /><span>特征保留 raw、rank、neutralized 多版本</span></div>
-            <div><BarChart3 size={16} /><span>输出预测分数后进入组合约束</span></div>
-          </div>
-          <div className="factorFormula">
-            <span>主标签</span>
-            <code>fwd20_return - industry_fwd20_return</code>
-          </div>
-        </section>
-      </div>
+          <span>Go 负责任务队列和阶段编排，Python 执行计算并把阶段结果写入 MySQL</span>
+        </div>
+        <div className="metricStrip">
+          <div className="metricCard"><span>任务总数</span><b>{numberText(tasks.length)}</b><em>最近 300 条因子研究任务</em></div>
+          <div className="metricCard good"><span>运行中</span><b>{numberText(runningTasks)}</b><em>正在执行的 worker</em></div>
+          <div className="metricCard"><span>排队/待启动</span><b>{numberText(queuedTasks)}</b><em>等待任务锁和 worker</em></div>
+          <div className="metricCard bad"><span>失败/中断</span><b>{numberText(failedTasks)}</b><em>需要重跑或看日志</em></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>任务</th>
+              <th>状态</th>
+              <th>进度</th>
+              <th>当前步骤</th>
+              <th>样本</th>
+              <th>因子</th>
+              <th>更新时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.length === 0 ? (
+              <tr><td colSpan={7} className="mutedText">暂无因子研究任务</td></tr>
+            ) : tasks.slice(0, 12).map((task) => {
+              const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
+              const panel = rows.find((row) => row.stage === 'build_factor_panel') || {}
+              const running = rows.find((row) => row.task_status === 'running') || {}
+              const message = String(task.summary.message || running.message || running.stage_name || running.stage || '-')
+              return (
+                <tr key={task.id}>
+                  <td>
+                    <b>{task.name}</b>
+                    <div className="mono">{task.external_run_id}</div>
+                  </td>
+                  <td><span className={`badge ${task.status}`}>{statusLabel(task.status)}</span></td>
+                  <td>{Math.round((task.progress || 0) * 100)}%</td>
+                  <td>{message}</td>
+                  <td>{numberText(panel.sample_rows)} / {numberText(panel.sample_dates)}期</td>
+                  <td>{numberText(panel.factor_count)}</td>
+                  <td className="mono">{task.updated_at || task.created_at}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </section>
+        </>
+      ) : null}
 
+      {activeTab === 'factors' ? (
+        <>
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -327,78 +382,7 @@ export function FactorResearchPage() {
           </tbody>
         </table>
       </section>
-        </>
-      ) : null}
 
-      {activeTab === 'runs' ? (
-        <>
-      <section className="detailCard">
-        <div className="tableHeader">
-          <div>
-            <div className="sectionLabel">NEXT TASKS</div>
-            <h3>接下来要落的后端任务</h3>
-          </div>
-          <LineChart size={22} />
-        </div>
-        <div className="factorTaskList">
-          <div><span>1</span><p>生成月频 point-in-time 因子面板，财务和事件字段只使用调仓日前已披露数据。</p></div>
-          <div><span>2</span><p>完成 IC、分层、相关性报告，并给训练特征写入保留/剔除依据。</p></div>
-          <div><span>3</span><p>训练 LightGBM walk-forward 模型，固定最佳 run_id 进入策略配置版本。</p></div>
-          <div><span>4</span><p>输出最新截面候选池，再由 `ml_factor_ranker` 转成受约束持仓。</p></div>
-        </div>
-      </section>
-
-      <section className="detailCard">
-        <div className="tableHeader">
-          <div>
-            <div className="sectionLabel">RUNS</div>
-            <h3>最近因子研究任务</h3>
-          </div>
-          <span>任务阶段由 Go 编排，计算结果由 Python 写入 MySQL</span>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>任务</th>
-              <th>状态</th>
-              <th>进度</th>
-              <th>当前步骤</th>
-              <th>样本</th>
-              <th>因子</th>
-              <th>更新时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.length === 0 ? (
-              <tr><td colSpan={7} className="mutedText">暂无因子研究任务</td></tr>
-            ) : tasks.slice(0, 12).map((task) => {
-              const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
-              const panel = rows.find((row) => row.stage === 'build_factor_panel') || {}
-              const running = rows.find((row) => row.task_status === 'running') || {}
-              const message = String(task.summary.message || running.message || running.stage_name || running.stage || '-')
-              return (
-                <tr key={task.id}>
-                  <td>
-                    <b>{task.name}</b>
-                    <div className="mono">{task.external_run_id}</div>
-                  </td>
-                  <td><span className={`badge ${task.status}`}>{statusLabel(task.status)}</span></td>
-                  <td>{Math.round((task.progress || 0) * 100)}%</td>
-                  <td>{message}</td>
-                  <td>{numberText(panel.sample_rows)} / {numberText(panel.sample_dates)}期</td>
-                  <td>{numberText(panel.factor_count)}</td>
-                  <td className="mono">{task.updated_at || task.created_at}</td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </section>
-        </>
-      ) : null}
-
-      {activeTab === 'factors' ? (
-        <>
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -489,6 +473,26 @@ export function FactorResearchPage() {
 
       {activeTab === 'model' ? (
         <>
+      <section className="detailCard factorModelCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">MODEL DESIGN</div>
+            <h3>LightGBM 设计</h3>
+          </div>
+          <BrainCircuit size={22} />
+        </div>
+        <div className="modelChecklist">
+          <div><CheckCircle2 size={16} /><span>Label 使用未来 20 日行业相对收益</span></div>
+          <div><ShieldCheck size={16} /><span>训练集按 walk-forward 滚动，禁止随机切分</span></div>
+          <div><Layers3 size={16} /><span>特征保留 raw、rank、neutralized 多版本</span></div>
+          <div><BarChart3 size={16} /><span>输出预测分数后进入组合约束</span></div>
+        </div>
+        <div className="factorFormula">
+          <span>主标签</span>
+          <code>fwd20_return - industry_fwd20_return</code>
+        </div>
+      </section>
+
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -809,6 +813,83 @@ function StressTable({ rows, emptyText, compact = false }: { rows: FactorStressR
       </tbody>
     </table>
   )
+}
+
+function buildPipelineSteps(input: {
+  task?: TaskDTO
+  latestRun?: FactorResearchRunSummary
+  icRows: FactorICResult[]
+  correlations: FactorCorrelationResult[]
+  model: FactorModelRun | null
+  latestPredictions: FactorLatestPrediction[]
+  stressRows: FactorStressResult[]
+  admissionRows: FactorAdmissionComparison[]
+}): PipelineStep[] {
+  const rows = taskRows(input.task)
+  const rowsByStage = new Map(rows.map((row) => [String(row.stage || ''), row]))
+  const activeRow = rows.find((row) => ['running', 'queued'].includes(String(row.status || row.task_status || '')))
+  const allArtifactsDone = Boolean(
+    input.latestRun?.sample_rows &&
+    input.icRows.length &&
+    input.correlations.length &&
+    input.model &&
+    input.latestPredictions.length &&
+    input.stressRows.length &&
+    input.admissionRows.length
+  )
+
+  return pipelineBase.map((step, index) => {
+    const row = rowsByStage.get(step.key)
+    let status = row ? stageStatusLabel(String(row.status || row.task_status || '')) : inferredStageStatus(step.key, input, allArtifactsDone)
+    if (status === '待执行' && input.task && ['created', 'queued', 'running'].includes(input.task.status)) {
+      const activeStage = String(activeRow?.stage || '')
+      if (activeStage === step.key) {
+        status = stageStatusLabel(String(activeRow?.status || activeRow?.task_status || input.task.status))
+      } else if (!activeStage && index === 0) {
+        status = stageStatusLabel(input.task.status)
+      }
+    }
+    return { ...step, status }
+  })
+}
+
+function taskRows(task?: TaskDTO) {
+  return Array.isArray(task?.summary?.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
+}
+
+function inferredStageStatus(
+  key: string,
+  input: {
+    task?: TaskDTO
+    latestRun?: FactorResearchRunSummary
+    icRows: FactorICResult[]
+    correlations: FactorCorrelationResult[]
+    model: FactorModelRun | null
+    latestPredictions: FactorLatestPrediction[]
+    stressRows: FactorStressResult[]
+    admissionRows: FactorAdmissionComparison[]
+  },
+  allArtifactsDone: boolean
+): PipelineStep['status'] {
+  if (key === 'build_factor_panel' && Number(input.latestRun?.sample_rows) > 0) return '已完成'
+  if (key === 'evaluate_factors' && input.icRows.length > 0) return '已完成'
+  if (key === 'factor_correlation_report' && input.correlations.length > 0) return '已完成'
+  if (key === 'train_lgbm' && input.model) return '已完成'
+  if (key === 'latest_inference' && input.latestPredictions.length > 0) return '已完成'
+  if (key === 'stress_report' && input.stressRows.length > 0) return '已完成'
+  if (key === 'strategy_admission' && input.admissionRows.length > 0) return '已完成'
+  if (key === 'validate_research_run' && (allArtifactsDone || input.task?.status === 'success')) return '已完成'
+  if (!input.task && !input.latestRun) return '待执行'
+  return '待执行'
+}
+
+function stageStatusLabel(status: string): PipelineStep['status'] {
+  if (status === 'success') return '已完成'
+  if (status === 'running') return '运行中'
+  if (status === 'queued') return '排队中'
+  if (status === 'failed' || status === 'interrupted') return '失败'
+  if (status === 'cancelled') return '已取消'
+  return '待执行'
 }
 
 function stressBucketType(type: string) {
