@@ -103,7 +103,8 @@ export function FactorResearchPage() {
     .filter((row) => row.bucket_type !== 'full')
     .sort((a, b) => a.annual_return - b.annual_return)
     .slice(0, 4), [stressRows])
-  const latestTask = tasks[0]
+  const parentTasks = useMemo(() => tasks.filter((task) => !task.parent_id), [tasks])
+  const latestTask = parentTasks[0]
   const pipelineSteps = useMemo(() => buildPipelineSteps({
     task: latestTask,
     latestRun: runs[0],
@@ -114,9 +115,9 @@ export function FactorResearchPage() {
     stressRows,
     admissionRows
   }), [latestTask, runs, icRows, correlations, model, latestPredictions, stressRows, admissionRows])
-  const runningTasks = tasks.filter((task) => task.status === 'running').length
-  const queuedTasks = tasks.filter((task) => task.status === 'queued' || task.status === 'created').length
-  const failedTasks = tasks.filter((task) => task.status === 'failed' || task.status === 'interrupted').length
+  const runningTasks = parentTasks.filter((task) => task.status === 'running').length
+  const queuedTasks = parentTasks.filter((task) => task.status === 'queued' || task.status === 'created').length
+  const failedTasks = parentTasks.filter((task) => task.status === 'failed' || task.status === 'interrupted').length
   const totalFactors = factorFamilies.reduce((sum, item) => sum + item.count, 0)
   const readyFactors = factorFamilies.filter((item) => item.status === 'ready').reduce((sum, item) => sum + item.count, 0)
   const endDate = useMemo(() => '20251231', [])
@@ -191,6 +192,21 @@ export function FactorResearchPage() {
       await startTask(task.id)
       await refresh()
       setNotice(profile === 'smoke' ? '已启动因子研究烟测任务' : '已启动因子研究正式任务')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const startExistingTask = async (taskID: string) => {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      await startTask(taskID)
+      await refresh()
+      setNotice('已启动因子研究任务，Go 会按流水线顺序启动子阶段')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -282,9 +298,9 @@ export function FactorResearchPage() {
           <span>Go 负责任务队列和阶段编排，Python 执行计算并把阶段结果写入 MySQL</span>
         </div>
         <div className="metricStrip">
-          <div className="metricCard"><span>任务总数</span><b>{numberText(tasks.length)}</b><em>最近 300 条因子研究任务</em></div>
+          <div className="metricCard"><span>父任务数</span><b>{numberText(parentTasks.length)}</b><em>只展示可手动启动的研究任务</em></div>
           <div className="metricCard good"><span>运行中</span><b>{numberText(runningTasks)}</b><em>正在执行的 worker</em></div>
-          <div className="metricCard"><span>排队/待启动</span><b>{numberText(queuedTasks)}</b><em>等待任务锁和 worker</em></div>
+          <div className="metricCard"><span>排队/待启动</span><b>{numberText(queuedTasks)}</b><em>created 需要点击启动</em></div>
           <div className="metricCard bad"><span>失败/中断</span><b>{numberText(failedTasks)}</b><em>需要重跑或看日志</em></div>
         </div>
         <table>
@@ -297,16 +313,17 @@ export function FactorResearchPage() {
               <th>样本</th>
               <th>因子</th>
               <th>更新时间</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
-            {tasks.length === 0 ? (
-              <tr><td colSpan={7} className="mutedText">暂无因子研究任务</td></tr>
-            ) : tasks.slice(0, 12).map((task) => {
+            {parentTasks.length === 0 ? (
+              <tr><td colSpan={8} className="mutedText">暂无因子研究任务</td></tr>
+            ) : parentTasks.slice(0, 12).map((task) => {
               const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
               const panel = rows.find((row) => row.stage === 'build_factor_panel') || {}
               const running = rows.find((row) => row.task_status === 'running') || {}
-              const message = String(task.summary.message || running.message || running.stage_name || running.stage || '-')
+              const message = factorTaskMessage(task, running)
               return (
                 <tr key={task.id}>
                   <td>
@@ -319,6 +336,15 @@ export function FactorResearchPage() {
                   <td>{numberText(panel.sample_rows)} / {numberText(panel.sample_dates)}期</td>
                   <td>{numberText(panel.factor_count)}</td>
                   <td className="mono">{task.updated_at || task.created_at}</td>
+                  <td>
+                    {canStartTask(task.status) ? (
+                      <button className="secondaryButton startButton" onClick={() => startExistingTask(task.id)} disabled={busy}>
+                        {task.status === 'created' || task.status === 'queued' ? '启动' : '重启'}
+                      </button>
+                    ) : (
+                      <span className="mutedText">-</span>
+                    )}
+                  </td>
                 </tr>
               )
             })}
@@ -890,6 +916,20 @@ function stageStatusLabel(status: string): PipelineStep['status'] {
   if (status === 'failed' || status === 'interrupted') return '失败'
   if (status === 'cancelled') return '已取消'
   return '待执行'
+}
+
+function canStartTask(status: string) {
+  return ['created', 'queued', 'failed', 'interrupted', 'cancelled'].includes(status)
+}
+
+function factorTaskMessage(task: TaskDTO, running: Record<string, unknown>) {
+  if (task.status === 'created') return '等待手动启动'
+  if (task.status === 'queued') return '等待调度'
+  if (task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled') {
+    return task.error_message || statusLabel(task.status)
+  }
+  if (task.status === 'success') return '完成'
+  return String(task.summary.message || running.message || running.stage_name || running.stage || '-')
 }
 
 function stressBucketType(type: string) {
