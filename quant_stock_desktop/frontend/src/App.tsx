@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Activity, Database, Flame, FlaskConical, ListChecks, Radar, Search, Settings as SettingsIcon, WalletCards } from 'lucide-react'
+import { Activity, Database, Flame, FlaskConical, ListChecks, Radar, Repeat2, Search, Settings as SettingsIcon, WalletCards } from 'lucide-react'
 import { getAppInfo, getPositionRecommendation, type AppInfo } from './services/app'
 import { DashboardPage } from './pages/DashboardPage'
 import { DataExplorerPage } from './pages/DataExplorerPage'
@@ -10,14 +10,16 @@ import { PolicySupportPage } from './pages/PolicySupportPage'
 import { StockResearchPage } from './pages/StockResearchPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TaskCenterPage } from './pages/TaskCenterPage'
+import { T0AssistantPage } from './pages/T0AssistantPage'
 import 'react-data-grid/lib/styles.css'
 import './styles.css'
 
-type Page = 'dashboard' | 'tasks' | 'factorResearch' | 'positions' | 'research' | 'policySupport' | 'breakout' | 'data' | 'settings'
+type Page = 'dashboard' | 'tasks' | 'factorResearch' | 'positions' | 't0Assistant' | 'research' | 'policySupport' | 'breakout' | 'data' | 'settings'
 
 const pages: Array<{ id: Page; label: string; icon: typeof Activity }> = [
   { id: 'dashboard', label: '总览', icon: Activity },
   { id: 'positions', label: '持仓管理', icon: WalletCards },
+  { id: 't0Assistant', label: '做T助手', icon: Repeat2 },
   { id: 'tasks', label: '评估中心', icon: ListChecks },
   { id: 'factorResearch', label: '因子研究', icon: FlaskConical },
   { id: 'research', label: '个股研究', icon: Search },
@@ -100,6 +102,7 @@ function titleOf(page: Page) {
     case 'tasks': return '评估中心'
     case 'factorResearch': return '因子研究'
     case 'positions': return '持仓管理'
+    case 't0Assistant': return '做T助手'
     case 'research': return '个股研究'
     case 'policySupport': return '托底监测'
     case 'breakout': return '涨停预警'
@@ -113,6 +116,7 @@ function renderPage(page: Page, appInfo: AppInfo, openResearch: (tsCode: string)
   if (page === 'tasks') return <TaskCenterPage onOpenResearch={openResearch} />
   if (page === 'factorResearch') return <FactorResearchPage />
   if (page === 'positions') return <PositionPage onOpenResearch={openResearch} />
+  if (page === 't0Assistant') return <T0AssistantPage onOpenResearch={openResearch} />
   if (page === 'research') return <StockResearchPage initialTsCode={researchCode} returnLabel={researchReturnPage ? titleOf(researchReturnPage) : ''} onBack={researchReturnPage ? backFromResearch : undefined} />
   if (page === 'policySupport') return <PolicySupportPage onOpenResearch={openResearch} />
   if (page === 'breakout') return <LimitBreakoutPage onOpenResearch={openResearch} />

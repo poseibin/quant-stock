@@ -62,6 +62,7 @@ declare global {
           ListCrashWarningRuns: (limit: number) => Promise<CrashWarningRunSummary[]>
           ListCrashWarningFeatures: (runID: string, limit: number) => Promise<CrashWarningFeature[]>
           GetPositionSummary: () => Promise<PositionSummary>
+          ListT0Recommendations: (limit: number) => Promise<T0Recommendation[]>
           GetPositionHistory: () => Promise<PositionHistoryPoint[]>
           GetPositionHoldings: () => Promise<PositionItem[]>
           GetPositionRecommendation: () => Promise<PositionRecommendation>
@@ -790,6 +791,35 @@ export interface LimitSignalEvaluationSummary {
   updated_at: string
 }
 
+export interface T0Recommendation {
+  ts_code: string
+  name: string
+  industry: string
+  trade_date: string
+  action: string
+  recommendation: string
+  score: number
+  state: string
+  shares: number
+  max_t0_shares: number
+  price: number
+  avg_cost: number
+  position_weight: number
+  today_pct: number
+  return_5d: number
+  return_20d: number
+  avg_range_20d: number
+  drawdown_20d: number
+  amount: number
+  buy_back_price: number
+  reduce_price: number
+  stop_price: number
+  expected_edge: number
+  reasons: string[]
+  risks: string[]
+  generated_at: string
+}
+
 export async function getAppInfo(): Promise<AppInfo> {
   if (window.go?.main?.App?.GetAppInfo) {
     return window.go.main.App.GetAppInfo()
@@ -1496,6 +1526,13 @@ export async function getPositionRecommendation(): Promise<PositionRecommendatio
     return window.go.main.App.GetPositionRecommendation()
   }
   return { date: '', generated_at: '', total_weight: 0, n_holdings: 0, n_buy: 0, n_sell: 0, rebalanced: false, rebalance_trades: 0, rows: [] }
+}
+
+export async function listT0Recommendations(limit = 50): Promise<T0Recommendation[]> {
+  if (window.go?.main?.App?.ListT0Recommendations) {
+    return (await window.go.main.App.ListT0Recommendations(limit)) || []
+  }
+  return []
 }
 
 export async function generatePositionSignal(req: GenerateSignalRequest = {}): Promise<GenerateSignalResponse> {
