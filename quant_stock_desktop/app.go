@@ -2915,6 +2915,7 @@ func (app *App) initializeFactorResearch(parent task.Task) error {
 		"label":           stringParam(params, "label", "fwd20_excess_industry"),
 		"min_train_years": int(numberParam(params, "min_train_years", 4)),
 		"min_test_year":   int(numberParam(params, "min_test_year", 0)),
+		"stress_aware":    boolParam(params, "stress_aware", false),
 		"planned_count":   len(stages),
 		"completed_count": 0,
 		"failed_count":    0,
@@ -2933,6 +2934,7 @@ func (app *App) initializeFactorResearch(parent task.Task) error {
 			"label":           stringParam(params, "label", "fwd20_excess_industry"),
 			"min_train_years": int(numberParam(params, "min_train_years", 4)),
 			"min_test_year":   int(numberParam(params, "min_test_year", 0)),
+			"stress_aware":    boolParam(params, "stress_aware", false),
 			"stage":           stage["key"],
 		}
 		paramsData, err := json.Marshal(childParams)
@@ -6672,6 +6674,9 @@ func (app *App) startFactorResearchChildTaskSync(t task.Task) (task.Task, error)
 		"--db-path", filepath.Join(app.settings.DataPath, "meta.db"),
 		"--min-train-years", strconv.Itoa(int(numberParam(params, "min_train_years", 4))),
 		"--min-test-year", strconv.Itoa(int(numberParam(params, "min_test_year", 0))),
+	}
+	if boolParam(params, "stress_aware", false) {
+		args = append(args, "--stress-aware")
 	}
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = quantRoot

@@ -128,7 +128,7 @@ def evaluate(
             if name == "ml_factor_ranker":
                 model_run_id = str((getattr(strategy, "cfg", None).selection or {}).get("run_id") or "")
                 row["factor_model_run_id"] = model_run_id
-                row.update(_factor_model_stress_context(model_run_id))
+                row.update(_factor_model_stress_context(model_run_id, start, end))
             weights = strategy.generate_target_weights(start, end)
             if weights.empty:
                 row["status"] = "empty"
@@ -436,7 +436,7 @@ def _score_label(key: str) -> str:
     return labels.get(key, key)
 
 
-def _factor_model_stress_context(model_run_id: str) -> dict[str, Any]:
+def _factor_model_stress_context(model_run_id: str, start: str = "", end: str = "") -> dict[str, Any]:
     model_run_id = str(model_run_id or "").strip()
     if not model_run_id:
         return {}
@@ -451,8 +451,10 @@ def _factor_model_stress_context(model_run_id: str) -> dict[str, Any]:
                 FROM factor_model_stress_results
                 WHERE run_id = ?
                   AND bucket_type IN ('event', 'market_state')
+                  AND (end_date = '' OR end_date >= ?)
+                  AND (start_date = '' OR start_date <= ?)
                 """,
-                (model_run_id,),
+                (model_run_id, str(start or "00000000"), str(end or "99999999")),
             ).fetchall()
     except Exception:
         return {}

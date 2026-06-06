@@ -185,6 +185,27 @@ MODEL_FAMILY_MIN_QUOTAS = {
     "市值结构": 2,
 }
 
+MARKET_STATE_FEATURES = [
+    "mkt_risk_score",
+    "mkt_breadth20",
+    "mkt_limit_down_ratio",
+    "mkt_limit_down_ratio5",
+    "mkt_amount_chg20",
+    "mkt_small_large_rel20",
+    "mkt_drawdown20",
+    "mkt_drawdown60",
+    "mkt_drawdown120",
+    "mkt_trend60",
+    "mkt_volatility20",
+    "mkt_state_normal",
+    "mkt_state_weak",
+    "mkt_state_crash",
+    "mkt_state_liquidity_squeeze",
+    "mkt_state_post_crash_repair",
+]
+
+PRESSURE_EVENT_YEARS = {2015, 2022, 2024}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -208,7 +229,9 @@ def main() -> None:
     parser.add_argument("--db-path", default=None)
     parser.add_argument("--min-train-years", type=int, default=4)
     parser.add_argument("--min-test-year", type=int, default=0)
+    parser.add_argument("--stress-aware", action="store_true", help="加入市场状态特征和压力样本权重")
     args = parser.parse_args()
+    args.stress_aware = bool(args.stress_aware or "stress" in args.run_id.lower())
 
     ensure_tables(args.db_path)
     mark_stage(args.db_path, args.run_id, args.stage, "running", summary={"stage": args.stage})
@@ -318,6 +341,30 @@ def ensure_tables(db_path: str | None) -> None:
                     created_at VARCHAR(64) NOT NULL,
                     updated_at VARCHAR(64) NOT NULL,
                     PRIMARY KEY(run_id, factor, variant, horizon)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS factor_state_ic_results (
+                    run_id VARCHAR(255) NOT NULL,
+                    factor VARCHAR(255) NOT NULL,
+                    family VARCHAR(128) NOT NULL,
+                    variant VARCHAR(64) NOT NULL,
+                    horizon VARCHAR(32) NOT NULL,
+                    market_state VARCHAR(64) NOT NULL,
+                    rank_ic_mean DOUBLE,
+                    ic_win_rate DOUBLE,
+                    icir DOUBLE,
+                    n_periods BIGINT NOT NULL DEFAULT 0,
+                    n_obs BIGINT NOT NULL DEFAULT 0,
+                    status VARCHAR(32) NOT NULL,
+                    summary_json LONGTEXT,
+                    created_at VARCHAR(64) NOT NULL,
+                    updated_at VARCHAR(64) NOT NULL,
+                    PRIMARY KEY(run_id, factor, variant, horizon, market_state),
+                    KEY idx_factor_state_ic_run_state (run_id, market_state),
+                    KEY idx_factor_state_ic_rank (run_id, rank_ic_mean)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """
             )
@@ -502,6 +549,24 @@ def ensure_tables(db_path: str | None) -> None:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(run_id, factor, variant, horizon)
                 );
+                CREATE TABLE IF NOT EXISTS factor_state_ic_results (
+                    run_id TEXT NOT NULL,
+                    factor TEXT NOT NULL,
+                    family TEXT NOT NULL,
+                    variant TEXT NOT NULL,
+                    horizon TEXT NOT NULL,
+                    market_state TEXT NOT NULL,
+                    rank_ic_mean REAL,
+                    ic_win_rate REAL,
+                    icir REAL,
+                    n_periods INTEGER NOT NULL DEFAULT 0,
+                    n_obs INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    summary_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(run_id, factor, variant, horizon, market_state)
+                );
                 CREATE TABLE IF NOT EXISTS factor_model_runs (
                     run_id TEXT PRIMARY KEY,
                     model_type TEXT NOT NULL,
@@ -654,6 +719,7 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
                 jobs.append((factor, family, high_good, variant, value_col))
     rows = []
     qrows = []
+    state_rows = []
     max_workers = min(8, max(1, len(jobs)))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
@@ -667,12 +733,15 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
             row, qrow = result
             rows.append(row)
             qrows.append(qrow)
+            state_rows.extend(_factor_state_stats_rows(panel, args.label, row["factor"], row["family"], row["variant"], f'{row["factor"]}_{row["variant"]}'))
     rows = sorted(rows, key=lambda row: float(row.get("rank_ic_mean") or -999), reverse=True)
     with write_transaction(args.db_path) as conn:
         ic_sql = replace_sql("factor_ic_results", ["run_id", "factor", "family", "variant", "horizon", "ic_mean", "rank_ic_mean", "ic_win_rate", "icir", "status", "summary_json", "created_at", "updated_at"], ["run_id", "factor", "variant", "horizon"])
         quantile_sql = replace_sql("factor_quantile_results", ["run_id", "factor", "variant", "horizon", "q1_return", "q5_return", "long_short_return", "monotonic_score", "summary_json", "created_at", "updated_at"], ["run_id", "factor", "variant", "horizon"])
+        state_sql = replace_sql("factor_state_ic_results", ["run_id", "factor", "family", "variant", "horizon", "market_state", "rank_ic_mean", "ic_win_rate", "icir", "n_periods", "n_obs", "status", "summary_json", "created_at", "updated_at"], ["run_id", "factor", "variant", "horizon", "market_state"])
         ic_params = []
         quantile_params = []
+        state_params = []
         for row in rows:
             stats = row.pop("_stats")
             summary = row.pop("_summary")
@@ -682,19 +751,25 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
             status = row["status"]
             ic_params.append((args.run_id, factor, family, variant, args.label, stats["ic_mean"], stats["rank_ic_mean"], stats["ic_win_rate"], stats["icir"], status, json.dumps(summary, ensure_ascii=False), now, now))
             quantile_params.append((args.run_id, factor, variant, args.label, stats["q1_return"], stats["q5_return"], stats["long_short_return"], stats["monotonic_score"], json.dumps(summary, ensure_ascii=False), now, now))
+        for row in state_rows:
+            state_params.append((args.run_id, row["factor"], row["family"], row["variant"], args.label, row["market_state"], row["rank_ic_mean"], row["ic_win_rate"], row["icir"], row["n_periods"], row["n_obs"], row["status"], json.dumps(row["summary"], ensure_ascii=False), now, now))
         if ic_params:
             conn.executemany(ic_sql, ic_params)
         if quantile_params:
             conn.executemany(quantile_sql, quantile_params)
+        if state_params:
+            conn.executemany(state_sql, state_params)
     return {
         "stage": args.stage,
         "factor_count": len(FACTOR_DEFS),
         "variant_count": len(rows),
         "ready_count": sum(1 for row in rows if row["status"] == "ready"),
+        "state_ic_count": len(state_rows),
         "label": args.label,
         "panel_path": str(panel_path),
         "rows": rows,
         "quantiles": qrows,
+        "state_top": sorted(state_rows, key=lambda row: float(row.get("rank_ic_mean") or -999), reverse=True)[:30],
     }
 
 
@@ -741,6 +816,43 @@ def _evaluate_factor_variant(
     return row, qrow
 
 
+def _factor_state_stats_rows(
+    panel: pd.DataFrame,
+    label: str,
+    factor: str,
+    family: str,
+    variant: str,
+    value_col: str,
+) -> list[dict[str, Any]]:
+    if "mkt_state" not in panel.columns or value_col not in panel.columns:
+        return []
+    out: list[dict[str, Any]] = []
+    for state, state_panel in panel.groupby("mkt_state", dropna=True):
+        stats = factor_stats(state_panel, value_col, label)
+        if not stats or int(stats.get("n_periods") or 0) < 3:
+            continue
+        out.append(
+            {
+                "factor": factor,
+                "family": family,
+                "variant": variant,
+                "market_state": str(state),
+                "rank_ic_mean": stats["rank_ic_mean"],
+                "ic_win_rate": stats["ic_win_rate"],
+                "icir": stats["icir"],
+                "n_periods": stats["n_periods"],
+                "n_obs": stats["n_obs"],
+                "status": factor_status(stats),
+                "summary": {
+                    "source": "factor_panel_by_market_state",
+                    "value_col": value_col,
+                    "quantiles": stats["quantiles"],
+                },
+            }
+        )
+    return out
+
+
 def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     now = now_text()
     panel_path = panel_path_for(args.run_id)
@@ -771,10 +883,14 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
         return summary
 
     panel = pd.read_parquet(panel_path)
+    stress_aware = bool(getattr(args, "stress_aware", False))
     feature_cols = selected_model_features(panel, args.db_path, args.run_id, args.label)
+    if stress_aware:
+        feature_cols = _with_market_state_features(feature_cols, panel)
     if args.label not in panel.columns:
         raise ValueError(f"label column not found: {args.label}")
-    data = panel[["trade_date", "ts_code", args.label, *feature_cols]].replace([np.inf, -np.inf], np.nan).dropna(subset=[args.label]).copy()
+    meta_cols = ["mkt_state"] if "mkt_state" in panel.columns else []
+    data = panel[["trade_date", "ts_code", args.label, *meta_cols, *feature_cols]].replace([np.inf, -np.inf], np.nan).dropna(subset=[args.label]).copy()
     for col in feature_cols:
         data[col] = data.groupby("trade_date")[col].transform(lambda s: s.fillna(s.median()))
     data = data.dropna(subset=feature_cols)
@@ -810,8 +926,13 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
             n_jobs=4,
             verbose=-1,
         )
-        model.fit(train[feature_cols], train[args.label])
-        pred = test[["trade_date", "ts_code", args.label]].copy()
+        sample_weight = _stress_sample_weight(train) if stress_aware else None
+        fit_kwargs = {"sample_weight": sample_weight} if sample_weight is not None else {}
+        model.fit(train[feature_cols], train[args.label], **fit_kwargs)
+        pred_cols = ["trade_date", "ts_code", args.label]
+        if "mkt_state" in test.columns:
+            pred_cols.append("mkt_state")
+        pred = test[pred_cols].copy()
         pred["pred_score"] = model.predict(test[feature_cols])
         pred["test_year"] = test_year
         predictions.append(pred)
@@ -826,6 +947,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     prediction_path = data_root() / "factor_research" / args.run_id / "predictions.parquet"
     pred_df.to_parquet(prediction_path, index=False, compression="zstd")
     metrics = model_oos_metrics(pred_df, args.label)
+    state_metrics = model_oos_state_metrics(pred_df, args.label)
     importance_df = (
         importances.sort_values(ascending=False)
         .reset_index()
@@ -837,6 +959,8 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
         "model_type": "lightgbm_regressor",
         "label": args.label,
         "feature_count": feature_count,
+        "stress_aware": stress_aware,
+        "market_state_feature_count": len([col for col in feature_cols if col in MARKET_STATE_FEATURES]),
         "status": "success",
         "lightgbm_available": True,
         "fold_count": int(len(predictions)),
@@ -847,6 +971,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
         "top20_mean_return": metrics["top20_mean_return"],
         "bottom20_mean_return": metrics["bottom20_mean_return"],
         "top_bottom_spread": metrics["top_bottom_spread"],
+        "state_metrics": state_metrics,
         "test_years": sorted(pred_df["test_year"].unique().astype(int).tolist()),
         "prediction_rows": int(len(pred_df)),
         "top20_rows": int(pred_df["is_top20"].sum()),
@@ -864,6 +989,8 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
         for idx, row in importance_df.iterrows():
             feature = str(row["feature"])
             row_summary = {"feature_family": feature_family_from_rank_col(feature)}
+            if feature in MARKET_STATE_FEATURES:
+                row_summary["feature_family"] = "市场状态"
             feature_params.append((args.run_id, feature, float(row["importance"]), int(idx + 1), json.dumps(row_summary, ensure_ascii=False), now, now))
         if feature_params:
             conn.executemany(feature_sql, feature_params)
@@ -1294,6 +1421,28 @@ def selected_model_features(panel: pd.DataFrame, db_path: str | None = None, run
     return prune_correlated_features(panel, ordered, max_features=45, corr_limit=0.92)
 
 
+def _with_market_state_features(feature_cols: list[str], panel: pd.DataFrame) -> list[str]:
+    out = list(feature_cols)
+    for col in MARKET_STATE_FEATURES:
+        if col in panel.columns and panel[col].notna().mean() >= 0.20 and col not in out:
+            out.append(col)
+    return out
+
+
+def _stress_sample_weight(data: pd.DataFrame) -> pd.Series:
+    weights = pd.Series(1.0, index=data.index, dtype="float64")
+    years = pd.to_numeric(data["trade_date"].astype(str).str.slice(0, 4), errors="coerce")
+    weights = weights + years.isin(PRESSURE_EVENT_YEARS).astype(float) * 0.35
+    if "mkt_state_crash" in data.columns:
+        weights = weights + pd.to_numeric(data["mkt_state_crash"], errors="coerce").fillna(0.0).clip(0, 1) * 1.25
+    if "mkt_state_weak" in data.columns:
+        weights = weights + pd.to_numeric(data["mkt_state_weak"], errors="coerce").fillna(0.0).clip(0, 1) * 0.35
+    if "mkt_limit_down_ratio5" in data.columns:
+        squeeze = pd.to_numeric(data["mkt_limit_down_ratio5"], errors="coerce").fillna(0.0)
+        weights = weights + (squeeze >= 0.02).astype(float) * 0.40
+    return weights.clip(upper=3.0)
+
+
 def selected_features_from_ic(db_path: str | None, run_id: str, horizon: str) -> list[str]:
     if not run_id:
         return []
@@ -1611,8 +1760,9 @@ def build_monthly_factor_panel(start: str, end: str) -> pd.DataFrame:
     panel = dq.sql(sql)
     if panel.empty:
         return panel
+    panel = add_market_state_features(panel)
     for col in panel.columns:
-        if col not in {"trade_date", "ts_code", "name", "industry"}:
+        if col not in {"trade_date", "ts_code", "name", "industry", "mkt_state"}:
             panel[col] = pd.to_numeric(panel[col], errors="coerce")
     dist_ma20 = panel["adj_close"] / panel["ma20"].replace(0, np.nan) - 1
     dist_ma60 = panel["adj_close"] / panel["ma60"].replace(0, np.nan) - 1
@@ -1674,11 +1824,67 @@ def build_monthly_factor_panel(start: str, end: str) -> pd.DataFrame:
     panel = add_neutralized_factors(panel)
     keep = [
         "trade_date", "ts_code", "name", "industry", "fwd20", "fwd20_excess_market", "fwd20_excess_industry",
+        "mkt_state", *MARKET_STATE_FEATURES,
         *FACTOR_DEFS.keys(),
         *[f"{factor}_rank" for factor in FACTOR_DEFS],
         *[f"{factor}_neutral" for factor in FACTOR_DEFS],
     ]
     return panel[[col for col in keep if col in panel.columns]].sort_values(["trade_date", "ts_code"]).reset_index(drop=True)
+
+
+def add_market_state_features(panel: pd.DataFrame) -> pd.DataFrame:
+    states = load_market_state_features()
+    if states.empty:
+        panel = panel.copy()
+        panel["mkt_state"] = "normal"
+        for col in MARKET_STATE_FEATURES:
+            panel[col] = 1.0 if col == "mkt_state_normal" else 0.0
+        return panel
+    out = panel.merge(states, on="trade_date", how="left")
+    out["mkt_state"] = out["mkt_state"].fillna("normal")
+    for col in MARKET_STATE_FEATURES:
+        if col not in out.columns:
+            out[col] = 0.0
+    out["mkt_state_normal"] = np.where(out["mkt_state"].eq("normal"), 1.0, out["mkt_state_normal"].fillna(0.0))
+    numeric_cols = [col for col in MARKET_STATE_FEATURES if col.startswith("mkt_") and col != "mkt_state"]
+    for col in numeric_cols:
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+    return out
+
+
+def load_market_state_features() -> pd.DataFrame:
+    path = data_root() / "market_risk_state_daily.parquet"
+    if not path.exists():
+        return pd.DataFrame()
+    states = pd.read_parquet(path)
+    if states.empty or "trade_date" not in states.columns:
+        return pd.DataFrame()
+    states = states.copy()
+    states["trade_date"] = states["trade_date"].astype(str)
+    rename = {
+        "state": "mkt_state",
+        "risk_score": "mkt_risk_score",
+        "breadth20": "mkt_breadth20",
+        "limit_down_ratio": "mkt_limit_down_ratio",
+        "limit_down_ratio5": "mkt_limit_down_ratio5",
+        "amount_chg20": "mkt_amount_chg20",
+        "small_large_rel20": "mkt_small_large_rel20",
+        "drawdown20": "mkt_drawdown20",
+        "drawdown60": "mkt_drawdown60",
+        "drawdown120": "mkt_drawdown120",
+        "trend60": "mkt_trend60",
+        "volatility20": "mkt_volatility20",
+    }
+    keep = ["trade_date", *rename.keys()]
+    states = states[[col for col in keep if col in states.columns]].rename(columns=rename)
+    if "mkt_state" not in states.columns:
+        states["mkt_state"] = "normal"
+    for state in ["normal", "weak", "crash", "liquidity_squeeze", "post_crash_repair"]:
+        states[f"mkt_state_{state}"] = (states["mkt_state"].astype(str) == state).astype(float)
+    for col in MARKET_STATE_FEATURES:
+        if col not in states.columns:
+            states[col] = 0.0
+    return states[["trade_date", "mkt_state", *MARKET_STATE_FEATURES]]
 
 
 def add_neutralized_factors(panel: pd.DataFrame) -> pd.DataFrame:
@@ -1829,7 +2035,23 @@ def model_oos_metrics(pred_df: pd.DataFrame, label: str) -> dict[str, float]:
     }
 
 
+def model_oos_state_metrics(pred_df: pd.DataFrame, label: str) -> dict[str, dict[str, float]]:
+    if "mkt_state" not in pred_df.columns:
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for state, state_df in pred_df.groupby("mkt_state", dropna=True):
+        metrics = model_oos_metrics(state_df, label)
+        out[str(state)] = {
+            **metrics,
+            "rows": int(len(state_df)),
+            "periods": int(state_df["trade_date"].nunique()),
+        }
+    return out
+
+
 def feature_family_from_rank_col(feature: str) -> str:
+    if feature in MARKET_STATE_FEATURES:
+        return "市场状态"
     factor = feature
     if factor.endswith("_rank"):
         factor = factor[:-5]
