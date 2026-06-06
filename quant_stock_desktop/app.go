@@ -599,6 +599,7 @@ func (app *App) hasActiveRuntimeWork() (bool, string) {
 		}
 		return false, ""
 	}
+	app.reconcileEvaluationWorkerProcesses()
 	db := app.database.Conn()
 	var evaluationCount int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM task_jobs WHERE status IN ('queued','running')`).Scan(&evaluationCount); err == nil && evaluationCount > 0 {
@@ -6711,6 +6712,7 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	if err := app.ensureDataQualityForEvaluation(); err != nil {
 		return task.DTO{}, err
 	}
+	app.reconcileStaleEvaluationLocks(10 * time.Minute)
 	running, err := app.taskService.Repository().HasRunningEvaluation(t.ID)
 	if err != nil {
 		return task.DTO{}, err
@@ -7840,6 +7842,60 @@ func (app *App) reconcileEvaluationWorkerProcesses() {
 			continue
 		}
 		_ = worker.NewManager().Cancel(pid)
+	}
+}
+
+func (app *App) reconcileStaleEvaluationLocks(maxIdle time.Duration) {
+	app.reconcileEvaluationWorkerProcesses()
+	if app.taskService == nil {
+		return
+	}
+	items, err := app.taskService.Repository().List(task.Query{Limit: 1000})
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, item := range items {
+		if item.ParentID != "" || item.Status != task.StatusRunning || item.WorkerPID > 0 || !isEvaluationRuntimeType(item.TaskType) {
+			continue
+		}
+		if maxIdle > 0 && !item.UpdatedAt.IsZero() && now.Sub(item.UpdatedAt) <= maxIdle {
+			continue
+		}
+		children, err := app.taskService.Repository().ListChildren(item.ID)
+		if err != nil {
+			continue
+		}
+		hasActiveChild := false
+		for _, child := range children {
+			if child.Status == task.StatusQueued {
+				hasActiveChild = true
+				break
+			}
+			if child.Status == task.StatusRunning && (child.WorkerPID <= 0 || processExists(child.WorkerPID)) {
+				hasActiveChild = true
+				break
+			}
+		}
+		if hasActiveChild {
+			continue
+		}
+		item.Status = task.StatusInterrupted
+		item.WorkerPID = 0
+		item.ErrorMessage = "no active child task is running"
+		item.FinishedAt = now
+		item.UpdatedAt = now
+		_ = app.taskService.Repository().UpdateStatus(item)
+		_ = app.taskService.Repository().UpdateRuntime(item)
+	}
+}
+
+func isEvaluationRuntimeType(taskType task.Type) bool {
+	switch taskType {
+	case task.TypeEvaluationTimeMachine, task.TypeStrategyEvaluation, task.TypePortfolioOptimization, task.TypeWalkForwardEvaluation, task.TypeParameterExperiment, task.TypeFactorResearch:
+		return true
+	default:
+		return false
 	}
 }
 
