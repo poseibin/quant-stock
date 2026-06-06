@@ -40,6 +40,7 @@ class MLFactorRankerStrategy(BaseStrategy):
             return pd.DataFrame()
         base = pd.concat(frames).sort_index().fillna(0.0)
         base = _apply_crash_rebalance_gate(base, self.cfg)
+        base = _apply_intramonth_crash_exit(base, start, end, self.cfg)
         if daily_overlay:
             return _apply_daily_exposure_overlay(base, start, end, self.cfg)
         return base
@@ -323,6 +324,57 @@ def _market_state_series(dates: list[str], lookback_days: int) -> pd.Series:
         return pd.Series(dtype="object")
     series = pd.Series({str(date): str(state) for date, state in rows}, dtype="object")
     return series.sort_index()
+
+
+def _apply_intramonth_crash_exit(weights: pd.DataFrame, start: str, end: str, cfg: StrategyConfig) -> pd.DataFrame:
+    exit_cfg = (cfg.filters or {}).get("crash_exit") or {}
+    if weights.empty or not bool(exit_cfg.get("enabled", False)):
+        return weights
+
+    dates = dq.get_trade_dates(start, end)
+    if not dates:
+        return weights
+    dates = [date for date in dates if date >= str(weights.index.min()) and date <= end]
+    if not dates:
+        return weights
+
+    states = _market_state_series(dates, int(exit_cfg.get("lookback_days", 5)))
+    if states.empty:
+        return weights
+    states = states.reindex(dates, method="ffill").fillna("normal").astype(str)
+
+    trigger_states = {str(x) for x in exit_cfg.get("trigger_states", ["crash"])}
+    recovery_states = {str(x) for x in exit_cfg.get("recovery_states", ["liquidity_squeeze", "post_crash_repair", "normal"])}
+    exit_exposure = float(exit_cfg.get("exit_exposure", 0.0))
+    squeeze_exposure = exit_cfg.get("liquidity_squeeze_exposure")
+    squeeze_exposure = float(squeeze_exposure) if squeeze_exposure is not None else None
+    min_exit_days = max(0, int(exit_cfg.get("min_exit_days", 1)))
+    max_exit_days = max(0, int(exit_cfg.get("max_exit_days", 8)))
+
+    daily = weights.reindex(dates).ffill().fillna(0.0)
+    out = daily.copy()
+    in_exit = False
+    exit_days = 0
+
+    for date in dates:
+        state = str(states.get(date) or "normal")
+        if state in trigger_states:
+            in_exit = True
+            exit_days = 0
+
+        if in_exit:
+            can_recover = exit_days >= min_exit_days and state in recovery_states
+            timed_out = max_exit_days > 0 and exit_days >= max_exit_days
+            if can_recover or timed_out:
+                in_exit = False
+            else:
+                exposure = exit_exposure
+                if squeeze_exposure is not None and state == "liquidity_squeeze":
+                    exposure = squeeze_exposure
+                out.loc[date] = daily.loc[date] * exposure
+                exit_days += 1
+
+    return out.fillna(0.0)
 
 
 def _weights_from_predictions(df: pd.DataFrame, date: str, cfg: StrategyConfig) -> pd.DataFrame:
