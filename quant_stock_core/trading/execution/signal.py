@@ -3,8 +3,8 @@
 生成下一交易日的目标持仓与买卖建议。
 
 设计原则：
-  - 唯一存储：SQLite 表 daily_recommendation（按 date 主键），不再有任何文件缓存。
-  - prev（"上一次持仓"）= pool_holdings 当前实盘权重。
+  - 唯一存储：SQLite 表 rec_daily_recommendations（按 date 主键），不再有任何文件缓存。
+  - prev（"上一次持仓"）= portfolio_pool_holdings 当前实盘权重。
     → 持仓为空 → buy/sell 全部基于 0 权重对比 → 不会出现"减仓/清仓"幽灵。
   - 每次调用 generate() 都重新跑策略 combiner，永不命中缓存。
 """
@@ -24,13 +24,13 @@ log = get_logger("signal")
 
 
 def _load_pool_weights() -> dict[str, float]:
-    """从 pool_holdings 读当前实盘权重作为 prev。失败时返回空 dict。"""
+    """从 portfolio_pool_holdings 读当前实盘权重作为 prev。失败时返回空 dict。"""
     try:
         from common.infra.pool import current_holdings_for_signal
         rows = current_holdings_for_signal()
         return {r["ts_code"]: float(r.get("weight") or 0.0) for r in rows if r.get("ts_code")}
     except Exception as exc:
-        log.warning(f"加载 pool_holdings 失败，prev 视为空: {exc}")
+        log.warning(f"加载 portfolio_pool_holdings 失败，prev 视为空: {exc}")
         return {}
 
 
@@ -105,9 +105,9 @@ def generate(
 
     流程：
       1. 跑 combiner.combine() 拿全市场目标权重 latest
-      2. prev = prev_weights（显式传入）或从 pool_holdings 读（实盘默认）
+      2. prev = prev_weights（显式传入）或从 portfolio_pool_holdings 读（实盘默认）
       3. 构造 rows：union(prev_codes, latest_codes)，每行 {action, from, to, delta, ...}
-      4. persist=True → upsert 到 daily_recommendation 表（仅实盘）
+      4. persist=True → upsert 到 rec_daily_recommendations 表（仅实盘）
 
     progress_cb: 可选回调 fn(idx, total, name, stage)。
     prev_weights: 显式提供 prev 权重表（回测时光机用，避免读到实盘账户）。
@@ -154,7 +154,7 @@ def generate(
             ref_date = weights.index[-1]
         latest = latest[latest > 0].sort_values(ascending=False)
 
-    # prev：显式传入优先（回测），否则读实盘 pool_holdings
+    # prev：显式传入优先（回测），否则读实盘 portfolio_pool_holdings
     prev_map = prev_weights if prev_weights is not None else _load_pool_weights()
     latest_map = {str(code): float(w) for code, w in latest.items()}
 
@@ -276,11 +276,11 @@ def _active_strategy_versions(strategies_filter: list[str] | None) -> list[dict]
 
 
 def load_latest() -> dict | None:
-    """从 db 读最近一日的 daily_recommendation；空 → None。"""
+    """从 db 读最近一日的 rec_daily_recommendations；空 → None。"""
     from common.infra.db import open_db
     with open_db() as conn:
         row = conn.execute(
-            "SELECT date FROM daily_recommendation ORDER BY date DESC LIMIT 1"
+            "SELECT date FROM rec_daily_recommendations ORDER BY date DESC LIMIT 1"
         ).fetchone()
     if not row:
         return None
@@ -292,7 +292,7 @@ def list_dates() -> list[str]:
     from common.infra.db import open_db
     with open_db() as conn:
         rows = conn.execute(
-            "SELECT date FROM daily_recommendation ORDER BY date ASC"
+            "SELECT date FROM rec_daily_recommendations ORDER BY date ASC"
         ).fetchall()
     return [r[0] for r in rows]
 

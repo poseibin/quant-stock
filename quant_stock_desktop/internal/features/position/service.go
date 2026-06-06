@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"quant_stock_desktop/internal/common/database"
 	"quant_stock_desktop/internal/features/market"
 )
 
@@ -22,13 +23,20 @@ const lotSize = 100
 
 type Service struct {
 	marketService *market.Service
-	db            *sql.DB
+	db            *database.DB
+	dbBackend     string
+	dbDSN         string
 	signalMu      sync.Mutex
 	signalRunning bool
 }
 
-func NewService(marketService *market.Service, db *sql.DB) *Service {
+func NewService(marketService *market.Service, db *database.DB) *Service {
 	return &Service{marketService: marketService, db: db}
+}
+
+func (service *Service) SetRuntimeDatabaseConfig(backend string, dsn string) {
+	service.dbBackend = strings.TrimSpace(backend)
+	service.dbDSN = strings.TrimSpace(dsn)
 }
 
 func (service *Service) tryAcquireSignal() bool {
@@ -51,11 +59,11 @@ func (service *Service) GetSummary(dataPath string) (Summary, error) {
 	if service.db == nil {
 		return Summary{}, errors.New("database is not initialized")
 	}
-	row := service.db.QueryRow(`SELECT initial_cash, current_cash, market_value, total_assets,
+	row := service.db.Conn().QueryRow(`SELECT initial_cash, current_cash, market_value, total_assets,
 	    COALESCE(total_cost,0), COALESCE(total_fee,0), total_pnl, today_pnl, COALESCE(today_pct,0),
 	    COALESCE(unrealized_pnl,0), COALESCE(unrealized_pct,0),
 	    COALESCE(realized_pnl,0), COALESCE(cum_return,0), COALESCE(n_closed,0),
-	    COALESCE(updated_at,'') FROM pool_summary WHERE id = 1`)
+	    COALESCE(updated_at,'') FROM portfolio_pool_summary WHERE id = 1`)
 	var s Summary
 	if err := row.Scan(&s.InitialCash, &s.Cash, &s.MarketValue, &s.TotalAssets,
 		&s.TotalCost, &s.TotalFee, &s.TotalPnL, &s.TodayPnL, &s.TodayPct,
@@ -79,10 +87,10 @@ func (service *Service) GetHoldings() ([]Position, error) {
 	if service.db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	rows, err := service.db.Query(`SELECT ts_code, COALESCE(name,''), COALESCE(industry,''),
+	rows, err := service.db.Conn().Query(`SELECT ts_code, COALESCE(name,''), COALESCE(industry,''),
 	    shares, avg_cost, last_price, market_value, weight, pnl, pnl_pct,
 	    COALESCE(open_date,''), COALESCE(updated_at,'')
-	    FROM pool_holdings WHERE shares > 0 ORDER BY weight DESC`)
+	    FROM portfolio_pool_holdings WHERE shares > 0 ORDER BY weight DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +143,7 @@ func (service *Service) ConfirmTrades(dataPath string, trades []TradeRequest) (S
 	python := quantCorePython(projectRoot)
 	cmd := exec.Command(python, "-u", scriptPath, "--trades-json", tmpFile.Name())
 	cmd.Dir = projectRoot
-	cmd.Env = quantCoreEnv(dataPath, GenerateSignalRequest{})
+	cmd.Env = service.quantCoreEnv(dataPath, GenerateSignalRequest{})
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -153,41 +161,37 @@ func (service *Service) ClearPool(dataPath string, initialCashValue float64) (Su
 		initialCashValue = initialCash
 	}
 	now := time.Now().Format(time.RFC3339)
-	tx, err := service.db.Begin()
+	tx, err := service.db.Conn().Begin()
 	if err != nil {
 		return Summary{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM pool_holdings`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM portfolio_pool_holdings`); err != nil {
 		return Summary{}, err
 	}
-	if _, err := tx.Exec(`DELETE FROM pool_trades`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM portfolio_pool_trades`); err != nil {
 		return Summary{}, err
 	}
-	if _, err := tx.Exec(`DELETE FROM daily_recommendation`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM rec_daily_recommendations`); err != nil {
 		return Summary{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO pool_summary (
-		id, initial_cash, current_cash, market_value, total_assets, total_cost, total_fee,
-		total_pnl, today_pnl, today_pct, unrealized_pnl, unrealized_pct, realized_pnl,
-		cum_return, n_closed, updated_at
-	) VALUES (1, ?, ?, 0, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?)
-	ON CONFLICT(id) DO UPDATE SET
-		initial_cash = excluded.initial_cash,
-		current_cash = excluded.current_cash,
-		market_value = 0,
-		total_assets = excluded.total_assets,
-		total_cost = 0,
-		total_fee = 0,
-		total_pnl = 0,
-		today_pnl = 0,
-		today_pct = 0,
-		unrealized_pnl = 0,
-		unrealized_pct = 0,
-		realized_pnl = 0,
-		cum_return = 0,
-		n_closed = 0,
-		updated_at = excluded.updated_at`, initialCashValue, initialCashValue, initialCashValue, now); err != nil {
+	if _, err := tx.Exec(
+		service.db.UpsertSQL(
+			"portfolio_pool_summary",
+			[]string{
+				"id", "initial_cash", "current_cash", "market_value", "total_assets", "total_cost", "total_fee",
+				"total_pnl", "today_pnl", "today_pct", "unrealized_pnl", "unrealized_pct", "realized_pnl",
+				"cum_return", "n_closed", "updated_at",
+			},
+			[]string{"id"},
+			[]string{
+				"initial_cash", "current_cash", "market_value", "total_assets", "total_cost", "total_fee",
+				"total_pnl", "today_pnl", "today_pct", "unrealized_pnl", "unrealized_pct", "realized_pnl",
+				"cum_return", "n_closed", "updated_at",
+			},
+		),
+		1, initialCashValue, initialCashValue, 0, initialCashValue, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, now,
+	); err != nil {
 		return Summary{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -204,9 +208,17 @@ func (service *Service) GetRecommendation(dataPath string) (Recommendation, erro
 	if service.db == nil {
 		return Recommendation{}, errors.New("database is not initialized")
 	}
-	row := service.db.QueryRow(`SELECT payload_json FROM daily_recommendation ORDER BY date DESC LIMIT 1`)
+	row := service.db.Conn().QueryRow(`SELECT payload_json FROM rec_daily_recommendations ORDER BY date DESC LIMIT 1`)
 	var payload string
 	if err := row.Scan(&payload); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Recommendation{
+				Date:                   "",
+				GeneratedAt:            "",
+				Rows:                   []RecommendationItem{},
+				ActiveStrategyVersions: service.activeStrategyVersions(),
+			}, nil
+		}
 		return Recommendation{}, err
 	}
 	var rec Recommendation
@@ -218,7 +230,7 @@ func (service *Service) GetRecommendation(dataPath string) (Recommendation, erro
 	}
 	if rec.Date != "" {
 		var count int
-		err := service.db.QueryRow(`SELECT COUNT(*) FROM pool_trades WHERE trade_date = ?`, rec.Date).Scan(&count)
+		err := service.db.Conn().QueryRow(`SELECT COUNT(*) FROM portfolio_pool_trades WHERE trade_date = ?`, rec.Date).Scan(&count)
 		if err != nil {
 			return Recommendation{}, err
 		}
@@ -232,7 +244,7 @@ func (service *Service) activeStrategyVersions() []RecommendationStrategyVersion
 	if service.db == nil {
 		return nil
 	}
-	rows, err := service.db.Query(`SELECT strategy, version, label, config_json FROM strategy_settings_versions WHERE is_active = 1 ORDER BY strategy`)
+	rows, err := service.db.Conn().Query(`SELECT strategy, version, label, config_json FROM strategy_config_versions WHERE is_active = 1 ORDER BY strategy`)
 	if err != nil {
 		return nil
 	}
@@ -263,19 +275,39 @@ func (service *Service) GetRunStatus(task string) (RunStatus, error) {
 	if service.db == nil {
 		return RunStatus{Task: task, State: "idle"}, nil
 	}
-	row := service.db.QueryRow(
-		`SELECT task, state, idx, total, COALESCE(stage,''), COALESCE(name,''), COALESCE(message,''),
-		COALESCE(started_at,''), updated_at, COALESCE(finished_at,'') FROM py_run_status WHERE task = ?`,
+	row := service.db.Conn().QueryRow(
+		`SELECT task, COALESCE(task_type,''), state, idx, total, COALESCE(stage,''), COALESCE(name,''), COALESCE(message,''),
+		COALESCE(worker_pid,0), COALESCE(started_at,''), updated_at, COALESCE(finished_at,'') FROM task_run_status WHERE task = ?`,
 		task,
 	)
 	var s RunStatus
-	if err := row.Scan(&s.Task, &s.State, &s.Idx, &s.Total, &s.Stage, &s.Name, &s.Message, &s.StartedAt, &s.UpdatedAt, &s.FinishedAt); err != nil {
+	if err := row.Scan(&s.Task, &s.TaskType, &s.State, &s.Idx, &s.Total, &s.Stage, &s.Name, &s.Message, &s.WorkerPID, &s.StartedAt, &s.UpdatedAt, &s.FinishedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return RunStatus{Task: task, State: "idle"}, nil
+			return RunStatus{Task: task, TaskType: inferRunStatusTaskType(task), State: "idle"}, nil
 		}
 		return RunStatus{}, err
 	}
+	if s.TaskType == "" {
+		s.TaskType = inferRunStatusTaskType(task)
+	}
 	return s, nil
+}
+
+func inferRunStatusTaskType(task string) string {
+	switch task {
+	case "data_update":
+		return "data_update"
+	case "daily_signal":
+		return "signal"
+	case "limit_signal_evaluation":
+		return "evaluation"
+	case "limit_breakout", "limit_up_momentum":
+		return "market_scan"
+	case "policy_support_analysis":
+		return "analysis"
+	default:
+		return "python"
+	}
 }
 
 func (service *Service) GenerateSignal(dataPath string, req GenerateSignalRequest) (GenerateSignalResponse, error) {
@@ -305,7 +337,7 @@ func (service *Service) GenerateSignalWithProgress(dataPath string, req Generate
 	}
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = projectRoot
-	cmd.Env = append(os.Environ(), quantCoreEnv(dataPath, req)...)
+	cmd.Env = append(os.Environ(), service.quantCoreEnv(dataPath, req)...)
 	logDesktopSignal(logPath, "exec args=%s cwd=%s env DATA_ROOT=%s DESKTOP_DB_PATH=%s INITIAL_CASH=%.2f REBALANCE_FREQ=%d",
 		strings.Join(args, " "), cmd.Dir, dataPath, filepath.Join(dataPath, "meta.db"), req.InitialCash, req.RebalanceFreq)
 	applyLowPriority(cmd)
@@ -322,6 +354,9 @@ func (service *Service) GenerateSignalWithProgress(dataPath string, req Generate
 		return GenerateSignalResponse{}, err
 	}
 	if cmd.Process != nil {
+		if onProgress != nil {
+			onProgress(ProgressEvent{Stage: "running", Name: "当日信号生成", WorkerPID: cmd.Process.Pid})
+		}
 		lowerPriorityAfterStart(cmd.Process.Pid)
 	}
 
@@ -370,7 +405,7 @@ func (service *Service) GenerateSignalWithProgress(dataPath string, req Generate
 	return GenerateSignalResponse{Date: head.Date, Output: output, Success: true}, nil
 }
 
-func quantCoreEnv(dataPath string, req GenerateSignalRequest) []string {
+func (service *Service) quantCoreEnv(dataPath string, req GenerateSignalRequest) []string {
 	initialCashValue := req.InitialCash
 	if initialCashValue <= 0 {
 		initialCashValue = initialCash
@@ -380,13 +415,28 @@ func quantCoreEnv(dataPath string, req GenerateSignalRequest) []string {
 		rebalanceFreq = 5
 	}
 	dbPath := filepath.Join(dataPath, "meta.db")
-	return []string{
+	backend := service.dbBackend
+	if backend == "" && service.db != nil {
+		backend = string(service.db.Backend())
+	}
+	if backend == "" {
+		backend = "sqlite"
+	}
+	env := []string{
 		"DATA_ROOT=" + dataPath,
 		"DESKTOP_DB_PATH=" + dbPath,
 		"DESKTOP_CONFIG_DB_PATH=" + dbPath,
+		"DESKTOP_DB_BACKEND=" + backend,
 		fmt.Sprintf("INITIAL_CASH=%.2f", initialCashValue),
 		fmt.Sprintf("REBALANCE_FREQ=%d", rebalanceFreq),
 	}
+	if strings.TrimSpace(req.StrategyOverridesJSON) != "" {
+		env = append(env, "QUANT_STRATEGY_OVERRIDES_JSON="+strings.TrimSpace(req.StrategyOverridesJSON))
+	}
+	if service.dbDSN != "" {
+		env = append(env, "DESKTOP_DB_DSN="+service.dbDSN)
+	}
+	return env
 }
 
 func quantStockRoot(dataPath string) string {

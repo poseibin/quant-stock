@@ -20,11 +20,11 @@
 2. 新建 `infra/__init__.py`、`infra/db.py`、`infra/lock.py`、`infra/status.py`
    - `db.py`: open_db() 读 DESKTOP_DB_PATH (默认 DATA_ROOT/meta.db)；get/upsert_recommendation, get/upsert_evaluation
    - `lock.py`: PyLock 全局锁，30s 心跳，120s 僵尸超时；进入 `with` 块即拿锁，退出 DELETE
-   - `status.py`: begin/progress/done/error/get，写入 `py_run_status` 表
+   - `status.py`: begin/progress/done/error/get，写入 `task_run_status` 表
 3. `scripts/daily_signal.py` 改造：
    - 顶部 QUANT_CPU_LIMIT 限制 BLAS 线程
    - 参数 `--date --json-only --progress --force --push --paper`
-   - `with PyLock("global", task="daily_signal"):` -> `status.begin()` -> 查 daily_recommendation 缓存命中即返回 -> 否则 sig.generate(force=True, progress_cb) -> upsert -> status.done()
+   - `with PyLock("global", task="daily_signal"):` -> `status.begin()` -> 查 rec_daily_recommendations 缓存命中即返回 -> 否则 sig.generate(force=True, progress_cb) -> upsert -> status.done()
    - progress_cb 同时写 `status.progress()` 到 db 和（可选）stderr PROGRESS 行
    - 异常调 status.error() 后 raise；LockBusyError sys.exit(2)
 
@@ -33,14 +33,14 @@
    - `quantStockRoot(dataPath)` 候选: lh/quant_stock_core, parent/quant_stock_core, parent/quant_core
    - `quantCorePython(projectRoot)` 候选含 `lh/quant_stock_core/.venv/bin/python`
    - `quantCoreEnv` 加 DESKTOP_DB_PATH=lh/data_store/meta.db
-   - `GetRecommendation` 优先读 daily_recommendation（payload->Signal->recommendationFromSignal）
-   - `GetRunStatus(task)` 查 py_run_status 表，无记录返回 state=idle
+   - `GetRecommendation` 优先读 rec_daily_recommendations（payload->Signal->recommendationFromSignal）
+   - `GetRunStatus(task)` 查 task_run_status 表，无记录返回 state=idle
    - `GenerateSignalWithProgress` 保留（py 自己写 db status，但 Go 仍解析 stdout 写 position_recommendations 渲染缓存）
 5. `internal/database/db.go` Migrate() 新增三表：
-   - daily_recommendation(date PK, generated_at, payload_json, ...)
-   - strategy_evaluation(date,strategy 复合 PK, ...)
-   - py_run_lock(name PK, pid, hostname, acquired_at, heartbeat, task)
-   - py_run_status(task PK, state, idx, total, stage, name, message, started_at, updated_at, finished_at)
+   - rec_daily_recommendations(date PK, generated_at, payload_json, ...)
+   - eval_strategy_admission(date,strategy 复合 PK, ...)
+   - task_run_locks(name PK, pid, hostname, acquired_at, heartbeat, task)
+   - task_run_status(task PK, state, idx, total, stage, name, message, started_at, updated_at, finished_at)
 6. `app.go`:
    - dbPath 改为 `filepath.Join(DataPath, "meta.db")` + MkdirAll
    - 移除 wailsruntime 的所有 EventsEmit（无线程通信）
@@ -123,10 +123,10 @@
 ### 关键决策
 - parquet 库：复用已有 `github.com/parquet-go/parquet-go v0.30.1`（不引入 go-duckdb）
 - HTTP：标准库 net/http
-- token 存储：desktop SQLite `app_settings` 的 settings.tushare_token（已加 model 字段）
+- token 存储：desktop SQLite `cfg_app_settings` 的 settings.tushare_token（已加 model 字段）
 - task type：新增 `TypeDataUpdate Type = "data_update"`
-- 状态写库：复用 py_run_status 表（task='data_update'）
-- 全局互斥：复用 py_run_lock 表（name='global'）—— 与 daily_signal/eval 共享
+- 状态写库：复用 task_run_status 表（task='data_update'）
+- 全局互斥：复用 task_run_locks 表（name='global'）—— 与 daily_signal/eval 共享
 - 输出契约**严格保持**：data_store/raw/<dataset>/data.parquet (single) 或 year=YYYY.parquet (year)，core duckdb_query.py 必须能读
 
 ### Datasets 全表（含 PK + 分区 + 日期字段）—— 见 internal/datafetch/config.go
@@ -182,12 +182,12 @@
 7. `internal/datafetch/service.go`:
    - `Service{ db *sql.DB, client *TushareClient, dataPath string }`
    - `Run(ctx, phase, startDate)`：phase ∈ {basic, price, finance, event, all}
-   - 内部用 db 加锁(py_run_lock name='global')、写 status(py_run_status task='data_update')
+   - 内部用 db 加锁(task_run_locks name='global')、写 status(task_run_status task='data_update')
    - 进度回调：每个 dataset 完成 → status.progress(idx,total,stage,name)
 8. `internal/task/model.go` 加 `TypeDataUpdate Type = "data_update"`
 9. `app.go` 暴露：
    - `RunDataUpdate(req DataUpdateRequest) error`：异步启动 service.Run，立即返回
-   - `GetDataUpdateStatus() (RunStatus, error)`：读 py_run_status task='data_update'
+   - `GetDataUpdateStatus() (RunStatus, error)`：读 task_run_status task='data_update'
    - settings 透传 tushare_token
 10. `frontend/src/services/app.ts` + `frontend/src/pages/DataExplorerPage.tsx`：
     - settings 页加 token 输入
@@ -263,7 +263,7 @@ print(con.execute(\"DESCRIBE SELECT * FROM read_parquet('xxx.parquet')\").fetch_
 - ⏳ `/Users/tiger/GolandProjects/lh/quant_stock_desktop/internal/features/datafetch/types.go` (各 dataset 字段类型)
 - ⏳ `/Users/tiger/GolandProjects/lh/quant_stock_desktop/internal/features/datafetch/jobs.go` (各 update_xxx 函数)
 - ⏳ `/Users/tiger/GolandProjects/lh/quant_stock_desktop/internal/features/datafetch/lock.go` (PyLock 复刻)
-- ⏳ `/Users/tiger/GolandProjects/lh/quant_stock_desktop/internal/features/datafetch/status.go` (写 py_run_status)
+- ⏳ `/Users/tiger/GolandProjects/lh/quant_stock_desktop/internal/features/datafetch/status.go` (写 task_run_status)
 - ⏳ `/Users/tiger/GolandProjects/lh/quant_stock_desktop/internal/features/datafetch/service.go` (Run + Phase)
 - ⏳ `app.go` 加 RunDataUpdate / GetDataUpdateStatus
 - ⏳ 前端
@@ -300,8 +300,8 @@ print(con.execute(\"DESCRIBE SELECT * FROM read_parquet('xxx.parquet')\").fetch_
 - jobs.go：13 个 update_xxx 函数 + JOBS_BASIC/PRICE/FINANCE/EVENT 切片
   - 注意：fetchByTradeDate 需要先有 trade_cal 数据，从 trade_cal/data.parquet 读取交易日（is_open=1）
   - fetchFinanceByPeriod：要扫现有数据的 end_date 列汇成 done_periods set 跳过
-- lock.go：复刻 PyLock：INSERT INTO py_run_lock；30s heartbeat goroutine；exit 时 DELETE
-- status.go：begin/progress/done/error 写 py_run_status（task='data_update'）
+- lock.go：复刻 PyLock：INSERT INTO task_run_locks；30s heartbeat goroutine；exit 时 DELETE
+- status.go：begin/progress/done/error 写 task_run_status（task='data_update'）
 - service.go：Service 结构 + Run(ctx, phase, startDate) + RunAsync(req) 启 goroutine
 - task/model.go 加 TypeDataUpdate
 - app.go 加 RunDataUpdate + GetDataUpdateStatus
@@ -336,9 +336,9 @@ print(con.execute(\"DESCRIBE SELECT * FROM read_parquet('xxx.parquet')\").fetch_
 
 ### 当前正在做（todo 6）：service + task 集成
 关键发现：
-- `internal/database/db.go:116-135` 已有 py_run_lock 和 py_run_status 表
+- `internal/database/db.go:116-135` 已有 task_run_locks 和 task_run_status 表
 - `internal/position/model.go:130` 已有 RunStatus 类型（Task/State/Idx/Total/Stage/Name/Message/StartedAt/UpdatedAt/FinishedAt 全 string/int）
-- `internal/position/service.go:126-143` 已有 GetRunStatus(task) 实现：直接 SELECT py_run_status WHERE task=?
+- `internal/position/service.go:126-143` 已有 GetRunStatus(task) 实现：直接 SELECT task_run_status WHERE task=?
 - `internal/task/model.go` 已有 Type 字符串类型，已存在 TypeSignalGen/TypeBacktest/TypeEvaluation 等
 
 ### 下一步要做
@@ -350,15 +350,15 @@ print(con.execute(\"DESCRIBE SELECT * FROM read_parquet('xxx.parquet')\").fetch_
        task string
        stop chan struct{}
    }
-   // 用 INSERT OR FAIL INTO py_run_lock (name,pid,hostname,acquired_at,heartbeat,task) 抢锁；
+   // 用 INSERT OR FAIL INTO task_run_locks (name,pid,hostname,acquired_at,heartbeat,task) 抢锁；
    // 抢到后 goroutine 30s 一次更新 heartbeat；
-   // Release：DELETE FROM py_run_lock WHERE name=?
+   // Release：DELETE FROM task_run_locks WHERE name=?
    // 若 INSERT 冲突且 heartbeat 超过 90s（陈旧），强制覆盖
    ```
    
 2. **`internal/datafetch/status.go`**：
    ```go
-   // Begin(task, total) -> INSERT/REPLACE py_run_status state='running' idx=0 total started_at=now
+   // Begin(task, total) -> INSERT/REPLACE task_run_status state='running' idx=0 total started_at=now
    // Progress(task, idx, total, stage, name, message)
    // Done(task, message)
    // Error(task, message)
@@ -379,7 +379,7 @@ print(con.execute(\"DESCRIBE SELECT * FROM read_parquet('xxx.parquet')\").fetch_
        // 5. 顶层 Progress 计算 (jobIdx*1000+stageDone)/(totalJobs*1000+stageTotal) 写 status
    }
    func (s *Service) RunAsync(req DataUpdateRequest) error  // goroutine
-   func (s *Service) GetStatus() (RunStatus, error)         // 查 py_run_status WHERE task='data_update'
+   func (s *Service) GetStatus() (RunStatus, error)         // 查 task_run_status WHERE task='data_update'
    ```
 
 4. **`internal/task/model.go`** 加：
@@ -440,15 +440,15 @@ internal/datafetch/
 ## 【续接 v3 - 锁机制调整】
 
 ### 用户反馈
-拉数据是 Go 进程内的任务，与 Python 无关。**不要复用 py_run_lock**，自己用进程内 mutex 即可保证全局只有一个拉数据任务运行。
+拉数据是 Go 进程内的任务，与 Python 无关。**不要复用 task_run_locks**，自己用进程内 mutex 即可保证全局只有一个拉数据任务运行。
 
 ### 调整点
 1. **删除 `internal/datafetch/lock.go` 里的 DBLock**：不需要 SQLite 锁、不需要 heartbeat
 2. **service.go 用进程内 sync.Mutex + atomic.Bool**：
    - `running atomic.Bool` 已在 service.go 中存在 ← 这就够了
    - RunAsync 用 `running.CompareAndSwap(false, true)` 抢占，保证全局只有一个 goroutine 跑
-3. **status 写库还是要保留**：`py_run_status` 表本来就是通用进度表（即便表名带 py 前缀，写入 task='data_update' 仍然合理），用于前端轮询查进度
-4. **建议**：把 `py_run_status` 表名后续考虑改成 `run_status`（不本次做，避免破坏 daily_signal/eval 共享）
+3. **status 写库还是要保留**：`task_run_status` 表本来就是通用进度表（即便表名带 py 前缀，写入 task='data_update' 仍然合理），用于前端轮询查进度
+4. **建议**：把 `task_run_status` 表名后续考虑改成 `run_status`（不本次做，避免破坏 daily_signal/eval 共享）
 
 ### 立即操作
 1. 删 lock.go 整个文件（DBLock、Acquire/Release、heartbeat 全删）
@@ -460,7 +460,7 @@ internal/datafetch/
 - `running atomic.Bool` + `RunAsync` 的 CompareAndSwap 检查
 - `ErrAlreadyRunning` 当抢占失败时返回
 - `IsRunning()` 暴露状态
-- `GetStatus()` 查 py_run_status
+- `GetStatus()` 查 task_run_status
 
 ### lock.go 原内容拆分
 保留：

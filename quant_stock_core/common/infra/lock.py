@@ -61,7 +61,7 @@ class PyLock:
         if self._held:
             try:
                 with open_db() as conn:
-                    conn.execute("DELETE FROM py_run_lock WHERE name = ? AND pid = ?", (self.name, os.getpid()))
+                    conn.execute("DELETE FROM task_run_locks WHERE name = ? AND pid = ?", (self.name, os.getpid()))
             except Exception:
                 pass
             self._held = False
@@ -72,20 +72,20 @@ class PyLock:
         now = _now_str()
         with open_db() as conn:
             row = conn.execute(
-                "SELECT pid, hostname, heartbeat, task FROM py_run_lock WHERE name = ?",
+                "SELECT pid, hostname, heartbeat, task FROM task_run_locks WHERE name = ?",
                 (self.name,),
             ).fetchone()
             if row is not None:
                 heartbeat = _parse(row[2])
                 stale_threshold = datetime.now() - timedelta(seconds=self.stale_seconds)
                 if heartbeat is None or heartbeat < stale_threshold:
-                    conn.execute("DELETE FROM py_run_lock WHERE name = ?", (self.name,))
+                    conn.execute("DELETE FROM task_run_locks WHERE name = ?", (self.name,))
                 else:
                     raise LockBusyError(
-                        f"py_run_lock '{self.name}' busy: pid={row[0]} host={row[1]} task={row[3]} heartbeat={row[2]}"
+                        f"task_run_locks '{self.name}' busy: pid={row[0]} host={row[1]} task={row[3]} heartbeat={row[2]}"
                     )
             conn.execute(
-                "INSERT INTO py_run_lock(name, pid, hostname, acquired_at, heartbeat, task) VALUES(?,?,?,?,?,?)",
+                "INSERT INTO task_run_locks(name, pid, hostname, acquired_at, heartbeat, task) VALUES(?,?,?,?,?,?)",
                 (self.name, pid, host, now, now, self.task),
             )
 
@@ -94,7 +94,7 @@ class PyLock:
             try:
                 with open_db() as conn:
                     conn.execute(
-                        "UPDATE py_run_lock SET heartbeat = ? WHERE name = ? AND pid = ?",
+                        "UPDATE task_run_locks SET heartbeat = ? WHERE name = ? AND pid = ?",
                         (_now_str(), self.name, os.getpid()),
                     )
             except Exception:

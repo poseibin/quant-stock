@@ -4,7 +4,6 @@ import argparse
 import json
 import math
 import os
-import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.infra import status as run_status
-from common.infra.db import write_transaction
+from common.infra.db import connect_db, upsert_sql, write_transaction
 
 
 TASK_NAME = "limit_signal_evaluation"
@@ -63,9 +62,9 @@ def limit_threshold(ts_code: str, name: str) -> float:
     return 9.2
 
 
-def ensure_tables(conn: sqlite3.Connection) -> None:
+def ensure_tables(conn) -> None:
     conn.execute(
-        """CREATE TABLE IF NOT EXISTS limit_signal_predictions (
+        """CREATE TABLE IF NOT EXISTS market_limit_signal_predictions (
             id TEXT PRIMARY KEY,
             signal_type TEXT NOT NULL,
             strategy_version TEXT NOT NULL DEFAULT 'v1',
@@ -95,7 +94,7 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
         )"""
     )
     conn.execute(
-        """CREATE TABLE IF NOT EXISTS limit_signal_evaluation_summary (
+        """CREATE TABLE IF NOT EXISTS market_limit_signal_eval_summary (
             signal_type TEXT NOT NULL,
             strategy_version TEXT NOT NULL DEFAULT 'v1',
             parameter_key TEXT NOT NULL,
@@ -117,12 +116,12 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
 
 
 def load_predictions(db_path: Path, limit: int) -> list[Prediction]:
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_db(db_path) as conn:
         ensure_tables(conn)
         rows = conn.execute(
             """SELECT id, signal_type, strategy_version, parameter_key, ts_code, name,
                       signal_date, signal_price, score
-               FROM limit_signal_predictions
+               FROM market_limit_signal_predictions
                ORDER BY signal_date DESC, rank ASC
                LIMIT ?""",
             (limit,),
@@ -235,7 +234,7 @@ def write_results(db_path: Path, predictions: list[Prediction], results: dict[st
                 continue
             evaluated += 1
             conn.execute(
-                """UPDATE limit_signal_predictions
+                """UPDATE market_limit_signal_predictions
                    SET ret_1d=?, ret_3d=?, ret_5d=?, ret_10d=?, max_drawdown_5d=?,
                        hit_limit_up_5d=?, target_hit=?, outcome_json=?, evaluated_at=?, updated_at=?
                    WHERE id=?""",
@@ -266,7 +265,7 @@ def write_results(db_path: Path, predictions: list[Prediction], results: dict[st
                       AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN ret_10d END) AS avg_return_10d,
                       AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN max_drawdown_5d END) AS avg_max_drawdown_5d,
                       AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN score END) AS avg_score
-               FROM limit_signal_predictions
+               FROM market_limit_signal_predictions
                GROUP BY signal_type, strategy_version, parameter_key"""
         ).fetchall()
         for row in rows:
@@ -284,25 +283,23 @@ def write_results(db_path: Path, predictions: list[Prediction], results: dict[st
             avg_score = safe_float(row[12])
             target_avg = avg_return_5d if signal_type == "limit_up_momentum" else avg_return_10d
             rec, hint = recommendation_for(signal_type, sample_count, hit_rate, target_avg, avg_max_drawdown_5d)
+            columns = [
+                "signal_type", "strategy_version", "parameter_key", "sample_count", "pending_count",
+                "hit_rate", "avg_return_1d", "avg_return_3d", "avg_return_5d", "avg_return_10d",
+                "avg_max_drawdown_5d", "avg_score", "recommendation", "parameter_hint", "updated_at",
+            ]
             conn.execute(
-                """INSERT INTO limit_signal_evaluation_summary(
-                    signal_type, strategy_version, parameter_key, sample_count, pending_count,
-                    hit_rate, avg_return_1d, avg_return_3d, avg_return_5d, avg_return_10d,
-                    avg_max_drawdown_5d, avg_score, recommendation, parameter_hint, updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(signal_type, strategy_version, parameter_key) DO UPDATE SET
-                    sample_count=excluded.sample_count,
-                    pending_count=excluded.pending_count,
-                    hit_rate=excluded.hit_rate,
-                    avg_return_1d=excluded.avg_return_1d,
-                    avg_return_3d=excluded.avg_return_3d,
-                    avg_return_5d=excluded.avg_return_5d,
-                    avg_return_10d=excluded.avg_return_10d,
-                    avg_max_drawdown_5d=excluded.avg_max_drawdown_5d,
-                    avg_score=excluded.avg_score,
-                    recommendation=excluded.recommendation,
-                    parameter_hint=excluded.parameter_hint,
-                    updated_at=excluded.updated_at""",
+                upsert_sql(
+                    "market_limit_signal_eval_summary",
+                    columns,
+                    ["signal_type", "strategy_version", "parameter_key"],
+                    [
+                        "sample_count", "pending_count", "hit_rate", "avg_return_1d",
+                        "avg_return_3d", "avg_return_5d", "avg_return_10d",
+                        "avg_max_drawdown_5d", "avg_score", "recommendation",
+                        "parameter_hint", "updated_at",
+                    ],
+                ),
                 (
                     signal_type,
                     strategy_version,

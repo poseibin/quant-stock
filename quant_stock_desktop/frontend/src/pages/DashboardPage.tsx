@@ -27,7 +27,7 @@ import { strategyLabel } from './PositionPage'
 
 echarts.use([CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
-const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
+const evaluationTaskTypes = new Set(['evaluation_time_machine', 'eval_strategy_admission', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
 
 function money(value: number) {
   return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -229,8 +229,8 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
           <div className="sectionLabel">TIMELINE</div>
           <div className="dashboardPanelTitle">最近事件</div>
           <div className="eventList">
-            {events.map((event) => (
-              <div className="eventItem" key={`${event.time}-${event.title}`}>
+            {events.map((event, index) => (
+              <div className="eventItem" key={`${event.time}-${event.title}-${index}`}>
                 <span className={event.tone} />
                 <div>
                   <b>{event.title}</b>

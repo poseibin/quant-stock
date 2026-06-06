@@ -27,6 +27,8 @@ func NewRunID(req CreateRequest) string {
 		prefix = "wf"
 	} else if req.TaskType == TypeParameterExperiment {
 		prefix = "px"
+	} else if req.TaskType == TypeFactorResearch {
+		prefix = "fr"
 	}
 	return fmt.Sprintf("%s_%s_%s_%s_%s", prefix, strategies, start, end, time.Now().Format("150405"))
 }

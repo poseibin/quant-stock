@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Play, RefreshCw, Sparkles, Square, Trash2 } from 'lucide-react'
+import { ArrowLeft, Play, RefreshCw, RotateCcw, Sparkles, Square, Trash2 } from 'lucide-react'
 import { DataGrid, type Column } from 'react-data-grid'
 import * as echarts from 'echarts/core'
 import { DataZoomComponent, GridComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import { LineChart } from 'echarts/charts'
 import { CanvasRenderer } from 'echarts/renderers'
-import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getTimeMachineDetail, listTasks, listValidationEvidence, refreshTaskStatus, startTask, type TaskDTO, type TimeMachineDetail, type ValidationEvidence } from '../services/app'
+import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getSignalPortfolioContext, getTimeMachineDetail, listTasks, listValidationEvidence, refreshTaskStatus, retryTask, startTask, type SignalPortfolioCandidate, type SignalPortfolioContext, type TaskDTO, type TimeMachineDetail, type ValidationEvidence } from '../services/app'
 import { formatDate } from '../components/format'
 import { LimitSignalEvaluationPanel } from './LimitSignalEvaluationPanel'
 
-const evaluationTaskTypes = new Set(['evaluation_time_machine', 'strategy_evaluation', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
+const evaluationTaskTypes = new Set(['evaluation_time_machine', 'eval_strategy_admission', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
 const evaluationHorizon = {
   fullCycleStartDate: '20100101',
+  admissionYears: 5,
   portfolioYears: 6,
   parameterYears: 6,
   walkForwardWindowCount: 8
@@ -20,7 +21,7 @@ const evaluationHorizon = {
 echarts.use([CanvasRenderer, DataZoomComponent, GridComponent, LineChart, TitleComponent, TooltipComponent])
 
 export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
-  const [activeMode, setActiveMode] = useState<'timeMachine' | 'limitSignals'>('timeMachine')
+  const [activeMode, setActiveMode] = useState<'timeMachine' | 'limitSignals' | 'portfolioAnalysis'>('timeMachine')
   const [tasks, setTasks] = useState<TaskDTO[]>([])
   const [selectedTask, setSelectedTask] = useState<TaskDTO | null>(null)
   const [detail, setDetail] = useState<TimeMachineDetail | null>(null)
@@ -28,8 +29,9 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
   const [notice, setNotice] = useState('')
   const [aiAnalyzing, setAiAnalyzing] = useState(false)
   const [nextEvalCreating, setNextEvalCreating] = useState(false)
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set())
   const name = '时光机'
-  const admissionStartDate = evaluationHorizon.fullCycleStartDate
+  const admissionStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.admissionYears)), [])
   const portfolioStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.portfolioYears)), [])
   const parameterStartDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -evaluationHorizon.parameterYears)), [])
   const walkForwardStartDate = evaluationHorizon.fullCycleStartDate
@@ -55,7 +57,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
 
   const showDetail = async (id: string) => {
     const task = await refreshTaskStatus(id)
-    const tm = task.task_type === 'strategy_evaluation' || task.task_type === 'portfolio_optimization' || task.task_type === 'walk_forward_evaluation' || task.task_type === 'parameter_experiment' ? null : await getTimeMachineDetail(id).catch(() => null)
+    const tm = task.task_type === 'eval_strategy_admission' || task.task_type === 'portfolio_optimization' || task.task_type === 'walk_forward_evaluation' || task.task_type === 'parameter_experiment' ? null : await getTimeMachineDetail(id).catch(() => null)
     setSelectedTask(task)
     setDetail(tm)
     await refresh()
@@ -101,7 +103,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     try {
       await createTask({
         name: `策略准入-${admissionStartDate}-${endDate}`,
-        task_type: 'strategy_evaluation',
+        task_type: 'eval_strategy_admission',
         params: {
           start_date: admissionStartDate,
           end_date: endDate,
@@ -172,6 +174,29 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const onRetry = async (id: string) => {
+    setError('')
+    setRetryingIds((prev) => new Set(prev).add(id))
+    try {
+      const task = await retryTask(id)
+      setNotice('已提交单项重跑')
+      if (task.parent_id) {
+        await showDetail(task.parent_id)
+      } else {
+        setSelectedTask(task)
+        await refresh()
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRetryingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
   }
 
@@ -365,7 +390,7 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
         />
       )
     }
-    if (selectedTask.task_type === 'strategy_evaluation' || selectedTask.task_type === 'walk_forward_evaluation' || selectedTask.task_type === 'parameter_experiment') {
+    if (selectedTask.task_type === 'eval_strategy_admission' || selectedTask.task_type === 'walk_forward_evaluation' || selectedTask.task_type === 'parameter_experiment') {
       return (
         <StrategyEvaluationDetail
           task={selectedTask}
@@ -374,6 +399,8 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
           onRefresh={() => showDetail(selectedTask.id)}
           onStart={() => onStart(selectedTask.id)}
           onCancel={async () => { await cancelTask(selectedTask.id); await showDetail(selectedTask.id) }}
+          onRetry={onRetry}
+          retryingIds={retryingIds}
         />
       )
     }
@@ -404,9 +431,12 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
       <div className="taskModeTabs">
         <button className={activeMode === 'timeMachine' ? 'active' : ''} onClick={() => setActiveMode('timeMachine')}>时光机评估</button>
         <button className={activeMode === 'limitSignals' ? 'active' : ''} onClick={() => setActiveMode('limitSignals')}>涨停模型评估</button>
+        <button className={activeMode === 'portfolioAnalysis' ? 'active' : ''} onClick={() => setActiveMode('portfolioAnalysis')}>策略评估分析</button>
       </div>
       {activeMode === 'limitSignals' ? (
         <LimitSignalEvaluationPanel />
+      ) : activeMode === 'portfolioAnalysis' ? (
+        <PortfolioAnalysisPanel />
       ) : (
         <>
       <div className="formCard taskFormCard">
@@ -448,6 +478,97 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
       </div>
         </>
       )}
+    </div>
+  )
+}
+
+function PortfolioAnalysisPanel() {
+  const [context, setContext] = useState<SignalPortfolioContext | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const refresh = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      setContext(await getSignalPortfolioContext())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  const rows = context?.candidates || []
+
+  return (
+    <div className="portfolioAnalysisPanel">
+      <div className="formCard taskFormCard compactTaskFormCard">
+        <div className="tableHeader">
+          <div>
+            <div className="formTitle">策略组合列表</div>
+            <p className="recommendationMeta">展示已完成组合优化/时光机评估并可用于生成持仓信号的候选组合，后续持仓页只从这里选择。</p>
+          </div>
+          <button className="secondaryButton quietButton" onClick={refresh} disabled={loading}><RefreshCw size={15} />{loading ? '刷新中' : '刷新'}</button>
+        </div>
+      </div>
+
+      {error && <div className="errorBox">{error}</div>}
+
+      <div className="tableCard portfolioCandidateCard">
+        <div className="tableHeader">
+          <div>
+            <div className="formTitle">组合策略评估情况</div>
+            <p className="recommendationMeta">{rows.length ? `${rows.length} 个候选组合，按评分和排序展示` : '暂无组合评估结果'}</p>
+          </div>
+        </div>
+        <div className="portfolioAnalysisTable">
+          <div className="portfolioAnalysisHead">
+            <span>排名</span>
+            <span>组合</span>
+            <span>评分</span>
+            <span>年化</span>
+            <span>最大回撤</span>
+            <span>夏普</span>
+            <span>换手</span>
+            <span>持仓</span>
+            <span>调仓</span>
+            <span>权重</span>
+          </div>
+          {rows.map((item) => (
+            <PortfolioAnalysisRow item={item} key={`${item.run_id}-${item.candidate_id}`} />
+          ))}
+          {rows.length === 0 && (
+            <div className="taskGridEmpty portfolioAnalysisEmpty">
+              暂无策略组合。先完成策略准入、组合优化或时光机评估，生成候选组合后这里会出现可选方案。
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PortfolioAnalysisRow({ item }: { item: SignalPortfolioCandidate }) {
+  return (
+    <div className="portfolioAnalysisRow">
+      <span className="mono">{item.rank || '—'}</span>
+      <span className="portfolioNameCell">
+        <b>{item.name || item.candidate_id}</b>
+        <em>{item.run_id} · {item.candidate_id} · {item.validation_status || item.status || '—'}</em>
+      </span>
+      <span>{numberText(item.score, 2)}</span>
+      <span className={toneOf(numberOf(item.annual_return, 0))}>{metricPercentValue(item.annual_return, true)}</span>
+      <span className="negative">{metricPercentValue(item.max_drawdown)}</span>
+      <span>{nullableNumber(item.sharpe, 2)}</span>
+      <span>{metricPercentValue(item.avg_turnover)}</span>
+      <span>{nullableNumber(item.avg_holdings, 1)}</span>
+      <span>{rebalanceLabel(item.rebalance_freq)}</span>
+      <span className="portfolioWeights">{formatCandidateWeights(item.weights)}</span>
     </div>
   )
 }
@@ -695,13 +816,15 @@ function EvaluationDetail({ task, detail, onOpenResearch, onBack, onRefresh, onS
   )
 }
 
-function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart, onCancel }: {
+function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart, onCancel, onRetry, retryingIds }: {
   task: TaskDTO
   childTasks: TaskDTO[]
   onBack: () => void
   onRefresh: () => void
   onStart: () => void
   onCancel: () => void
+  onRetry: (id: string) => void
+  retryingIds: Set<string>
 }) {
   const [evidence, setEvidence] = useState<ValidationEvidence>({ reviews: [], reports: [], snapshots: [] })
 
@@ -737,6 +860,47 @@ function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart
   const isRunning = task.status === 'running'
   const isRunnable = task.status !== 'running' && task.status !== 'success'
   const mode = strategyDetailMode(task)
+  const admissionColumns = useMemo<Column<StrategyAdmissionRow>[]>(() => [
+    { key: 'sequence', name: '序号', width: 72, renderCell: ({ row }) => `${row.sequence}/${row.total}` },
+    { key: 'label', name: mode.rowLabel, width: 156, renderCell: ({ row }) => row.label },
+    {
+      key: 'admission',
+      name: '建议',
+      width: 126,
+      renderCell: ({ row }) => (
+        <span className={`admissionBadge ${admissionClass(row.admission)}`} title={row.reason}>
+          {row.admission || '—'}
+        </span>
+      )
+    },
+    { key: 'admission_score', name: '准入分', width: 88, renderCell: ({ row }) => scoreText(row.admission_score) },
+    { key: 'taskStatus', name: '任务', width: 96, renderCell: ({ row }) => <span className={`badge ${row.taskStatus}`}>{statusText(row.taskStatus)}</span> },
+    { key: 'progress', name: '进度', width: 78, renderCell: ({ row }) => `${Math.round(row.progress * 100)}%` },
+    { key: 'evalStatus', name: '评估', width: 86, renderCell: ({ row }) => <span className={`badge ${row.evalStatus || 'created'}`}>{row.evalStatus || '—'}</span> },
+    { key: 'enabled', name: '启用', width: 66, renderCell: ({ row }) => row.enabled ? '是' : '否' },
+    { key: 'return_score', name: '收益分', width: 78, renderCell: ({ row }) => scoreText(row.return_score) },
+    { key: 'risk_adjusted_score', name: '风调分', width: 78, renderCell: ({ row }) => scoreText(row.risk_adjusted_score) },
+    { key: 'drawdown_score', name: '回撤分', width: 78, renderCell: ({ row }) => scoreText(row.drawdown_score) },
+    { key: 'cost_score', name: '成本分', width: 78, renderCell: ({ row }) => scoreText(row.cost_score) },
+    { key: 'capacity_score', name: '容量分', width: 78, renderCell: ({ row }) => scoreText(row.capacity_score) },
+    { key: 'stability_score', name: '稳定分', width: 78, renderCell: ({ row }) => scoreText(row.stability_score) },
+    { key: 'independence_score', name: '独立分', width: 78, renderCell: ({ row }) => scoreText(row.independence_score) },
+    { key: 'total_return', name: '总收益', width: 92, renderCell: ({ row }) => <span className={toneOf(numberOf(row.total_return, 0))}>{percent(numberOf(row.total_return, 0), true)}</span> },
+    { key: 'annual_return', name: '年化', width: 92, renderCell: ({ row }) => <span className={toneOf(numberOf(row.annual_return, 0))}>{percent(numberOf(row.annual_return, 0), true)}</span> },
+    { key: 'max_drawdown', name: '最大回撤', width: 94, renderCell: ({ row }) => <span className="negative">{percent(numberOf(row.max_drawdown, 0))}</span> },
+    { key: 'sharpe', name: '夏普', width: 72, renderCell: ({ row }) => numberOf(row.sharpe, 0).toFixed(2) },
+    { key: 'calmar', name: 'Calmar', width: 78, renderCell: ({ row }) => numberOf(row.calmar, 0).toFixed(2) },
+    { key: 'avg_turnover', name: '换手', width: 82, renderCell: ({ row }) => percent(numberOf(row.avg_turnover, 0)) },
+    { key: 'avg_holdings', name: '持仓', width: 72, renderCell: ({ row }) => numberOf(row.avg_holdings, 0).toFixed(1) },
+    { key: 'avg_total_mv', name: '平均市值', width: 100, renderCell: ({ row }) => `${money(numberOf(row.avg_total_mv, 0) / 100000000, 1)}亿` },
+    { key: 'avg_amount', name: '平均成交额', width: 112, renderCell: ({ row }) => `${money(numberOf(row.avg_amount, 0) / 100000000, 1)}亿` },
+    { key: 'monthly_win_rate', name: '月胜率', width: 86, renderCell: ({ row }) => row.monthly_win_rate == null ? '—' : percent(numberOf(row.monthly_win_rate, 0)) },
+    { key: 'worst_month_return', name: '最差月', width: 92, renderCell: ({ row }) => row.worst_month_return == null ? '—' : percent(numberOf(row.worst_month_return, 0), true) },
+    { key: 'overlap_with_baseline', name: '重合度', width: 84, renderCell: ({ row }) => row.overlap_with_baseline == null ? '—' : percent(numberOf(row.overlap_with_baseline, 0)) },
+    { key: 'corr_with_baseline', name: '相关性', width: 78, renderCell: ({ row }) => row.corr_with_baseline == null ? '—' : numberOf(row.corr_with_baseline, 0).toFixed(2) },
+    { key: 'attempt', name: '尝试', width: 72, renderCell: ({ row }) => `${row.attempt}/${row.maxAttempts}` },
+    { key: 'error', name: '错误', width: 180, renderCell: ({ row }) => <span className="gridErrorText" title={row.error}>{row.error || '—'}</span> }
+  ], [mode.rowLabel])
 
   return (
     <div className="taskDetailPage strategyEvalDetail">
@@ -777,85 +941,37 @@ function StrategyEvaluationDetail({ task, childTasks, onBack, onRefresh, onStart
             <p className="recommendationMeta">{mode.tableHint}</p>
           </div>
         </div>
-        <div className="tableWrap">
-          <table>
-            <thead>
-              <tr>
-                <th>序号</th>
-                <th>{mode.rowLabel}</th>
-                <th>建议</th>
-                <th>准入分</th>
-                <th>任务</th>
-                <th>进度</th>
-                <th>评估</th>
-                <th>启用</th>
-                <th>收益分</th>
-                <th>风调分</th>
-                <th>回撤分</th>
-                <th>成本分</th>
-                <th>容量分</th>
-                <th>稳定分</th>
-                <th>独立分</th>
-                <th>总收益</th>
-                <th>年化</th>
-                <th>最大回撤</th>
-                <th>夏普</th>
-                <th>Calmar</th>
-                <th>换手</th>
-                <th>持仓</th>
-                <th>平均市值</th>
-                <th>平均成交额</th>
-                <th>月胜率</th>
-                <th>最差月</th>
-                <th>重合度</th>
-                <th>相关性</th>
-                <th>尝试</th>
-                <th>错误</th>
-              </tr>
-            </thead>
-            <tbody>
-              {strategyRows.map((row) => (
-                <tr key={row.key}>
-                  <td>{row.sequence}/{row.total}</td>
-                  <td>{row.label}</td>
-                  <td>
-                    <span className={`admissionBadge ${admissionClass(row.admission)}`} title={row.reason}>
-                      {row.admission || '—'}
-                    </span>
-                  </td>
-                  <td>{scoreText(row.admission_score)}</td>
-                  <td><span className={`badge ${row.taskStatus}`}>{row.taskStatus}</span></td>
-                  <td>{Math.round(row.progress * 100)}%</td>
-                  <td><span className={`badge ${row.evalStatus || 'created'}`}>{row.evalStatus || '—'}</span></td>
-                  <td>{row.enabled ? '是' : '否'}</td>
-                  <td>{scoreText(row.return_score)}</td>
-                  <td>{scoreText(row.risk_adjusted_score)}</td>
-                  <td>{scoreText(row.drawdown_score)}</td>
-                  <td>{scoreText(row.cost_score)}</td>
-                  <td>{scoreText(row.capacity_score)}</td>
-                  <td>{scoreText(row.stability_score)}</td>
-                  <td>{scoreText(row.independence_score)}</td>
-                  <td className={toneOf(numberOf(row.total_return, 0))}>{percent(numberOf(row.total_return, 0), true)}</td>
-                  <td className={toneOf(numberOf(row.annual_return, 0))}>{percent(numberOf(row.annual_return, 0), true)}</td>
-                  <td className="negative">{percent(numberOf(row.max_drawdown, 0))}</td>
-                  <td>{numberOf(row.sharpe, 0).toFixed(2)}</td>
-                  <td>{numberOf(row.calmar, 0).toFixed(2)}</td>
-                  <td>{percent(numberOf(row.avg_turnover, 0))}</td>
-                  <td>{numberOf(row.avg_holdings, 0).toFixed(1)}</td>
-                  <td>{money(numberOf(row.avg_total_mv, 0) / 100000000, 1)}亿</td>
-                  <td>{money(numberOf(row.avg_amount, 0) / 100000000, 1)}亿</td>
-                  <td>{row.monthly_win_rate == null ? '—' : percent(numberOf(row.monthly_win_rate, 0))}</td>
-                  <td>{row.worst_month_return == null ? '—' : percent(numberOf(row.worst_month_return, 0), true)}</td>
-                  <td>{row.overlap_with_baseline == null ? '—' : percent(numberOf(row.overlap_with_baseline, 0))}</td>
-                  <td>{row.corr_with_baseline == null ? '—' : numberOf(row.corr_with_baseline, 0).toFixed(2)}</td>
-                  <td>{row.attempt}/{row.maxAttempts}</td>
-                  <td>{row.error || '—'}</td>
-                </tr>
-              ))}
-              {!isRunning && strategyRows.length === 0 && <tr><td colSpan={30} className="emptyCell">{mode.emptyText}</td></tr>}
-              {isRunning && strategyRows.length === 0 && <tr><td colSpan={30} className="emptyCell">评估运行中...</td></tr>}
-            </tbody>
-          </table>
+        <div className="strategyAdmissionGridLayout">
+          <div className="taskGridShell strategyAdmissionGridShell">
+            <DataGrid
+              className="taskGrid strategyAdmissionGrid rdg-dark"
+              columns={admissionColumns}
+              rows={strategyRows}
+              rowKeyGetter={(row) => row.key}
+              defaultColumnOptions={{ resizable: true }}
+              rowHeight={58}
+              headerRowHeight={46}
+            />
+            {strategyRows.length === 0 && <div className="taskGridEmpty">{isRunning ? '评估运行中...' : mode.emptyText}</div>}
+          </div>
+          <div className="strategyActionRail" aria-label="单项操作">
+            <div className="strategyActionRailHeader">操作</div>
+            {strategyRows.map((row) => {
+              const failed = row.taskStatus === 'failed' || row.taskStatus === 'error' || row.evalStatus === 'error' || Boolean(row.error)
+              const submitting = retryingIds.has(row.taskId)
+              const disabled = !row.taskId || submitting || row.taskStatus === 'running' || row.taskStatus === 'queued'
+              const label = submitting ? '提交中' : row.taskStatus === 'running' ? '运行中' : row.taskStatus === 'queued' ? '排队中' : failed ? '失败重跑' : '单个跑'
+              const title = failed ? '只重跑这一项' : '只运行这一项'
+              return (
+                <div className="strategyActionRailCell" key={`${row.key}-action`}>
+                  <button className={`gridActionButton ${failed ? 'retry' : 'single'}`} disabled={disabled} title={title} onClick={() => onRetry(row.taskId)}>
+                    <RotateCcw size={14} />{label}
+                  </button>
+                </div>
+              )
+            })}
+            {strategyRows.length === 0 && <div className="strategyActionRailCell mutedRailCell">—</div>}
+          </div>
         </div>
       </div>
     </div>
@@ -1161,6 +1277,7 @@ function ValidationEvidencePanel({ evidence, title, emptyText }: { evidence: Val
 
 type StrategyAdmissionRow = Record<string, unknown> & {
   key: string
+  taskId: string
   label: string
   admission: string
   reason: string
@@ -1180,6 +1297,7 @@ function buildStrategyAdmissionRows(childTasks: TaskDTO[], resultRows: Array<Rec
     return resultRows.map((row, index) => ({
       ...row,
       key: String(row.strategy || index),
+      taskId: '',
       label: String(row.label || row.strategy || '—'),
       admission: String(row.admission || ''),
       reason: String(row.reason || ''),
@@ -1216,15 +1334,18 @@ function buildStrategyAdmissionRows(childTasks: TaskDTO[], resultRows: Array<Rec
       child.summary.admission != null
     )
     const result = childSummaryHasEvalResult ? child.summary : fallbackResult || child.summary || {}
+    const evalStatus = String(result.status || '')
+    const taskStatus = child.status === 'success' && evalStatus === 'error' ? 'error' : child.status
     return {
       ...result,
       key: child.id,
+      taskId: child.id,
       strategy,
       label: String(result.label || child.subtask_name || child.name || strategy || '—'),
       admission: String(result.admission || ''),
       reason: String(result.reason || child.error_message || ''),
-      taskStatus: child.status,
-      evalStatus: String(result.status || ''),
+      taskStatus,
+      evalStatus,
       progress: child.progress,
       sequence: child.sequence,
       total: child.total,
@@ -1453,7 +1574,18 @@ function TradeBadge({ trade }: { trade: TimeMachineDetail['trades'][number] }) {
 }
 
 function numberOf(value: unknown, fallback: number) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function nullableNumber(value: number | null | undefined, digits = 2) {
+  if (value == null || !Number.isFinite(Number(value))) return '—'
+  return Number(value).toFixed(digits)
+}
+
+function numberText(value: number | null | undefined, digits = 2) {
+  if (value == null || !Number.isFinite(Number(value))) return '—'
+  return Number(value).toFixed(digits)
 }
 
 function money(value: number, fractionDigits = 0) {
@@ -1470,9 +1602,15 @@ function price(value: number) {
 }
 
 function percent(value: number, signed = false) {
+  if (!Number.isFinite(value)) return '—'
   const pct = value * 100
   const sign = signed && pct >= 0 ? '+' : ''
   return `${sign}${pct.toFixed(2)}%`
+}
+
+function metricPercentValue(value: number | null | undefined, signed = false) {
+  if (value == null || !Number.isFinite(Number(value))) return '—'
+  return percent(Number(value), signed)
 }
 
 function toneOf(value: number) {
@@ -1499,6 +1637,37 @@ function formatWeights(value: unknown) {
   return Object.entries(value as Record<string, unknown>)
     .map(([name, weight]) => `${name}:${percent(numberOf(weight, 0))}`)
     .join(' · ')
+}
+
+function formatCandidateWeights(weights: Record<string, number>) {
+  const entries = Object.entries(weights || {}).filter(([, weight]) => Number.isFinite(Number(weight)))
+  if (entries.length === 0) return '—'
+  return entries
+    .sort((left, right) => Number(right[1]) - Number(left[1]))
+    .map(([name, weight]) => `${strategyLabel(name)} ${percent(Number(weight))}`)
+    .join(' / ')
+}
+
+function strategyLabel(strategy: string) {
+  const labels = {
+    market_regime_timing: '市场状态择时',
+    multi_factor_composite: '多因子综合',
+    small_cap_quality: '小盘质量',
+    trend_pullback: '趋势回撤',
+    turtle_breakout: '海龟突破',
+    dividend_quality: '红利质量',
+    earnings_revision: '盈利预期修正',
+    industry_prosperity: '行业景气',
+    low_crowding_reversal: '低拥挤反转',
+    event_enhanced: '事件增强',
+    beijing_satellite: '北交所卫星',
+    insider_buy: '高管增持',
+    lhb_follow: '龙虎榜跟踪',
+    trend_quality: '趋势质量',
+    garp_quality: '质量成长',
+    moneyflow_pullback: '资金低吸'
+  } as Record<string, string>
+  return labels[strategy] || strategy
 }
 
 function formatStrategies(value: unknown) {
@@ -1549,7 +1718,7 @@ function truncateText(value: string, maxLength: number) {
 }
 
 function snapshotDataTypes(snapshot: Record<string, unknown>) {
-  const files = asRecord(snapshot.market_data_files) || {}
+  const files = asRecord(snapshot.data_market_files) || {}
   return Object.entries(files).map(([name, raw]) => {
     const item = asRecord(raw) || {}
     return {
@@ -1595,7 +1764,7 @@ function taskTypeLabel(task: TaskDTO) {
   if (task.task_type === 'portfolio_optimization') return task.parent_id ? '方案子任务' : '时光机'
   if (task.task_type === 'walk_forward_evaluation') return task.parent_id ? '窗口子任务' : 'Walk-forward'
   if (task.task_type === 'parameter_experiment') return task.parent_id ? '参数子任务' : '参数实验'
-  if (task.task_type === 'strategy_evaluation') return '策略准入'
+  if (task.task_type === 'eval_strategy_admission') return '策略准入'
   if (task.task_type === 'evaluation_time_machine') return '时光机'
   return task.task_type
 }
@@ -1636,14 +1805,14 @@ function strategyDetailMode(task: TaskDTO) {
   return {
     kicker: 'STRATEGY ADMISSION',
     countLabel: '策略数',
-    passLabel: '可启用',
-    limitedLabel: '限制启用',
-    watchLabel: '观察',
+    passLabel: '可进WF',
+    limitedLabel: '限制WF',
+    watchLabel: '观察WF',
     rejectLabel: '暂不启用',
     evidenceTitle: '策略可信度证据',
     evidenceEmpty: '暂无策略版本复核记录，完成策略准入后可在设置页复核版本',
     tableTitle: '策略准入表',
-    tableHint: '按收益质量、风险调整、回撤控制、换手成本、容量、稳定性与组合独立性综合评分',
+    tableHint: '第一关默认看近 5 年，用于筛选可进入 Walk-forward 的研究候选；全周期压力留给后续稳定性检查',
     rowLabel: '策略',
     emptyText: '暂无策略子任务，创建策略准入后会初始化候选策略'
   }

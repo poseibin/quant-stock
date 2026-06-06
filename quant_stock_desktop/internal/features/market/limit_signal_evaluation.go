@@ -3,21 +3,21 @@ package market
 import "database/sql"
 
 type LimitSignalEvaluationSummary struct {
-	SignalType        string  `json:"signal_type"`
-	StrategyVersion   string  `json:"strategy_version"`
-	ParameterKey      string  `json:"parameter_key"`
-	SampleCount       int     `json:"sample_count"`
-	PendingCount      int     `json:"pending_count"`
-	HitRate           float64 `json:"hit_rate"`
-	AvgReturn1D       float64 `json:"avg_return_1d"`
-	AvgReturn3D       float64 `json:"avg_return_3d"`
-	AvgReturn5D       float64 `json:"avg_return_5d"`
-	AvgReturn10D      float64 `json:"avg_return_10d"`
-	AvgMaxDrawdown5D  float64 `json:"avg_max_drawdown_5d"`
-	AvgScore          float64 `json:"avg_score"`
-	Recommendation    string  `json:"recommendation"`
-	ParameterHint     string  `json:"parameter_hint"`
-	UpdatedAt         string  `json:"updated_at"`
+	SignalType       string  `json:"signal_type"`
+	StrategyVersion  string  `json:"strategy_version"`
+	ParameterKey     string  `json:"parameter_key"`
+	SampleCount      int     `json:"sample_count"`
+	PendingCount     int     `json:"pending_count"`
+	HitRate          float64 `json:"hit_rate"`
+	AvgReturn1D      float64 `json:"avg_return_1d"`
+	AvgReturn3D      float64 `json:"avg_return_3d"`
+	AvgReturn5D      float64 `json:"avg_return_5d"`
+	AvgReturn10D     float64 `json:"avg_return_10d"`
+	AvgMaxDrawdown5D float64 `json:"avg_max_drawdown_5d"`
+	AvgScore         float64 `json:"avg_score"`
+	Recommendation   string  `json:"recommendation"`
+	ParameterHint    string  `json:"parameter_hint"`
+	UpdatedAt        string  `json:"updated_at"`
 }
 
 func (service *Service) ListLimitSignalEvaluationSummary() ([]LimitSignalEvaluationSummary, error) {
@@ -29,7 +29,7 @@ func (service *Service) ListLimitSignalEvaluationSummary() ([]LimitSignalEvaluat
 
 func (repo *Repository) ensureLimitSignalEvaluationTables() error {
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS limit_signal_predictions (
+		`CREATE TABLE IF NOT EXISTS market_limit_signal_predictions (
 			id TEXT PRIMARY KEY,
 			signal_type TEXT NOT NULL,
 			strategy_version TEXT NOT NULL DEFAULT 'v1',
@@ -57,9 +57,9 @@ func (repo *Repository) ensureLimitSignalEvaluationTables() error {
 			updated_at TEXT NOT NULL,
 			UNIQUE(signal_type, parameter_key, ts_code, signal_date)
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_limit_signal_predictions_type_date
-			ON limit_signal_predictions(signal_type, signal_date);`,
-		`CREATE TABLE IF NOT EXISTS limit_signal_evaluation_summary (
+		`CREATE INDEX IF NOT EXISTS idx_market_limit_signal_predictions_type_date
+			ON market_limit_signal_predictions(signal_type, signal_date);`,
+		`CREATE TABLE IF NOT EXISTS market_limit_signal_eval_summary (
 			signal_type TEXT NOT NULL,
 			strategy_version TEXT NOT NULL DEFAULT 'v1',
 			parameter_key TEXT NOT NULL,
@@ -79,7 +79,7 @@ func (repo *Repository) ensureLimitSignalEvaluationTables() error {
 		);`,
 	}
 	for _, stmt := range stmts {
-		if _, err := repo.db.Exec(stmt); err != nil {
+		if err := repo.db.ExecSchemaStatement(stmt); err != nil {
 			return err
 		}
 	}
@@ -90,11 +90,11 @@ func (repo *Repository) ListLimitSignalEvaluationSummary() ([]LimitSignalEvaluat
 	if err := repo.ensureLimitSignalEvaluationTables(); err != nil {
 		return nil, err
 	}
-	rows, err := repo.db.Query(
+	rows, err := repo.db.Conn().Query(
 		`SELECT signal_type, strategy_version, parameter_key, sample_count, pending_count,
 			hit_rate, avg_return_1d, avg_return_3d, avg_return_5d, avg_return_10d,
 			avg_max_drawdown_5d, avg_score, recommendation, parameter_hint, updated_at
-		FROM limit_signal_evaluation_summary
+		FROM market_limit_signal_eval_summary
 		ORDER BY updated_at DESC, signal_type ASC`,
 	)
 	if err != nil {

@@ -2,6 +2,8 @@ package config
 
 type Settings struct {
 	DataPath             string                      `json:"data_path"`
+	DatabaseBackend      string                      `json:"database_backend"`
+	MySQLDSN             string                      `json:"mysql_dsn"`
 	DefaultInitialCash   float64                     `json:"default_initial_cash"`
 	DefaultRebalanceFreq int                         `json:"default_rebalance_freq"`
 	TaskConcurrency      int                         `json:"task_concurrency"`

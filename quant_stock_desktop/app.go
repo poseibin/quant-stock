@@ -40,6 +40,8 @@ type App struct {
 	marketService    *market.Service
 	positionService  *position.Service
 	datafetchService *datafetch.Service
+	schedulerMu      sync.Mutex
+	signalMu         sync.Mutex
 }
 
 func NewApp() *App {
@@ -76,6 +78,101 @@ type AppInfo struct {
 	Version string `json:"version"`
 }
 
+type FactorResearchRunSummary struct {
+	RunID       string  `json:"run_id"`
+	StartDate   string  `json:"start_date"`
+	EndDate     string  `json:"end_date"`
+	Freq        string  `json:"freq"`
+	Label       string  `json:"label"`
+	Status      string  `json:"status"`
+	FactorCount int     `json:"factor_count"`
+	SampleDates int     `json:"sample_dates"`
+	SampleRows  int     `json:"sample_rows"`
+	PanelPath   string  `json:"panel_path"`
+	UpdatedAt   string  `json:"updated_at"`
+	ModelStatus string  `json:"model_status"`
+	RankIC      float64 `json:"rank_ic"`
+}
+
+type FactorICResult struct {
+	RunID           string  `json:"run_id"`
+	Factor          string  `json:"factor"`
+	Family          string  `json:"family"`
+	Variant         string  `json:"variant"`
+	Horizon         string  `json:"horizon"`
+	ICMean          float64 `json:"ic_mean"`
+	RankICMean      float64 `json:"rank_ic_mean"`
+	ICWinRate       float64 `json:"ic_win_rate"`
+	ICIR            float64 `json:"icir"`
+	Status          string  `json:"status"`
+	LongShortReturn float64 `json:"long_short_return"`
+	MonotonicScore  float64 `json:"monotonic_score"`
+}
+
+type FactorModelRun struct {
+	RunID        string  `json:"run_id"`
+	ModelType    string  `json:"model_type"`
+	Label        string  `json:"label"`
+	FeatureCount int     `json:"feature_count"`
+	Status       string  `json:"status"`
+	ModelPath    string  `json:"model_path"`
+	RankIC       float64 `json:"rank_ic"`
+	TopBottom    float64 `json:"top_bottom_spread"`
+	SummaryJSON  string  `json:"summary_json"`
+	UpdatedAt    string  `json:"updated_at"`
+}
+
+type FactorModelPrediction struct {
+	RunID          string  `json:"run_id"`
+	TradeDate      string  `json:"trade_date"`
+	TsCode         string  `json:"ts_code"`
+	PredScore      float64 `json:"pred_score"`
+	RealizedReturn float64 `json:"realized_return"`
+	PredRank       float64 `json:"pred_rank"`
+	TestYear       int     `json:"test_year"`
+}
+
+type FactorCorrelationResult struct {
+	RunID          string  `json:"run_id"`
+	FeatureA       string  `json:"feature_a"`
+	FeatureB       string  `json:"feature_b"`
+	Correlation    float64 `json:"correlation"`
+	AbsCorrelation float64 `json:"abs_correlation"`
+	FamilyA        string  `json:"family_a"`
+	FamilyB        string  `json:"family_b"`
+	KeepFeature    string  `json:"keep_feature"`
+	DropFeature    string  `json:"drop_feature"`
+	Reason         string  `json:"reason"`
+}
+
+type FactorStressResult struct {
+	RunID          string  `json:"run_id"`
+	BucketType     string  `json:"bucket_type"`
+	BucketKey      string  `json:"bucket_key"`
+	BucketLabel    string  `json:"bucket_label"`
+	StartDate      string  `json:"start_date"`
+	EndDate        string  `json:"end_date"`
+	NDays          int     `json:"n_days"`
+	TotalReturn    float64 `json:"total_return"`
+	AnnualReturn   float64 `json:"annual_return"`
+	MaxDrawdown    float64 `json:"max_drawdown"`
+	Sharpe         float64 `json:"sharpe"`
+	WinRate        float64 `json:"win_rate"`
+	AvgDailyReturn float64 `json:"avg_daily_return"`
+	Volatility     float64 `json:"volatility"`
+	SummaryJSON    string  `json:"summary_json"`
+}
+
+type FactorLatestPrediction struct {
+	RunID     string  `json:"run_id"`
+	TradeDate string  `json:"trade_date"`
+	TsCode    string  `json:"ts_code"`
+	PredScore float64 `json:"pred_score"`
+	PredRank  float64 `json:"pred_rank"`
+	IsTop20   bool    `json:"is_top20"`
+	ModelPath string  `json:"model_path"`
+}
+
 type SettingsResponse struct {
 	Settings config.Settings          `json:"settings"`
 	Issues   []config.ValidationIssue `json:"issues"`
@@ -84,6 +181,47 @@ type SettingsResponse struct {
 type ApplyPortfolioCandidateRequest struct {
 	RunID       string `json:"run_id"`
 	CandidateID string `json:"candidate_id"`
+}
+
+type activePortfolioCandidateRecord struct {
+	RunID            string             `json:"run_id"`
+	CandidateID      string             `json:"candidate_id"`
+	Name             string             `json:"name"`
+	Status           string             `json:"status"`
+	Score            float64            `json:"score"`
+	Weights          map[string]float64 `json:"weights"`
+	ValidationStatus string             `json:"validation_status"`
+	AppliedAt        string             `json:"applied_at"`
+}
+
+type SignalPortfolioCandidateDTO struct {
+	RunID            string             `json:"run_id"`
+	CandidateID      string             `json:"candidate_id"`
+	Rank             int                `json:"rank"`
+	Name             string             `json:"name"`
+	Objective        string             `json:"objective"`
+	Status           string             `json:"status"`
+	Score            float64            `json:"score"`
+	Strategies       string             `json:"strategies"`
+	Weights          map[string]float64 `json:"weights"`
+	AnnualReturn     *float64           `json:"annual_return"`
+	MaxDrawdown      *float64           `json:"max_drawdown"`
+	Sharpe           *float64           `json:"sharpe"`
+	Calmar           *float64           `json:"calmar"`
+	AvgTurnover      *float64           `json:"avg_turnover"`
+	AvgHoldings      *float64           `json:"avg_holdings"`
+	RebalanceFreq    int                `json:"rebalance_freq"`
+	ValidationStatus string             `json:"validation_status"`
+	Reason           string             `json:"reason"`
+	UpdatedAt        string             `json:"updated_at"`
+	IsActive         bool               `json:"is_active"`
+}
+
+type SignalPortfolioContextDTO struct {
+	Active        *activePortfolioCandidateRecord `json:"active"`
+	Candidates    []SignalPortfolioCandidateDTO   `json:"candidates"`
+	CanGenerate   bool                            `json:"can_generate"`
+	BlockedReason string                          `json:"blocked_reason"`
 }
 
 type StrategyVersionDTO struct {
@@ -109,35 +247,6 @@ type StrategyVersionStatusRequest struct {
 	Strategy string `json:"strategy"`
 	Version  int    `json:"version"`
 	Status   string `json:"status"`
-}
-
-type StateTeamQuery struct {
-	Period  string `json:"period"`
-	Action  string `json:"action"`
-	Keyword string `json:"keyword"`
-	Limit   int    `json:"limit"`
-}
-
-type StateTeamChangeDTO struct {
-	TSCode              string  `json:"ts_code"`
-	Name                string  `json:"name"`
-	Industry            string  `json:"industry"`
-	Action              string  `json:"action"`
-	CurrentPeriod       string  `json:"current_period"`
-	PreviousPeriod      string  `json:"previous_period"`
-	CurrentHolderCount  int     `json:"current_holder_count"`
-	PreviousHolderCount int     `json:"previous_holder_count"`
-	CurrentHoldAmount   float64 `json:"current_hold_amount"`
-	PreviousHoldAmount  float64 `json:"previous_hold_amount"`
-	CurrentHoldRatio    float64 `json:"current_hold_ratio"`
-	PreviousHoldRatio   float64 `json:"previous_hold_ratio"`
-	HoldRatioDelta      float64 `json:"hold_ratio_delta"`
-	CurrentFloatRatio   float64 `json:"current_float_ratio"`
-	PreviousFloatRatio  float64 `json:"previous_float_ratio"`
-	CurrentHolders      string  `json:"current_holders"`
-	PreviousHolders     string  `json:"previous_holders"`
-	Note                string  `json:"note"`
-	UpdatedAt           string  `json:"updated_at"`
 }
 
 type PolicySupportSignalDTO struct {
@@ -326,45 +435,111 @@ func (app *App) GetAppInfo() AppInfo {
 }
 
 func (app *App) GetSettings() SettingsResponse {
+	var issues []config.ValidationIssue
 	if app.database != nil {
-		app.configService.WithDB(app.database.Conn())
+		app.configService.WithDatabase(app.database)
 	}
 	settings, err := app.configService.Load(app.settings)
 	if err == nil {
 		settings.DataPath = app.fixedDataPath()
 		app.settings = settings
-		_ = app.configService.Save(app.settings)
+		if err := app.configService.Save(app.settings); err != nil {
+			issues = append(issues, config.ValidationIssue{Field: "settings", Message: "保存配置失败：" + err.Error()})
+		}
+	} else {
+		issues = append(issues, config.ValidationIssue{Field: "settings", Message: "读取配置失败：" + err.Error()})
 	}
+	issues = append(issues, app.configService.Validate(app.settings)...)
 	return SettingsResponse{
 		Settings: app.settings,
-		Issues:   app.configService.Validate(app.settings),
+		Issues:   issues,
 	}
 }
 
 func (app *App) SaveSettings(settings config.Settings) SettingsResponse {
 	settings.DataPath = app.fixedDataPath()
+	backend, packagedDSN := config.PackagedDatabaseConfig()
+	settings.DatabaseBackend = backend
+	if backend != "mysql" {
+		settings.MySQLDSN = packagedDSN
+	} else if strings.TrimSpace(settings.MySQLDSN) == "" {
+		settings.MySQLDSN = packagedDSN
+	}
 	issues := app.configService.Validate(settings)
+	if app.databaseConfigChanged(settings) {
+		if running, message := app.hasActiveRuntimeWork(); running {
+			issues = append(issues, config.ValidationIssue{Field: "database_backend", Message: "当前有任务运行中，不能切换数据库配置：" + message})
+		}
+	}
 	if len(issues) > 0 {
 		return SettingsResponse{
 			Settings: settings,
 			Issues:   issues,
 		}
 	}
-	app.settings = settings
-	_ = app.ensureDatabase()
-	if app.database != nil {
-		app.configService.WithDB(app.database.Conn())
+	if err := app.ensureDatabase(); err != nil {
+		issues = append(issues, config.ValidationIssue{Field: "database_backend", Message: "初始化数据库失败：" + err.Error()})
+		return SettingsResponse{
+			Settings: settings,
+			Issues:   issues,
+		}
 	}
-	if err := app.configService.Save(settings); err == nil {
+	if app.database != nil {
+		app.configService.WithDatabase(app.database)
+	}
+	if err := app.configService.Save(settings); err != nil {
+		issues = append(issues, config.ValidationIssue{Field: "settings", Message: "保存配置失败：" + err.Error()})
+		return SettingsResponse{
+			Settings: settings,
+			Issues:   issues,
+		}
+	}
+	savedSettings, err := app.configService.Load(settings)
+	if err != nil {
+		issues = append(issues, config.ValidationIssue{Field: "settings", Message: "读取已保存配置失败：" + err.Error()})
 		app.settings = settings
+	} else {
+		savedSettings.DataPath = app.fixedDataPath()
+		app.settings = savedSettings
 	}
 	if app.datafetchService != nil {
 		app.datafetchService.SetDataPath(app.settings.DataPath)
 	}
+	issues = append(issues, app.configService.Validate(app.settings)...)
 	return SettingsResponse{
 		Settings: app.settings,
-		Issues:   app.configService.Validate(app.settings),
+		Issues:   issues,
 	}
+}
+
+func (app *App) databaseConfigChanged(settings config.Settings) bool {
+	current := config.NormalizeForCompare(app.settings)
+	next := config.NormalizeForCompare(settings)
+	return current.DataPath != next.DataPath ||
+		current.DatabaseBackend != next.DatabaseBackend ||
+		current.MySQLDSN != next.MySQLDSN
+}
+
+func (app *App) hasActiveRuntimeWork() (bool, string) {
+	if app.database == nil {
+		if len(evaluationWorkerPIDs()) > 0 {
+			return true, "仍有评估 Python 进程"
+		}
+		return false, ""
+	}
+	db := app.database.Conn()
+	var evaluationCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_jobs WHERE status IN ('queued','running')`).Scan(&evaluationCount); err == nil && evaluationCount > 0 {
+		return true, "评估任务正在运行或排队"
+	}
+	var runStatusCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_run_status WHERE state = 'running'`).Scan(&runStatusCount); err == nil && runStatusCount > 0 {
+		return true, "Python 状态任务正在运行"
+	}
+	if len(evaluationWorkerPIDs()) > 0 {
+		return true, "仍有评估 Python 进程"
+	}
+	return false, ""
 }
 
 func (app *App) ListStrategyVersions(strategy string) ([]StrategyVersionDTO, error) {
@@ -373,7 +548,7 @@ func (app *App) ListStrategyVersions(strategy string) ([]StrategyVersionDTO, err
 	}
 	query := `SELECT strategy, version, label, config_json, is_active, COALESCE(promotion_status,'research'),
 		COALESCE(validation_json,'{}'), COALESCE(source,''), COALESCE(note,''), created_at, COALESCE(activated_at,'')
-		FROM strategy_settings_versions`
+		FROM strategy_config_versions`
 	args := []any{}
 	if strings.TrimSpace(strategy) != "" {
 		query += ` WHERE strategy = ?`
@@ -412,7 +587,7 @@ func (app *App) ActivateStrategyVersion(req StrategyVersionActivateRequest) (Set
 	if strategyName == "" || req.Version <= 0 {
 		return SettingsResponse{}, errors.New("strategy and version are required")
 	}
-	row := app.database.Conn().QueryRow(`SELECT config_json FROM strategy_settings_versions WHERE strategy = ? AND version = ?`, strategyName, req.Version)
+	row := app.database.Conn().QueryRow(`SELECT config_json FROM strategy_config_versions WHERE strategy = ? AND version = ?`, strategyName, req.Version)
 	var configJSON string
 	if err := row.Scan(&configJSON); err != nil {
 		return SettingsResponse{}, err
@@ -422,7 +597,7 @@ func (app *App) ActivateStrategyVersion(req StrategyVersionActivateRequest) (Set
 		return SettingsResponse{}, err
 	}
 	if app.database != nil {
-		app.configService.WithDB(app.database.Conn())
+		app.configService.WithDatabase(app.database)
 	}
 	settings, err := app.configService.Load(app.settings)
 	if err != nil {
@@ -441,18 +616,21 @@ func (app *App) ActivateStrategyVersion(req StrategyVersionActivateRequest) (Set
 	if err != nil {
 		return SettingsResponse{}, err
 	}
-	if _, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 0 WHERE strategy = ?`, strategyName); err != nil {
+	if _, err := tx.Exec(`UPDATE strategy_config_versions SET is_active = 0 WHERE strategy = ?`, strategyName); err != nil {
 		_ = tx.Rollback()
 		return SettingsResponse{}, err
 	}
-	if _, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 1, promotion_status = 'active', activated_at = ? WHERE strategy = ? AND version = ?`, now, strategyName, req.Version); err != nil {
+	if _, err := tx.Exec(`UPDATE strategy_config_versions SET is_active = 1, promotion_status = 'active', activated_at = ? WHERE strategy = ? AND version = ?`, now, strategyName, req.Version); err != nil {
 		_ = tx.Rollback()
 		return SettingsResponse{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO app_settings(key, value, updated_at) VALUES('settings', ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, string(settingsData), now); err != nil {
+	_, settingsErr := tx.Exec(
+		app.database.UpsertSQL("cfg_app_settings", []string{"key", "value", "updated_at"}, []string{"key"}, []string{"value", "updated_at"}),
+		"settings", string(settingsData), now,
+	)
+	if settingsErr != nil {
 		_ = tx.Rollback()
-		return SettingsResponse{}, err
+		return SettingsResponse{}, settingsErr
 	}
 	if err := tx.Commit(); err != nil {
 		return SettingsResponse{}, err
@@ -475,11 +653,11 @@ func (app *App) SetStrategyVersionStatus(req StrategyVersionStatusRequest) ([]St
 		return nil, errors.New("unsupported strategy version status")
 	}
 	if status == "paper" {
-		if _, err := app.database.Conn().Exec(`UPDATE strategy_settings_versions SET promotion_status = CASE WHEN version = ? THEN 'paper' WHEN promotion_status = 'paper' THEN 'research' ELSE promotion_status END WHERE strategy = ?`, req.Version, strategyName); err != nil {
+		if _, err := app.database.Conn().Exec(`UPDATE strategy_config_versions SET promotion_status = CASE WHEN version = ? THEN 'paper' WHEN promotion_status = 'paper' THEN 'research' ELSE promotion_status END WHERE strategy = ?`, req.Version, strategyName); err != nil {
 			return nil, err
 		}
 	} else {
-		if _, err := app.database.Conn().Exec(`UPDATE strategy_settings_versions SET promotion_status = ? WHERE strategy = ? AND version = ?`, status, strategyName, req.Version); err != nil {
+		if _, err := app.database.Conn().Exec(`UPDATE strategy_config_versions SET promotion_status = ? WHERE strategy = ? AND version = ?`, status, strategyName, req.Version); err != nil {
 			return nil, err
 		}
 	}
@@ -495,14 +673,22 @@ func (app *App) ApplyPortfolioCandidate(req ApplyPortfolioCandidateRequest) (Set
 	if runID == "" || candidateID == "" {
 		return SettingsResponse{}, errors.New("run_id and candidate_id are required")
 	}
+	var candidateName string
+	var candidateStatus string
+	var candidateScore float64
 	var weightsJSON string
+	var validationStatus string
 	row := app.database.Conn().QueryRow(
-		`SELECT weights_json FROM portfolio_optimization_candidates WHERE run_id = ? AND candidate_id = ?`,
+		`SELECT name, status, score, weights_json, COALESCE(validation_status,'')
+		 FROM eval_portfolio_candidates WHERE run_id = ? AND candidate_id = ?`,
 		runID,
 		candidateID,
 	)
-	if err := row.Scan(&weightsJSON); err != nil {
+	if err := row.Scan(&candidateName, &candidateStatus, &candidateScore, &weightsJSON, &validationStatus); err != nil {
 		return SettingsResponse{}, err
+	}
+	if candidateStatus != "ok" {
+		return SettingsResponse{}, fmt.Errorf("candidate is not usable: status=%s", candidateStatus)
 	}
 	var weights map[string]float64
 	if err := json.Unmarshal([]byte(weightsJSON), &weights); err != nil {
@@ -512,7 +698,7 @@ func (app *App) ApplyPortfolioCandidate(req ApplyPortfolioCandidateRequest) (Set
 		return SettingsResponse{}, errors.New("candidate has no strategy weights")
 	}
 	if app.database != nil {
-		app.configService.WithDB(app.database.Conn())
+		app.configService.WithDatabase(app.database)
 	}
 	settings, err := app.configService.Load(app.settings)
 	if err != nil {
@@ -541,6 +727,25 @@ func (app *App) ApplyPortfolioCandidate(req ApplyPortfolioCandidateRequest) (Set
 	if err := app.configService.Save(settings); err != nil {
 		return SettingsResponse{}, err
 	}
+	active := activePortfolioCandidateRecord{
+		RunID:            runID,
+		CandidateID:      candidateID,
+		Name:             candidateName,
+		Status:           candidateStatus,
+		Score:            candidateScore,
+		Weights:          weights,
+		ValidationStatus: validationStatus,
+		AppliedAt:        time.Now().Format(time.RFC3339),
+	}
+	activeJSON, _ := json.Marshal(active)
+	now := time.Now().Format(time.RFC3339)
+	if _, err := app.database.Conn().Exec(
+		app.database.UpsertSQL("cfg_app_settings", []string{"key", "value", "updated_at"}, []string{"key"}, []string{"value", "updated_at"}),
+		"active_portfolio_candidate", string(activeJSON), now,
+	); err != nil {
+		return SettingsResponse{}, err
+	}
+	_, _ = app.database.Conn().Exec(`DELETE FROM rec_daily_recommendations`)
 	app.settings = settings
 	return SettingsResponse{
 		Settings: app.settings,
@@ -548,11 +753,89 @@ func (app *App) ApplyPortfolioCandidate(req ApplyPortfolioCandidateRequest) (Set
 	}, nil
 }
 
+func (app *App) GetSignalPortfolioContext() (SignalPortfolioContextDTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return SignalPortfolioContextDTO{}, err
+	}
+	candidates, err := app.listSignalPortfolioCandidates(nil)
+	if err != nil {
+		return SignalPortfolioContextDTO{}, err
+	}
+	blockedReason := ""
+	if len(candidates) == 0 {
+		blockedReason = "请先在评估中心完成组合优化/时光机评估，生成候选组合后再生成信号"
+	}
+	return SignalPortfolioContextDTO{
+		Active:        nil,
+		Candidates:    candidates,
+		CanGenerate:   len(candidates) > 0,
+		BlockedReason: blockedReason,
+	}, nil
+}
+
+func (app *App) activePortfolioCandidate() (*activePortfolioCandidateRecord, error) {
+	if app.database == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	var payload string
+	err := app.database.Conn().QueryRow(fmt.Sprintf(`SELECT value FROM cfg_app_settings WHERE %s = ?`, app.cfgAppSettingsKeyColumn()), "active_portfolio_candidate").Scan(&payload)
+	if err != nil {
+		return nil, err
+	}
+	var active activePortfolioCandidateRecord
+	if err := json.Unmarshal([]byte(payload), &active); err != nil {
+		return nil, err
+	}
+	return &active, nil
+}
+
+func (app *App) listSignalPortfolioCandidates(active *activePortfolioCandidateRecord) ([]SignalPortfolioCandidateDTO, error) {
+	rows, err := app.database.Conn().Query(`SELECT run_id, candidate_id, rank, name, objective, status, score,
+		strategies, weights_json, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings,
+		rebalance_freq, COALESCE(validation_status,''), COALESCE(reason,''), COALESCE(updated_at,'')
+		FROM eval_portfolio_candidates
+		WHERE status = 'ok'
+		ORDER BY CASE WHEN rank > 0 THEN 0 ELSE 1 END, rank ASC, score DESC, updated_at DESC
+		LIMIT 30`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]SignalPortfolioCandidateDTO, 0)
+	for rows.Next() {
+		var item SignalPortfolioCandidateDTO
+		var weightsJSON string
+		var annualReturn, maxDrawdown, sharpe, calmar, avgTurnover, avgHoldings sql.NullFloat64
+		if err := rows.Scan(
+			&item.RunID, &item.CandidateID, &item.Rank, &item.Name, &item.Objective, &item.Status, &item.Score,
+			&item.Strategies, &weightsJSON, &annualReturn, &maxDrawdown, &sharpe, &calmar, &avgTurnover, &avgHoldings,
+			&item.RebalanceFreq, &item.ValidationStatus, &item.Reason, &item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(weightsJSON), &item.Weights)
+		item.AnnualReturn = nullableFloatPtr(annualReturn)
+		item.MaxDrawdown = nullableFloatPtr(maxDrawdown)
+		item.Sharpe = nullableFloatPtr(sharpe)
+		item.Calmar = nullableFloatPtr(calmar)
+		item.AvgTurnover = nullableFloatPtr(avgTurnover)
+		item.AvgHoldings = nullableFloatPtr(avgHoldings)
+		if active != nil && active.RunID == item.RunID && active.CandidateID == item.CandidateID {
+			item.IsActive = true
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (app *App) ScanMarketDataFiles() ([]market.DataFileDTO, error) {
 	if err := app.ensureMarketService(); err != nil {
 		return nil, err
 	}
-	return app.marketService.Scan(app.settings.DataPath)
+	if err := app.runMarketDataFileScan(); err != nil {
+		return nil, err
+	}
+	return app.marketService.List()
 }
 
 func (app *App) ListMarketDataFiles() ([]market.DataFileDTO, error) {
@@ -560,6 +843,44 @@ func (app *App) ListMarketDataFiles() ([]market.DataFileDTO, error) {
 		return nil, err
 	}
 	return app.marketService.List()
+}
+
+func (app *App) runMarketDataFileScan() error {
+	if err := app.ensureDatabase(); err != nil {
+		return err
+	}
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return errors.New("数据路径未设置")
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(dataPath, "meta.db")
+	logDir := filepath.Join(dataPath, "logs", "data_file_scan")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(logDir, time.Now().Format("20060102_150405")+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	args := []string{
+		"scripts/scan_market_files.py",
+		"--data-root", dataPath,
+		"--db-path", dbPath,
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	if err := cmd.Run(); err != nil {
+		app.markPythonStatusTaskError("data_file_scan", "本地数据文件扫描失败: "+err.Error()+"，日志: "+logPath)
+		return fmt.Errorf("本地数据文件扫描失败: %w，请查看日志 %s", err, logPath)
+	}
+	return nil
 }
 
 func (app *App) ListStockBasic(query market.StockBasicQuery) ([]market.StockBasic, error) {
@@ -590,178 +911,6 @@ func (app *App) GetStockValuation(query market.ValuationQuery) (market.StockValu
 	return app.marketService.GetStockValuation(app.settings.DataPath, query)
 }
 
-func (app *App) ListStateTeamHolderChanges(query StateTeamQuery) ([]StateTeamChangeDTO, error) {
-	if err := app.ensureDatabase(); err != nil {
-		return []StateTeamChangeDTO{}, err
-	}
-	db := app.database.Conn()
-	period := strings.TrimSpace(query.Period)
-	if period == "" {
-		if err := db.QueryRow(`SELECT COALESCE(MAX(current_period), '') FROM state_team_holder_changes`).Scan(&period); err != nil {
-			return []StateTeamChangeDTO{}, err
-		}
-	}
-	if period == "" {
-		return []StateTeamChangeDTO{}, nil
-	}
-	limit := query.Limit
-	if limit <= 0 || limit > 1000 {
-		limit = 300
-	}
-	conditions := []string{"current_period = ?"}
-	args := []any{period}
-	action := strings.ToUpper(strings.TrimSpace(query.Action))
-	if action != "" && action != "ALL" {
-		conditions = append(conditions, "action = ?")
-		args = append(args, action)
-	}
-	keyword := strings.ToLower(strings.TrimSpace(query.Keyword))
-	if keyword != "" {
-		conditions = append(conditions, "(lower(ts_code) LIKE ? OR lower(name) LIKE ? OR lower(industry) LIKE ? OR lower(current_holders) LIKE ? OR lower(previous_holders) LIKE ?)")
-		like := "%" + keyword + "%"
-		args = append(args, like, like, like, like, like)
-	}
-	args = append(args, limit)
-	rows, err := db.Query(`SELECT
-			ts_code, name, industry, action, current_period, previous_period,
-			current_holder_count, previous_holder_count,
-			current_hold_amount, previous_hold_amount,
-			current_hold_ratio, previous_hold_ratio, hold_ratio_delta,
-			current_float_ratio, previous_float_ratio,
-			current_holders, previous_holders, note, updated_at
-		FROM state_team_holder_changes
-		WHERE `+strings.Join(conditions, " AND ")+`
-		ORDER BY
-			CASE action WHEN 'NEW' THEN 1 WHEN 'ADD' THEN 2 WHEN 'TRIM' THEN 3 WHEN 'EXIT' THEN 4 ELSE 5 END,
-			ABS(hold_ratio_delta) DESC,
-			current_hold_ratio DESC
-		LIMIT ?`, args...)
-	if err != nil {
-		return []StateTeamChangeDTO{}, err
-	}
-	defer rows.Close()
-	out := make([]StateTeamChangeDTO, 0)
-	for rows.Next() {
-		var item StateTeamChangeDTO
-		if err := rows.Scan(
-			&item.TSCode,
-			&item.Name,
-			&item.Industry,
-			&item.Action,
-			&item.CurrentPeriod,
-			&item.PreviousPeriod,
-			&item.CurrentHolderCount,
-			&item.PreviousHolderCount,
-			&item.CurrentHoldAmount,
-			&item.PreviousHoldAmount,
-			&item.CurrentHoldRatio,
-			&item.PreviousHoldRatio,
-			&item.HoldRatioDelta,
-			&item.CurrentFloatRatio,
-			&item.PreviousFloatRatio,
-			&item.CurrentHolders,
-			&item.PreviousHolders,
-			&item.Note,
-			&item.UpdatedAt,
-		); err != nil {
-			return []StateTeamChangeDTO{}, err
-		}
-		out = append(out, item)
-	}
-	return out, rows.Err()
-}
-
-func (app *App) GetStateTeamAnalysisStatus() (position.RunStatus, error) {
-	if err := app.ensurePositionService(); err != nil {
-		return position.RunStatus{}, err
-	}
-	return app.positionService.GetRunStatus("state_team_analysis")
-}
-
-func (app *App) RunStateTeamAnalysis() error {
-	if err := app.ensureDatabase(); err != nil {
-		return err
-	}
-	if status, err := app.GetStateTeamAnalysisStatus(); err == nil && status.State == "running" {
-		return errors.New("国家队分析正在运行")
-	}
-	dataPath := strings.TrimSpace(app.settings.DataPath)
-	if dataPath == "" {
-		return errors.New("数据路径未设置")
-	}
-	quantRoot := app.quantStockCorePath()
-	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
-	logDir := filepath.Join(dataPath, "logs", "state_team")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return err
-	}
-	logPath := filepath.Join(logDir, time.Now().Format("20060102_150405")+".log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	now := time.Now().Format(time.RFC3339)
-	_, _ = app.database.Conn().Exec(
-		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
-		 VALUES('state_team_analysis','running',0,6,'prepare','启动 Python 分析脚本','',?,?,'')
-		 ON CONFLICT(task) DO UPDATE SET state='running', idx=0, total=6, stage='prepare', name='启动 Python 分析脚本', message='', started_at=excluded.started_at, updated_at=excluded.updated_at, finished_at=''`,
-		now,
-		now,
-	)
-	args := []string{
-		"scripts/analyze_state_team_holders.py",
-		"--mode", "changes",
-		"--data-root", dataPath,
-		"--db-path", dbPath,
-		"--json",
-	}
-	cmd := exec.Command(pythonPath, args...)
-	cmd.Dir = quantRoot
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(),
-		"DATA_ROOT="+dataPath,
-		"DESKTOP_DB_PATH="+dbPath,
-		"DESKTOP_CONFIG_DB_PATH="+dbPath,
-	)
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		finishedAt := time.Now().Format(time.RFC3339)
-		_, _ = app.database.Conn().Exec(
-			`UPDATE py_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='state_team_analysis'`,
-			err.Error(),
-			finishedAt,
-			finishedAt,
-		)
-		return err
-	}
-	go app.waitStateTeamAnalysis(cmd, logFile, logPath)
-	return nil
-}
-
-func (app *App) waitStateTeamAnalysis(cmd *exec.Cmd, logFile *os.File, logPath string) {
-	err := cmd.Wait()
-	_ = logFile.Close()
-	if err == nil || app.database == nil {
-		return
-	}
-	status, statusErr := app.GetStateTeamAnalysisStatus()
-	if statusErr == nil && status.State != "running" {
-		return
-	}
-	now := time.Now().Format(time.RFC3339)
-	_, _ = app.database.Conn().Exec(
-		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
-		 VALUES('state_team_analysis','error',0,0,'','',?,?,?,?)
-		 ON CONFLICT(task) DO UPDATE SET state='error', message=excluded.message, updated_at=excluded.updated_at, finished_at=excluded.finished_at`,
-		"更新进程已退出: "+err.Error()+"，日志: "+logPath,
-		now,
-		now,
-		now,
-	)
-}
-
 func (app *App) GetLatestPolicySupportSignal() (PolicySupportSignalDTO, error) {
 	if err := app.ensureDatabase(); err != nil {
 		return PolicySupportSignalDTO{}, err
@@ -770,7 +919,7 @@ func (app *App) GetLatestPolicySupportSignal() (PolicySupportSignalDTO, error) {
 	err := app.database.Conn().QueryRow(`SELECT
 			trade_date, signal_level, total_score, market_stress_score, support_score,
 			institution_score, weight_support_score, direction, reason, evidence_json, updated_at
-		FROM policy_support_signals
+		FROM monitor_policy_support_signals
 		ORDER BY trade_date DESC
 		LIMIT 1`).Scan(
 		&item.TradeDate,
@@ -799,7 +948,7 @@ func (app *App) ListPolicySupportCandidates(limit int) ([]PolicySupportCandidate
 		limit = 80
 	}
 	var tradeDate string
-	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date), '') FROM policy_support_signals`).Scan(&tradeDate); err != nil {
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date), '') FROM monitor_policy_support_signals`).Scan(&tradeDate); err != nil {
 		return []PolicySupportCandidateDTO{}, err
 	}
 	if tradeDate == "" {
@@ -808,7 +957,7 @@ func (app *App) ListPolicySupportCandidates(limit int) ([]PolicySupportCandidate
 	rows, err := app.database.Conn().Query(`SELECT
 			trade_date, ts_code, name, industry, candidate_type, score, pct_chg,
 			amount_ratio, turnover_rate, institution_net_buy, reason, updated_at
-		FROM policy_support_candidates
+		FROM monitor_policy_support_candidates
 		WHERE trade_date = ?
 		ORDER BY score DESC
 		LIMIT ?`, tradeDate, limit)
@@ -872,12 +1021,15 @@ func (app *App) RunPolicySupportAnalysis() error {
 	}
 	now := time.Now().Format(time.RFC3339)
 	_, _ = app.database.Conn().Exec(
-		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
-		 VALUES('policy_support_analysis','running',0,5,'prepare','启动政策资金托底分析','',?,?,'')
-		 ON CONFLICT(task) DO UPDATE SET state='running', idx=0, total=5, stage='prepare', name='启动政策资金托底分析', message='', started_at=excluded.started_at, updated_at=excluded.updated_at, finished_at=''`,
-		now,
-		now,
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+		),
+		"policy_support_analysis", "running", 0, 5, "prepare", "启动政策资金托底分析", "", now, now, "",
 	)
+	app.ensureRunStatusTaskType("policy_support_analysis")
 	args := []string{
 		"scripts/analyze_policy_support.py",
 		"--data-root", dataPath,
@@ -888,16 +1040,12 @@ func (app *App) RunPolicySupportAnalysis() error {
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(),
-		"DATA_ROOT="+dataPath,
-		"DESKTOP_DB_PATH="+dbPath,
-		"DESKTOP_CONFIG_DB_PATH="+dbPath,
-	)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		finishedAt := time.Now().Format(time.RFC3339)
 		_, _ = app.database.Conn().Exec(
-			`UPDATE py_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='policy_support_analysis'`,
+			`UPDATE task_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='policy_support_analysis'`,
 			err.Error(),
 			finishedAt,
 			finishedAt,
@@ -927,15 +1075,60 @@ func (app *App) markPythonStatusTaskError(taskName string, message string) {
 	}
 	now := time.Now().Format(time.RFC3339)
 	_, _ = app.database.Conn().Exec(
-		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
-		 VALUES(?,'error',0,0,'','',?,?,?,?)
-		 ON CONFLICT(task) DO UPDATE SET state='error', message=excluded.message, updated_at=excluded.updated_at, finished_at=excluded.finished_at`,
-		taskName,
-		message,
-		now,
-		now,
-		now,
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"state", "message", "updated_at", "finished_at"},
+		),
+		taskName, "error", 0, 0, "", "", message, now, now, now,
 	)
+	app.ensureRunStatusTaskType(taskName)
+}
+
+func (app *App) ensureRunStatusTaskType(taskName string) {
+	if app.database == nil {
+		return
+	}
+	_, _ = app.database.Conn().Exec(
+		`UPDATE task_run_status SET task_type=? WHERE task=? AND COALESCE(task_type,'')=''`,
+		runStatusTaskType(taskName),
+		taskName,
+	)
+}
+
+func runStatusTaskType(taskName string) string {
+	switch taskName {
+	case "data_update", "data_file_scan":
+		return "data_update"
+	case "daily_signal":
+		return "signal"
+	case "limit_signal_evaluation":
+		return "evaluation"
+	case "limit_breakout", "limit_up_momentum":
+		return "market_scan"
+	case "policy_support_analysis":
+		return "analysis"
+	default:
+		return "python"
+	}
+}
+
+func (app *App) pythonDBEnv(dbPath string) []string {
+	backend := strings.TrimSpace(app.settings.DatabaseBackend)
+	if backend == "" {
+		backend, _ = config.PackagedDatabaseConfig()
+	}
+	dsn := strings.TrimSpace(app.settings.MySQLDSN)
+	if dsn == "" {
+		_, dsn = config.PackagedDatabaseConfig()
+	}
+	return []string{
+		"DESKTOP_DB_BACKEND=" + backend,
+		"DESKTOP_DB_DSN=" + dsn,
+		"DESKTOP_DB_PATH=" + dbPath,
+		"DESKTOP_CONFIG_DB_PATH=" + dbPath,
+	}
 }
 
 func (app *App) ListLimitBreakoutCandidates(query market.BreakoutQuery) ([]market.LimitBreakoutCandidate, error) {
@@ -984,11 +1177,7 @@ func (app *App) RefreshLimitBreakoutCandidates(query market.BreakoutQuery) ([]ma
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(),
-		"DATA_ROOT="+dataPath,
-		"DESKTOP_DB_PATH="+dbPath,
-		"DESKTOP_CONFIG_DB_PATH="+dbPath,
-	)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
 	if err := cmd.Run(); err != nil {
 		app.markPythonStatusTaskError("limit_breakout", "涨停预警扫描失败: "+err.Error()+"，日志: "+logPath)
 		return nil, fmt.Errorf("涨停预警扫描失败: %w，请查看日志 %s", err, logPath)
@@ -1042,11 +1231,7 @@ func (app *App) RefreshLimitUpMomentumCandidates(query market.LimitUpMomentumQue
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(),
-		"DATA_ROOT="+dataPath,
-		"DESKTOP_DB_PATH="+dbPath,
-		"DESKTOP_CONFIG_DB_PATH="+dbPath,
-	)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
 	if err := cmd.Run(); err != nil {
 		app.markPythonStatusTaskError("limit_up_momentum", "涨停板推荐扫描失败: "+err.Error()+"，日志: "+logPath)
 		return nil, fmt.Errorf("涨停板推荐扫描失败: %w，请查看日志 %s", err, logPath)
@@ -1096,13 +1281,15 @@ func (app *App) clearRunStatus(taskName string) {
 	}
 	now := time.Now().Format(time.RFC3339)
 	_, _ = app.database.Conn().Exec(
-		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
-		 VALUES(?,'idle',0,0,'','','',?,?, '')
-		 ON CONFLICT(task) DO UPDATE SET state='idle', idx=0, total=0, stage='', name='', message='', updated_at=excluded.updated_at, finished_at=''`,
-		taskName,
-		now,
-		now,
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"state", "idx", "total", "stage", "name", "message", "updated_at", "finished_at"},
+		),
+		taskName, "idle", 0, 0, "", "", "", now, now, "",
 	)
+	app.ensureRunStatusTaskType(taskName)
 }
 
 func (app *App) ListLimitSignalEvaluationSummary() ([]market.LimitSignalEvaluationSummary, error) {
@@ -1110,6 +1297,290 @@ func (app *App) ListLimitSignalEvaluationSummary() ([]market.LimitSignalEvaluati
 		return []market.LimitSignalEvaluationSummary{}, err
 	}
 	return app.marketService.ListLimitSignalEvaluationSummary()
+}
+
+func (app *App) ListFactorResearchRuns(limit int) ([]FactorResearchRunSummary, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorResearchRunSummary{}, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT r.run_id, r.start_date, r.end_date, r.freq, r.label, r.status,
+		       COALESCE(p.factor_count, 0), COALESCE(p.sample_dates, 0), COALESCE(p.sample_rows, 0),
+		       COALESCE(p.panel_path, ''), r.updated_at,
+		       COALESCE(m.status, ''), COALESCE(JSON_EXTRACT(m.summary_json, '$.oos_rank_ic_mean') + 0, 0)
+		FROM factor_research_runs r
+		LEFT JOIN factor_panel_meta p ON p.run_id = r.run_id
+		LEFT JOIN factor_model_runs m ON m.run_id = r.run_id
+		ORDER BY r.updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return []FactorResearchRunSummary{}, nil
+	}
+	defer rows.Close()
+	out := []FactorResearchRunSummary{}
+	for rows.Next() {
+		var item FactorResearchRunSummary
+		if err := rows.Scan(&item.RunID, &item.StartDate, &item.EndDate, &item.Freq, &item.Label, &item.Status, &item.FactorCount, &item.SampleDates, &item.SampleRows, &item.PanelPath, &item.UpdatedAt, &item.ModelStatus, &item.RankIC); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListFactorICResults(runID string, limit int) ([]FactorICResult, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorICResult{}, err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		latest, err := app.latestFactorRunID()
+		if err != nil {
+			return []FactorICResult{}, err
+		}
+		runID = latest
+	}
+	if runID == "" {
+		return []FactorICResult{}, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 80
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT i.run_id, i.factor, i.family, i.variant, i.horizon,
+		       COALESCE(i.ic_mean, 0), COALESCE(i.rank_ic_mean, 0), COALESCE(i.ic_win_rate, 0),
+		       COALESCE(i.icir, 0), i.status,
+		       COALESCE(q.long_short_return, 0), COALESCE(q.monotonic_score, 0)
+		FROM factor_ic_results i
+		LEFT JOIN factor_quantile_results q
+		  ON q.run_id = i.run_id AND q.factor = i.factor AND q.variant = i.variant AND q.horizon = i.horizon
+		WHERE i.run_id = ?
+		ORDER BY i.rank_ic_mean DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []FactorICResult{}, nil
+	}
+	defer rows.Close()
+	out := []FactorICResult{}
+	for rows.Next() {
+		var item FactorICResult
+		if err := rows.Scan(&item.RunID, &item.Factor, &item.Family, &item.Variant, &item.Horizon, &item.ICMean, &item.RankICMean, &item.ICWinRate, &item.ICIR, &item.Status, &item.LongShortReturn, &item.MonotonicScore); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) GetFactorModelRun(runID string) (FactorModelRun, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return FactorModelRun{}, err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		latest, err := app.latestFactorRunID()
+		if err != nil {
+			return FactorModelRun{}, err
+		}
+		runID = latest
+	}
+	if runID == "" {
+		return FactorModelRun{}, nil
+	}
+	row := app.database.Conn().QueryRow(`
+		SELECT run_id, model_type, label, feature_count, status, COALESCE(model_path, ''),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.oos_rank_ic_mean') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_bottom_spread') + 0, 0),
+		       COALESCE(summary_json, ''), updated_at
+		FROM factor_model_runs WHERE run_id = ?`, runID)
+	var item FactorModelRun
+	if err := row.Scan(&item.RunID, &item.ModelType, &item.Label, &item.FeatureCount, &item.Status, &item.ModelPath, &item.RankIC, &item.TopBottom, &item.SummaryJSON, &item.UpdatedAt); err != nil {
+		return FactorModelRun{}, nil
+	}
+	return item, nil
+}
+
+func (app *App) ListFactorModelPredictions(runID string, limit int) ([]FactorModelPrediction, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorModelPrediction{}, err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		latest, err := app.latestFactorRunID()
+		if err != nil {
+			return []FactorModelPrediction{}, err
+		}
+		runID = latest
+	}
+	if runID == "" {
+		return []FactorModelPrediction{}, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 120
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, trade_date, ts_code, COALESCE(pred_score, 0), COALESCE(realized_return, 0),
+		       COALESCE(pred_rank, 0), COALESCE(test_year, 0)
+		FROM factor_model_predictions
+		WHERE run_id = ? AND is_top20 = 1
+		ORDER BY trade_date DESC, pred_score DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []FactorModelPrediction{}, nil
+	}
+	defer rows.Close()
+	out := []FactorModelPrediction{}
+	for rows.Next() {
+		var item FactorModelPrediction
+		if err := rows.Scan(&item.RunID, &item.TradeDate, &item.TsCode, &item.PredScore, &item.RealizedReturn, &item.PredRank, &item.TestYear); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListFactorCorrelationResults(runID string, limit int) ([]FactorCorrelationResult, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorCorrelationResult{}, err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		latest, err := app.latestFactorRunID()
+		if err != nil {
+			return []FactorCorrelationResult{}, err
+		}
+		runID = latest
+	}
+	if runID == "" {
+		return []FactorCorrelationResult{}, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 120
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, feature_a, feature_b, COALESCE(correlation, 0), COALESCE(abs_correlation, 0),
+		       COALESCE(family_a, ''), COALESCE(family_b, ''), COALESCE(keep_feature, ''),
+		       COALESCE(drop_feature, ''), COALESCE(reason, '')
+		FROM factor_correlation_results
+		WHERE run_id = ?
+		ORDER BY abs_correlation DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []FactorCorrelationResult{}, nil
+	}
+	defer rows.Close()
+	out := []FactorCorrelationResult{}
+	for rows.Next() {
+		var item FactorCorrelationResult
+		if err := rows.Scan(&item.RunID, &item.FeatureA, &item.FeatureB, &item.Correlation, &item.AbsCorrelation, &item.FamilyA, &item.FamilyB, &item.KeepFeature, &item.DropFeature, &item.Reason); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListFactorStressResults(runID string, limit int) ([]FactorStressResult, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorStressResult{}, err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		latest, err := app.latestFactorRunID()
+		if err != nil {
+			return []FactorStressResult{}, err
+		}
+		runID = latest
+	}
+	if runID == "" {
+		return []FactorStressResult{}, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 160
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, bucket_type, bucket_key, bucket_label, start_date, end_date,
+		       COALESCE(n_days, 0), COALESCE(total_return, 0), COALESCE(annual_return, 0),
+		       COALESCE(max_drawdown, 0), COALESCE(sharpe, 0), COALESCE(win_rate, 0),
+		       COALESCE(avg_daily_return, 0), COALESCE(volatility, 0), COALESCE(summary_json, '')
+		FROM factor_model_stress_results
+		WHERE run_id = ?
+		ORDER BY
+		  CASE bucket_type WHEN 'full' THEN 0 WHEN 'event' THEN 1 WHEN 'year' THEN 2 WHEN 'market_state' THEN 3 ELSE 9 END,
+		  bucket_key
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []FactorStressResult{}, nil
+	}
+	defer rows.Close()
+	out := []FactorStressResult{}
+	for rows.Next() {
+		var item FactorStressResult
+		if err := rows.Scan(
+			&item.RunID, &item.BucketType, &item.BucketKey, &item.BucketLabel, &item.StartDate, &item.EndDate,
+			&item.NDays, &item.TotalReturn, &item.AnnualReturn, &item.MaxDrawdown, &item.Sharpe, &item.WinRate,
+			&item.AvgDailyReturn, &item.Volatility, &item.SummaryJSON,
+		); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListFactorLatestPredictions(runID string, limit int) ([]FactorLatestPrediction, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorLatestPrediction{}, err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		latest, err := app.latestFactorRunID()
+		if err != nil {
+			return []FactorLatestPrediction{}, err
+		}
+		runID = latest
+	}
+	if runID == "" {
+		return []FactorLatestPrediction{}, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 120
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, trade_date, ts_code, COALESCE(pred_score, 0), COALESCE(pred_rank, 0),
+		       COALESCE(is_top20, 0), COALESCE(model_path, '')
+		FROM factor_latest_predictions
+		WHERE run_id = ?
+		ORDER BY trade_date DESC, pred_score DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []FactorLatestPrediction{}, nil
+	}
+	defer rows.Close()
+	out := []FactorLatestPrediction{}
+	for rows.Next() {
+		var item FactorLatestPrediction
+		var isTop20 int
+		if err := rows.Scan(&item.RunID, &item.TradeDate, &item.TsCode, &item.PredScore, &item.PredRank, &isTop20, &item.ModelPath); err != nil {
+			return out, err
+		}
+		item.IsTop20 = isTop20 != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) latestFactorRunID() (string, error) {
+	row := app.database.Conn().QueryRow(`SELECT run_id FROM factor_research_runs ORDER BY updated_at DESC LIMIT 1`)
+	var runID string
+	if err := row.Scan(&runID); err != nil {
+		return "", nil
+	}
+	return runID, nil
 }
 
 func (app *App) GetLimitSignalEvaluationRunStatus() (position.RunStatus, error) {
@@ -1144,13 +1615,15 @@ func (app *App) RunLimitSignalEvaluation() error {
 	}
 	now := time.Now().Format(time.RFC3339)
 	_, _ = app.database.Conn().Exec(
-		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
-		 VALUES('limit_signal_evaluation','running',0,100,'prepare','启动涨停回看评估','',?,?,'')
-		 ON CONFLICT(task) DO UPDATE SET state='running', idx=0, total=100, stage='prepare',
-		 name='启动涨停回看评估', message='', started_at=excluded.started_at, updated_at=excluded.updated_at, finished_at=''`,
-		now,
-		now,
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+		),
+		"limit_signal_evaluation", "running", 0, 100, "prepare", "启动涨停回看评估", "", now, now, "",
 	)
+	app.ensureRunStatusTaskType("limit_signal_evaluation")
 	args := []string{
 		"scripts/evaluate_limit_signals.py",
 		"--data-path", dataPath,
@@ -1160,16 +1633,12 @@ func (app *App) RunLimitSignalEvaluation() error {
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(),
-		"DATA_ROOT="+dataPath,
-		"DESKTOP_DB_PATH="+dbPath,
-		"DESKTOP_CONFIG_DB_PATH="+dbPath,
-	)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		finishedAt := time.Now().Format(time.RFC3339)
 		_, _ = app.database.Conn().Exec(
-			`UPDATE py_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='limit_signal_evaluation'`,
+			`UPDATE task_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='limit_signal_evaluation'`,
 			err.Error(),
 			finishedAt,
 			finishedAt,
@@ -1192,15 +1661,15 @@ func (app *App) waitLimitSignalEvaluation(cmd *exec.Cmd, logFile *os.File, logPa
 	}
 	now := time.Now().Format(time.RFC3339)
 	_, _ = app.database.Conn().Exec(
-		`INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
-		 VALUES('limit_signal_evaluation','error',0,0,'','',?,?,?,?)
-		 ON CONFLICT(task) DO UPDATE SET state='error', message=excluded.message,
-		 updated_at=excluded.updated_at, finished_at=excluded.finished_at`,
-		"评估进程已退出: "+err.Error()+"，日志: "+logPath,
-		now,
-		now,
-		now,
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"state", "message", "updated_at", "finished_at"},
+		),
+		"limit_signal_evaluation", "error", 0, 0, "", "", "评估进程已退出: "+err.Error()+"，日志: "+logPath, now, now, now,
 	)
+	app.ensureRunStatusTaskType("limit_signal_evaluation")
 }
 
 func (app *App) GetPositionSummary() (position.Summary, error) {
@@ -1242,16 +1711,14 @@ func (app *App) GetPositionRecommendation() (position.Recommendation, error) {
 	if err := app.ensurePositionService(); err != nil {
 		return position.Recommendation{}, err
 	}
-	recommendation, err := app.positionService.GetRecommendation(app.settings.DataPath)
-	if err == nil {
-		return recommendation, nil
-	}
-	go app.runPositionSignalTask(position.GenerateSignalRequest{InitialCash: app.settings.DefaultInitialCash, RebalanceFreq: app.settings.DefaultRebalanceFreq})
-	return position.Recommendation{}, err
+	return app.positionService.GetRecommendation(app.settings.DataPath)
 }
 
 func (app *App) GeneratePositionSignal(req position.GenerateSignalRequest) (position.GenerateSignalResponse, error) {
 	if err := app.ensurePositionService(); err != nil {
+		return position.GenerateSignalResponse{}, err
+	}
+	if _, err := app.prepareSignalPortfolioCandidate(&req); err != nil {
 		return position.GenerateSignalResponse{}, err
 	}
 	if req.InitialCash <= 0 {
@@ -1260,12 +1727,47 @@ func (app *App) GeneratePositionSignal(req position.GenerateSignalRequest) (posi
 	if req.RebalanceFreq <= 0 {
 		req.RebalanceFreq = app.settings.DefaultRebalanceFreq
 	}
+	if date := app.signalTargetDate(req); date != "" && app.recommendationExists(date) {
+		return position.GenerateSignalResponse{Date: date, Output: "当日信号已存在，本次复用缓存", Success: true}, nil
+	}
 	go app.runPositionSignalTask(req)
 	return position.GenerateSignalResponse{Success: true}, nil
 }
 
 func (app *App) runPositionSignalTask(req position.GenerateSignalRequest) {
+	app.signalMu.Lock()
+	defer app.signalMu.Unlock()
 	if app.database == nil || app.positionService == nil {
+		return
+	}
+	if _, err := app.prepareSignalPortfolioCandidate(&req); err != nil {
+		app.upsertSignalRunStatus(position.RunStatus{
+			Task:       "daily_signal",
+			TaskType:   "signal",
+			State:      "error",
+			Idx:        0,
+			Total:      100,
+			Stage:      "blocked",
+			Name:       "缺少生产组合",
+			Message:    err.Error(),
+			UpdatedAt:  time.Now().Format(time.RFC3339),
+			FinishedAt: time.Now().Format(time.RFC3339),
+		})
+		return
+	}
+	if date := app.signalTargetDate(req); date != "" && app.recommendationExists(date) {
+		app.upsertSignalRunStatus(position.RunStatus{
+			Task:       "daily_signal",
+			TaskType:   "signal",
+			State:      "done",
+			Idx:        100,
+			Total:      100,
+			Stage:      "cached",
+			Name:       "当日信号已存在",
+			Message:    "当日信号已存在，本次复用缓存",
+			UpdatedAt:  time.Now().Format(time.RFC3339),
+			FinishedAt: time.Now().Format(time.RFC3339),
+		})
 		return
 	}
 	repo := task.NewRepository(app.database.Conn())
@@ -1284,7 +1786,29 @@ func (app *App) runPositionSignalTask(req position.GenerateSignalRequest) {
 	if err := repo.Create(t); err != nil {
 		return
 	}
+	app.upsertSignalRunStatus(position.RunStatus{
+		Task:      "daily_signal",
+		TaskType:  "signal",
+		State:     "running",
+		Idx:       0,
+		Total:     100,
+		Stage:     "running",
+		Name:      "当日信号生成",
+		StartedAt: now.Format(time.RFC3339),
+		UpdatedAt: now.Format(time.RFC3339),
+	})
 	_, err := app.positionService.GenerateSignalWithProgress(app.settings.DataPath, req, func(ev position.ProgressEvent) {
+		if ev.WorkerPID > 0 && t.WorkerPID != ev.WorkerPID {
+			t.WorkerPID = ev.WorkerPID
+			_ = repo.UpdateRuntime(task.Task{
+				ID:        t.ID,
+				Status:    task.StatusRunning,
+				Progress:  t.Progress,
+				WorkerPID: ev.WorkerPID,
+				StartedAt: t.StartedAt,
+				UpdatedAt: time.Now(),
+			})
+		}
 		progress := 0.0
 		if ev.Total > 0 {
 			progress = float64(ev.Idx) / float64(ev.Total)
@@ -1292,11 +1816,32 @@ func (app *App) runPositionSignalTask(req position.GenerateSignalRequest) {
 				progress = float64(ev.Idx+1) / float64(ev.Total)
 			}
 		}
+		t.Progress = progress
 		_ = repo.UpdateRuntime(task.Task{
 			ID:        t.ID,
 			Status:    task.StatusRunning,
 			Progress:  progress,
+			WorkerPID: t.WorkerPID,
+			StartedAt: t.StartedAt,
 			UpdatedAt: time.Now(),
+		})
+		idx := ev.Idx
+		total := ev.Total
+		if total <= 0 {
+			idx = int(progress * 100)
+			total = 100
+		}
+		app.upsertSignalRunStatus(position.RunStatus{
+			Task:      "daily_signal",
+			TaskType:  "signal",
+			State:     "running",
+			Idx:       idx,
+			Total:     total,
+			Stage:     firstNonEmpty(ev.Stage, "running"),
+			Name:      firstNonEmpty(ev.Name, "当日信号生成"),
+			WorkerPID: t.WorkerPID,
+			StartedAt: t.StartedAt.Format(time.RFC3339),
+			UpdatedAt: time.Now().Format(time.RFC3339),
 		})
 	})
 	if err == nil {
@@ -1306,14 +1851,38 @@ func (app *App) runPositionSignalTask(req position.GenerateSignalRequest) {
 	}
 	finishedAt := time.Now()
 	if err != nil {
+		if current, getErr := repo.Get(t.ID); getErr == nil && current.Status == task.StatusCancelled {
+			return
+		}
+		status := task.StatusFailed
+		state := "error"
+		message := err.Error()
+		if isSignalCancelError(err) {
+			status = task.StatusCancelled
+			state = "cancelled"
+			message = "已取消当日信号生成"
+		}
 		_ = repo.UpdateRuntime(task.Task{
 			ID:           t.ID,
-			Status:       task.StatusFailed,
+			Status:       status,
 			Progress:     1,
-			ErrorMessage: err.Error(),
+			ErrorMessage: message,
 			StartedAt:    t.StartedAt,
 			UpdatedAt:    finishedAt,
 			FinishedAt:   finishedAt,
+		})
+		app.upsertSignalRunStatus(position.RunStatus{
+			Task:       "daily_signal",
+			TaskType:   "signal",
+			State:      state,
+			Idx:        100,
+			Total:      100,
+			Stage:      state,
+			Name:       "当日信号生成",
+			Message:    message,
+			StartedAt:  t.StartedAt.Format(time.RFC3339),
+			UpdatedAt:  finishedAt.Format(time.RFC3339),
+			FinishedAt: finishedAt.Format(time.RFC3339),
 		})
 		return
 	}
@@ -1325,6 +1894,18 @@ func (app *App) runPositionSignalTask(req position.GenerateSignalRequest) {
 		UpdatedAt:  finishedAt,
 		FinishedAt: finishedAt,
 	})
+	app.upsertSignalRunStatus(position.RunStatus{
+		Task:       "daily_signal",
+		TaskType:   "signal",
+		State:      "done",
+		Idx:        100,
+		Total:      100,
+		Stage:      "done",
+		Name:       "当日信号生成",
+		StartedAt:  t.StartedAt.Format(time.RFC3339),
+		UpdatedAt:  finishedAt.Format(time.RFC3339),
+		FinishedAt: finishedAt.Format(time.RFC3339),
+	})
 }
 
 func (app *App) GetSignalRunStatus() (position.RunStatus, error) {
@@ -1332,8 +1913,15 @@ func (app *App) GetSignalRunStatus() (position.RunStatus, error) {
 		return position.RunStatus{}, err
 	}
 	status, err := app.positionService.GetRunStatus("daily_signal")
-	if err != nil || status.State == "running" {
+	if err != nil {
 		return status, err
+	}
+	if status.State == "running" {
+		reconciled, recErr := app.reconcileSignalRunStatus(status)
+		if recErr == nil {
+			return reconciled, nil
+		}
+		return status, nil
 	}
 	if app.database != nil {
 		latestTask, taskErr := latestRunningTask(app.database.Conn(), task.TypeDailySignal)
@@ -1344,18 +1932,238 @@ func (app *App) GetSignalRunStatus() (position.RunStatus, error) {
 	return status, err
 }
 
+func (app *App) CancelPositionSignal() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	if app.database == nil {
+		return position.RunStatus{Task: "daily_signal", TaskType: "signal", State: "idle"}, nil
+	}
+	now := time.Now()
+	rows, err := app.database.Conn().Query(
+		`SELECT id, COALESCE(worker_pid,0) FROM task_jobs
+		 WHERE task_type = ? AND status = 'running'
+		 ORDER BY created_at DESC`,
+		string(task.TypeDailySignal),
+	)
+	if err != nil {
+		return position.RunStatus{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var pid int
+		if err := rows.Scan(&id, &pid); err != nil {
+			return position.RunStatus{}, err
+		}
+		if pid > 0 && processExists(pid) {
+			_ = worker.NewManager().Cancel(pid)
+		}
+		_, _ = app.database.Conn().Exec(
+			`UPDATE task_jobs
+			 SET status = ?, progress = 1, worker_pid = NULL, error_message = ?, finished_at = ?, updated_at = ?
+			 WHERE id = ?`,
+			string(task.StatusCancelled), "用户取消当日信号生成", now, now, id,
+		)
+	}
+	if err := rows.Err(); err != nil {
+		return position.RunStatus{}, err
+	}
+	status := position.RunStatus{
+		Task:       "daily_signal",
+		TaskType:   "signal",
+		State:      "cancelled",
+		Idx:        100,
+		Total:      100,
+		Stage:      "cancelled",
+		Name:       "当日信号生成",
+		Message:    "已取消当日信号生成",
+		UpdatedAt:  now.Format(time.RFC3339),
+		FinishedAt: now.Format(time.RFC3339),
+	}
+	app.upsertSignalRunStatus(status)
+	return status, nil
+}
+
+func (app *App) requireActivePortfolioCandidate() error {
+	if app.database == nil {
+		return errors.New("数据库未初始化，不能生成实盘信号")
+	}
+	active, err := app.activePortfolioCandidate()
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("缺少已选择的时光机组合方案：请先在评估中心完成组合优化/时光机评估，并在生成信号页选择一个组合后再生成信号")
+		}
+		return err
+	}
+	if active == nil || strings.TrimSpace(active.RunID) == "" || strings.TrimSpace(active.CandidateID) == "" {
+		return errors.New("已选择组合方案缺少 run_id/candidate_id，请重新选择评估候选方案")
+	}
+	var status string
+	var score float64
+	var count int
+	err = app.database.Conn().QueryRow(
+		`SELECT status, score, COUNT(*) OVER()
+		 FROM eval_portfolio_candidates WHERE run_id = ? AND candidate_id = ?`,
+		active.RunID,
+		active.CandidateID,
+	).Scan(&status, &score, &count)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("已选择组合方案在评估结果表中不存在，请重新完成时光机评估并选择候选组合")
+		}
+		return err
+	}
+	if count <= 0 || status != "ok" {
+		return fmt.Errorf("已选择组合方案不可用于实盘信号：status=%s", status)
+	}
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		return errors.New("已选择组合方案评分无效，请重新完成时光机评估")
+	}
+	return nil
+}
+
+func (app *App) prepareSignalPortfolioCandidate(req *position.GenerateSignalRequest) (*SignalPortfolioCandidateDTO, error) {
+	if app.database == nil {
+		return nil, errors.New("数据库未初始化，不能生成实盘信号")
+	}
+	runID := strings.TrimSpace(req.PortfolioRunID)
+	candidateID := strings.TrimSpace(req.PortfolioCandidateID)
+	if runID == "" || candidateID == "" {
+		return nil, errors.New("请先在生成信号页选择一个时光机组合方案")
+	}
+	item, err := app.signalPortfolioCandidate(runID, candidateID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("选择的组合方案在评估结果表中不存在，请重新完成时光机评估并选择候选组合")
+		}
+		return nil, err
+	}
+	if item.Status != "ok" {
+		return nil, fmt.Errorf("选择的组合方案不可用于实盘信号：status=%s", item.Status)
+	}
+	if math.IsNaN(item.Score) || math.IsInf(item.Score, 0) {
+		return nil, errors.New("选择的组合方案评分无效，请重新完成时光机评估")
+	}
+	overridesJSON, err := app.signalStrategyOverridesJSON(item.Weights)
+	if err != nil {
+		return nil, err
+	}
+	req.StrategyOverridesJSON = overridesJSON
+	if req.RebalanceFreq <= 0 && item.RebalanceFreq > 0 {
+		req.RebalanceFreq = item.RebalanceFreq
+	}
+	return item, nil
+}
+
+func (app *App) signalPortfolioCandidate(runID string, candidateID string) (*SignalPortfolioCandidateDTO, error) {
+	row := app.database.Conn().QueryRow(`SELECT run_id, candidate_id, rank, name, objective, status, score,
+		strategies, weights_json, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings,
+		rebalance_freq, COALESCE(validation_status,''), COALESCE(reason,''), COALESCE(updated_at,'')
+		FROM eval_portfolio_candidates
+		WHERE run_id = ? AND candidate_id = ?`, runID, candidateID)
+	var item SignalPortfolioCandidateDTO
+	var weightsJSON string
+	var annualReturn, maxDrawdown, sharpe, calmar, avgTurnover, avgHoldings sql.NullFloat64
+	if err := row.Scan(
+		&item.RunID, &item.CandidateID, &item.Rank, &item.Name, &item.Objective, &item.Status, &item.Score,
+		&item.Strategies, &weightsJSON, &annualReturn, &maxDrawdown, &sharpe, &calmar, &avgTurnover, &avgHoldings,
+		&item.RebalanceFreq, &item.ValidationStatus, &item.Reason, &item.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(weightsJSON), &item.Weights)
+	item.AnnualReturn = nullableFloatPtr(annualReturn)
+	item.MaxDrawdown = nullableFloatPtr(maxDrawdown)
+	item.Sharpe = nullableFloatPtr(sharpe)
+	item.Calmar = nullableFloatPtr(calmar)
+	item.AvgTurnover = nullableFloatPtr(avgTurnover)
+	item.AvgHoldings = nullableFloatPtr(avgHoldings)
+	return &item, nil
+}
+
+func (app *App) signalStrategyOverridesJSON(weights map[string]float64) (string, error) {
+	normalized := normalizeWeights(weights)
+	if len(normalized) == 0 {
+		return "", errors.New("选择的组合方案没有有效策略权重")
+	}
+	if app.database != nil {
+		app.configService.WithDatabase(app.database)
+	}
+	settings, err := app.configService.Load(app.settings)
+	if err != nil {
+		return "", err
+	}
+	overrides := map[string]map[string]any{}
+	for name := range settings.Strategies {
+		overrides[name] = map[string]any{"enabled": false, "weight": 0}
+	}
+	for name, weight := range normalized {
+		overrides[name] = map[string]any{"enabled": true, "weight": weight}
+	}
+	payload, err := json.Marshal(overrides)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func (app *App) cfgAppSettingsKeyColumn() string {
+	if app.database != nil && app.database.IsMySQL() {
+		return "`key`"
+	}
+	return "key"
+}
+
+func (app *App) signalTargetDate(req position.GenerateSignalRequest) string {
+	date := strings.TrimSpace(req.Date)
+	if date != "" {
+		return strings.ReplaceAll(date, "-", "")
+	}
+	if app.database == nil {
+		return ""
+	}
+	var latest string
+	err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date), '') FROM data_daily_bars`).Scan(&latest)
+	if err != nil || strings.TrimSpace(latest) == "" {
+		return ""
+	}
+	return strings.TrimSpace(latest)
+}
+
+func (app *App) recommendationExists(date string) bool {
+	if app.database == nil || strings.TrimSpace(date) == "" {
+		return false
+	}
+	var count int
+	err := app.database.Conn().QueryRow(`SELECT COUNT(*) FROM rec_daily_recommendations WHERE date = ?`, strings.TrimSpace(date)).Scan(&count)
+	return err == nil && count > 0
+}
+
 func latestRunningTask(db *sql.DB, taskType task.Type) (position.RunStatus, error) {
-	row := db.QueryRow(`SELECT name, progress, created_at, COALESCE(started_at,''), updated_at
-		FROM evaluation_tasks
+	row := db.QueryRow(`SELECT id, name, progress, created_at, COALESCE(started_at,''), updated_at, COALESCE(worker_pid,0)
+		FROM task_jobs
 		WHERE task_type = ? AND status = 'running'
 		ORDER BY created_at DESC LIMIT 1`, string(taskType))
+	var id string
 	var name string
 	var progress float64
 	var createdAt string
 	var startedAt string
 	var updatedAt string
-	if err := row.Scan(&name, &progress, &createdAt, &startedAt, &updatedAt); err != nil {
+	var workerPID int
+	if err := row.Scan(&id, &name, &progress, &createdAt, &startedAt, &updatedAt, &workerPID); err != nil {
 		return position.RunStatus{}, err
+	}
+	if workerPID <= 0 || !processExists(workerPID) {
+		now := time.Now()
+		_, _ = db.Exec(
+			`UPDATE task_jobs
+			 SET status = ?, worker_pid = NULL, error_message = ?, finished_at = ?, updated_at = ?
+			 WHERE id = ? AND status = 'running'`,
+			string(task.StatusInterrupted), "worker process is no longer running", now, now, id,
+		)
+		return position.RunStatus{}, sql.ErrNoRows
 	}
 	idx := int(progress * 100)
 	return position.RunStatus{
@@ -1365,9 +2173,80 @@ func latestRunningTask(db *sql.DB, taskType task.Type) (position.RunStatus, erro
 		Total:     100,
 		Stage:     "running",
 		Name:      name,
+		WorkerPID: workerPID,
 		StartedAt: firstNonEmpty(startedAt, createdAt),
 		UpdatedAt: updatedAt,
 	}, nil
+}
+
+func (app *App) reconcileSignalRunStatus(status position.RunStatus) (position.RunStatus, error) {
+	if status.WorkerPID > 0 && processExists(status.WorkerPID) {
+		return status, nil
+	}
+	if status.WorkerPID <= 0 {
+		if latest, err := latestRunningTask(app.database.Conn(), task.TypeDailySignal); err == nil {
+			return latest, nil
+		}
+	}
+	now := time.Now()
+	_, _ = app.database.Conn().Exec(
+		`UPDATE task_jobs
+		 SET status = ?, worker_pid = NULL, error_message = ?, finished_at = ?, updated_at = ?
+		 WHERE task_type = ? AND status = 'running'`,
+		string(task.StatusInterrupted), "worker process is no longer running", now, now, string(task.TypeDailySignal),
+	)
+	status.State = "error"
+	status.Stage = "interrupted"
+	status.Message = "当日信号生成进程已不存在，已自动清理运行状态"
+	status.WorkerPID = 0
+	status.UpdatedAt = now.Format(time.RFC3339)
+	status.FinishedAt = now.Format(time.RFC3339)
+	app.upsertSignalRunStatus(status)
+	return status, nil
+}
+
+func (app *App) upsertSignalRunStatus(status position.RunStatus) {
+	if app.database == nil {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	if status.Task == "" {
+		status.Task = "daily_signal"
+	}
+	if status.TaskType == "" {
+		status.TaskType = "signal"
+	}
+	if status.UpdatedAt == "" {
+		status.UpdatedAt = now
+	}
+	_, _ = app.database.Conn().Exec(
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "task_type", "state", "idx", "total", "stage", "name", "message", "worker_pid", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"task_type", "state", "idx", "total", "stage", "name", "message", "worker_pid", "started_at", "updated_at", "finished_at"},
+		),
+		status.Task, status.TaskType, status.State, status.Idx, status.Total, status.Stage, status.Name, status.Message,
+		nullZeroInt(status.WorkerPID), status.StartedAt, status.UpdatedAt, status.FinishedAt,
+	)
+}
+
+func nullZeroInt(value int) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
+}
+
+func isSignalCancelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "signal: terminated") ||
+		strings.Contains(message, "killed") ||
+		strings.Contains(message, "interrupt") ||
+		strings.Contains(message, "cancel")
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1466,7 +2345,7 @@ func trimFloat(value float64) string {
 
 func readStrategyEvaluationSummaryFromDB(db *sql.DB, runID string) string {
 	rows, err := db.Query(`SELECT payload_json, start_date, end_date, benchmark, baseline
-		FROM strategy_evaluation WHERE run_id = ? ORDER BY strategy`, runID)
+		FROM eval_strategy_admission WHERE run_id = ? ORDER BY strategy`, runID)
 	if err != nil {
 		return ""
 	}
@@ -1510,12 +2389,76 @@ func readStrategyEvaluationSummaryFromDB(db *sql.DB, runID string) string {
 }
 
 func readStrategyEvaluationRowSummaryFromDB(db *sql.DB, runID string, strategyName string) string {
-	row := db.QueryRow(`SELECT payload_json FROM strategy_evaluation WHERE run_id = ? AND strategy = ?`, runID, strategyName)
+	row := db.QueryRow(`SELECT payload_json FROM eval_strategy_admission WHERE run_id = ? AND strategy = ?`, runID, strategyName)
 	var payloadJSON string
 	if err := row.Scan(&payloadJSON); err != nil {
 		return ""
 	}
 	return payloadJSON
+}
+
+func readFactorResearchStageSummaryFromDB(db *sql.DB, runID string, stage string) string {
+	if db == nil || strings.TrimSpace(runID) == "" || strings.TrimSpace(stage) == "" {
+		return ""
+	}
+	row := db.QueryRow(`SELECT summary_json FROM factor_research_stage_results WHERE run_id = ? AND stage = ?`, runID, stage)
+	var summary string
+	if err := row.Scan(&summary); err != nil {
+		return ""
+	}
+	return summary
+}
+
+func readFactorResearchSummaryFromDB(db *sql.DB, runID string) string {
+	if db == nil || strings.TrimSpace(runID) == "" {
+		return ""
+	}
+	rows, err := db.Query(`SELECT stage, status, summary_json, error, updated_at FROM factor_research_stage_results WHERE run_id = ? ORDER BY sequence ASC, stage ASC`, runID)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	items := []any{}
+	completed := 0
+	failed := 0
+	running := 0
+	for rows.Next() {
+		var stage, status, summaryJSON, errorText, updatedAt string
+		if err := rows.Scan(&stage, &status, &summaryJSON, &errorText, &updatedAt); err != nil {
+			continue
+		}
+		item := map[string]any{"stage": stage, "status": status, "error": errorText, "updated_at": updatedAt}
+		if summaryJSON != "" {
+			var summary map[string]any
+			if json.Unmarshal([]byte(summaryJSON), &summary) == nil {
+				for key, value := range summary {
+					item[key] = value
+				}
+			}
+		}
+		switch status {
+		case "success":
+			completed++
+		case "failed":
+			failed++
+		case "running":
+			running++
+		}
+		items = append(items, item)
+	}
+	payload := map[string]any{
+		"run_id":          runID,
+		"rows":            items,
+		"planned_count":   len(items),
+		"completed_count": completed,
+		"failed_count":    failed,
+		"running_count":   running,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func enrichStrategyEvaluationSummary(payload map[string]any) {
@@ -1559,7 +2502,7 @@ func enrichStrategyEvaluationSummary(payload map[string]any) {
 }
 
 func readPortfolioOptimizationSummaryFromDB(db *sql.DB, runID string) string {
-	row := db.QueryRow(`SELECT summary_json FROM portfolio_optimization_runs WHERE run_id = ?`, runID)
+	row := db.QueryRow(`SELECT summary_json FROM eval_portfolio_runs WHERE run_id = ?`, runID)
 	var summaryJSON string
 	if err := row.Scan(&summaryJSON); err != nil {
 		return ""
@@ -1568,7 +2511,7 @@ func readPortfolioOptimizationSummaryFromDB(db *sql.DB, runID string) string {
 	if err := json.Unmarshal([]byte(summaryJSON), &payload); err != nil {
 		payload = map[string]any{}
 	}
-	rows, err := db.Query(`SELECT rank, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json FROM portfolio_optimization_candidates
+	rows, err := db.Query(`SELECT rank, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json FROM eval_portfolio_candidates
 		WHERE run_id = ? ORDER BY CASE WHEN rank > 0 THEN 0 ELSE 1 END, rank, score DESC`, runID)
 	if err != nil {
 		return ""
@@ -1672,17 +2615,13 @@ func (app *App) RunDataUpdate(req datafetch.UpdateRequest) error {
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(),
-		"DATA_ROOT="+dataPath,
-		"DESKTOP_DB_PATH="+dbPath,
-		"DESKTOP_CONFIG_DB_PATH="+dbPath,
-		"TUSHARE_TOKEN="+token,
-	)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath, "TUSHARE_TOKEN=" + token}, app.pythonDBEnv(dbPath)...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		app.markPythonStatusTaskError("data_update", "数据更新进程启动失败: "+err.Error()+"，日志: "+logPath)
 		return err
 	}
+	app.markDataUpdateWorkerStarted(cmd.Process.Pid)
 	go app.waitDataUpdate(cmd, logFile, logPath)
 	return nil
 }
@@ -1719,12 +2658,68 @@ func (app *App) reconcileDataUpdateStatus(status datafetch.RunStatus) (datafetch
 	if status.State != "running" {
 		return status, nil
 	}
-	updatedAt, ok := parseRunStatusTime(status.UpdatedAt)
-	if !ok || time.Since(updatedAt) <= 10*time.Minute {
+	heartbeat := status.UpdatedAt
+	if latestDatasetHeartbeat := app.latestDatasetUpdateHeartbeat(); latestDatasetHeartbeat != "" {
+		if latestAt, latestOK := parseRunStatusTime(latestDatasetHeartbeat); latestOK {
+			if statusAt, statusOK := parseRunStatusTime(heartbeat); !statusOK || latestAt.After(statusAt) {
+				heartbeat = latestDatasetHeartbeat
+			}
+		}
+	}
+	updatedAt, ok := parseRunStatusTime(heartbeat)
+	if ok && time.Since(updatedAt) <= 10*time.Minute {
+		if heartbeat != status.UpdatedAt {
+			app.touchDataUpdateStatus(heartbeat)
+			status.UpdatedAt = heartbeat
+		}
+		return status, nil
+	}
+	if status.WorkerPID > 0 && processExists(status.WorkerPID) {
 		return status, nil
 	}
 	app.markDataUpdateError("更新进程超过 10 分钟没有进度，已自动标记为异常")
 	return app.datafetchService.GetStatus()
+}
+
+func (app *App) markDataUpdateWorkerStarted(pid int) {
+	if app.database == nil || pid <= 0 {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "task_type", "state", "idx", "total", "stage", "name", "message", "worker_pid", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"task_type", "state", "worker_pid", "updated_at", "finished_at"},
+		),
+		"data_update", "data_update", "running", 0, 0, "", "", "", pid, now, now, "",
+	)
+}
+
+func (app *App) latestDatasetUpdateHeartbeat() string {
+	if app.database == nil {
+		return ""
+	}
+	var updatedAt string
+	err := app.database.Conn().QueryRow(
+		`SELECT COALESCE(MAX(updated_at), '') FROM task_jobs
+		 WHERE task_type='data_update' AND status IN ('created','queued','running')`,
+	).Scan(&updatedAt)
+	if err != nil {
+		return ""
+	}
+	return updatedAt
+}
+
+func (app *App) touchDataUpdateStatus(updatedAt string) {
+	if app.database == nil || strings.TrimSpace(updatedAt) == "" {
+		return
+	}
+	_, _ = app.database.Conn().Exec(
+		`UPDATE task_run_status SET updated_at=? WHERE task='data_update' AND state='running'`,
+		updatedAt,
+	)
 }
 
 func parseRunStatusTime(value string) (time.Time, bool) {
@@ -1755,16 +2750,16 @@ func (app *App) markDataUpdateError(message string) {
 	now := time.Now().Format(time.RFC3339)
 	db := app.database.Conn()
 	_, _ = db.Exec(
-		`UPDATE py_run_status
-		 SET state='error', message=?, updated_at=?, finished_at=?
+		`UPDATE task_run_status
+		 SET state='error', message=?, worker_pid=NULL, updated_at=?, finished_at=?
 		 WHERE task='data_update' AND state='running'`,
 		message, now, now,
 	)
 	_, _ = db.Exec(
-		`UPDATE dataset_update_status
-		 SET state='failed', message=?, error_message=?, finished_at=?, updated_at=?
-		 WHERE state IN ('running','pending')`,
-		message, message, now, now,
+		`UPDATE task_jobs
+		 SET status='failed', error_message=?, finished_at=?, updated_at=?
+		 WHERE task_type='data_update' AND status IN ('created','queued','running')`,
+		message, now, now,
 	)
 }
 
@@ -1779,21 +2774,6 @@ func (app *App) ListDatasetUpdateStatus() ([]datafetch.DatasetStatus, error) {
 	return items, err
 }
 
-// DataFetchJob 暴露给前端用来渲染数据集列表（无函数指针）。
-type DataFetchJob struct {
-	Name     string `json:"name"`
-	Category string `json:"category"`
-}
-
-func (app *App) ListDataFetchJobs() []DataFetchJob {
-	jobs := datafetch.AllJobs()
-	out := make([]DataFetchJob, 0, len(jobs))
-	for _, j := range jobs {
-		out = append(out, DataFetchJob{Name: j.Name, Category: j.Category})
-	}
-	return out
-}
-
 func (app *App) ensureDatafetchService() error {
 	if app.datafetchService != nil {
 		return nil
@@ -1801,25 +2781,14 @@ func (app *App) ensureDatafetchService() error {
 	if err := app.ensureDatabase(); err != nil {
 		return err
 	}
-	var sqlDB *sql.DB
-	if app.database != nil {
-		sqlDB = app.database.Conn()
-	}
 	svc := datafetch.New(
-		sqlDB,
+		app.database,
 		app.settings.DataPath,
 		func() string { return app.settings.TushareToken },
 	)
 	svc.SetContext(app.ctx)
 	app.datafetchService = svc
 	return nil
-}
-
-func (app *App) PreviewDataset(query market.DatasetPreviewQuery) (market.DatasetPreview, error) {
-	if err := app.ensureMarketService(); err != nil {
-		return market.DatasetPreview{}, err
-	}
-	return app.marketService.PreviewDataset(app.settings.DataPath, query)
 }
 
 func (app *App) CreateTask(req task.CreateRequest) (task.DTO, error) {
@@ -1886,7 +2855,114 @@ func (app *App) CreateTask(req task.CreateRequest) (task.DTO, error) {
 		}
 		return task.ToDTO(parent), nil
 	}
+	if req.TaskType == task.TypeFactorResearch {
+		parent, err := app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		if err := app.initializeFactorResearch(parent); err != nil {
+			return task.DTO{}, err
+		}
+		parent, err = app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		return task.ToDTO(parent), nil
+	}
 	return dto, nil
+}
+
+func (app *App) initializeFactorResearch(parent task.Task) error {
+	if app.database == nil {
+		if err := app.ensureDatabase(); err != nil {
+			return err
+		}
+	}
+	params := task.ToDTO(parent).Params
+	startDate := stringParam(params, "start_date", "")
+	endDate := stringParam(params, "end_date", "")
+	if startDate == "" || endDate == "" {
+		return errors.New("factor research requires start_date and end_date")
+	}
+	children, err := app.taskService.Repository().ListChildren(parent.ID)
+	if err != nil {
+		return err
+	}
+	if len(children) > 0 {
+		return nil
+	}
+	stages := []map[string]string{
+		{"key": "build_factor_panel", "name": "生成因子面板"},
+		{"key": "evaluate_factors", "name": "因子检验"},
+		{"key": "factor_correlation_report", "name": "因子相关性报告"},
+		{"key": "train_lgbm", "name": "训练 LightGBM"},
+		{"key": "latest_inference", "name": "最新截面推理"},
+		{"key": "stress_report", "name": "压力测试报告"},
+	}
+	now := time.Now()
+	runID := parent.ExternalRunID
+	if runID == "" {
+		runID = "fr_" + strings.ReplaceAll(parent.ID, "-", "")
+	}
+	parent.ExternalRunID = runID
+	parent.Total = len(stages)
+	parent.Progress = 0
+	parent.ResultPath = filepath.Join(app.settings.DataPath, "factor_research", runID)
+	parent.SummaryJSON = mustJSON(map[string]any{
+		"start":           startDate,
+		"end":             endDate,
+		"freq":            stringParam(params, "freq", "monthly"),
+		"label":           stringParam(params, "label", "fwd20_excess_industry"),
+		"min_train_years": int(numberParam(params, "min_train_years", 4)),
+		"min_test_year":   int(numberParam(params, "min_test_year", 0)),
+		"planned_count":   len(stages),
+		"completed_count": 0,
+		"failed_count":    0,
+		"running_count":   0,
+		"rows":            []any{},
+	})
+	parent.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(parent); err != nil {
+		return err
+	}
+	for idx, stage := range stages {
+		childParams := map[string]any{
+			"start_date":      startDate,
+			"end_date":        endDate,
+			"freq":            stringParam(params, "freq", "monthly"),
+			"label":           stringParam(params, "label", "fwd20_excess_industry"),
+			"min_train_years": int(numberParam(params, "min_train_years", 4)),
+			"min_test_year":   int(numberParam(params, "min_test_year", 0)),
+			"stage":           stage["key"],
+		}
+		paramsData, err := json.Marshal(childParams)
+		if err != nil {
+			return err
+		}
+		child := task.Task{
+			ID:            task.NewID(),
+			Name:          stage["name"],
+			TaskType:      task.TypeFactorResearch,
+			Status:        task.StatusCreated,
+			Progress:      0,
+			ParamsJSON:    string(paramsData),
+			WorkerType:    "python",
+			ExternalRunID: runID,
+			ParentID:      parent.ID,
+			GroupRunID:    runID,
+			SubtaskKey:    stage["key"],
+			SubtaskName:   stage["name"],
+			Sequence:      idx + 1,
+			Total:         len(stages),
+			MaxAttempts:   2,
+			CreatedAt:     now.Add(time.Duration(idx) * time.Millisecond),
+			UpdatedAt:     now,
+		}
+		if err := app.taskService.Repository().Create(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (app *App) initializeStrategyEvaluation(parent task.Task) error {
@@ -2139,12 +3215,18 @@ var researchStrategyUniverse = []string{
 	"multi_factor_composite",
 	"small_cap_quality",
 	"trend_pullback",
+	"turtle_breakout",
 	"dividend_quality",
 	"earnings_revision",
 	"industry_prosperity",
 	"low_crowding_reversal",
 	"event_enhanced",
 	"beijing_satellite",
+	"insider_buy",
+	"lhb_follow",
+	"trend_quality",
+	"garp_quality",
+	"moneyflow_pullback",
 }
 
 func (app *App) initializePortfolioEvaluation(parent task.Task) error {
@@ -2274,23 +3356,15 @@ func (app *App) writePortfolioRunPlan(runID string, startDate string, endDate st
 		"top_n":           topN,
 		"rows":            []any{},
 	})
-	_, err := app.database.Conn().Exec(`INSERT INTO portfolio_optimization_runs(
-		run_id, start_date, end_date, objective, benchmark, strategy_count,
-		viable_count, candidate_count, top_n, generated_at, summary_json,
-		created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, datetime('now'), datetime('now'))
-	ON CONFLICT(run_id) DO UPDATE SET
-		start_date = excluded.start_date,
-		end_date = excluded.end_date,
-		objective = excluded.objective,
-		benchmark = excluded.benchmark,
-		strategy_count = excluded.strategy_count,
-		candidate_count = excluded.candidate_count,
-		top_n = excluded.top_n,
-		generated_at = excluded.generated_at,
-		summary_json = excluded.summary_json,
-		updated_at = excluded.updated_at`,
-		runID, startDate, endDate, objective, benchmark, strategyCount, len(candidates), topN, time.Now().Format(time.RFC3339), summary)
+	now := time.Now().Format(time.RFC3339)
+	_, err := app.database.Conn().Exec(
+		app.database.UpsertSQL(
+			"eval_portfolio_runs",
+			[]string{"run_id", "start_date", "end_date", "objective", "benchmark", "strategy_count", "viable_count", "candidate_count", "top_n", "generated_at", "summary_json", "created_at", "updated_at"},
+			[]string{"run_id"},
+			[]string{"start_date", "end_date", "objective", "benchmark", "strategy_count", "candidate_count", "top_n", "generated_at", "summary_json", "updated_at"},
+		),
+		runID, startDate, endDate, objective, benchmark, strategyCount, 0, len(candidates), topN, now, summary, now, now)
 	return err
 }
 
@@ -2374,8 +3448,8 @@ func (app *App) generatePortfolioCandidatesFromNames(names []string, objective s
 	}
 	objectiveSets := map[string][]string{
 		"稳健": {"market_regime_timing", "dividend_quality", "multi_factor_composite", "small_cap_quality"},
-		"进攻": {"trend_pullback", "earnings_revision", "industry_prosperity", "low_crowding_reversal"},
-		"平衡": {"multi_factor_composite", "small_cap_quality", "trend_pullback", "dividend_quality"},
+		"进攻": {"turtle_breakout", "trend_pullback", "earnings_revision", "industry_prosperity"},
+		"平衡": {"multi_factor_composite", "small_cap_quality", "trend_pullback", "turtle_breakout", "dividend_quality"},
 	}
 	if preferred, ok := objectiveSets[objective]; ok {
 		weights := map[string]float64{}
@@ -2571,7 +3645,7 @@ func defaultGovernanceRules() map[string]any {
 		"max_turnover":                  0.45,
 		"min_stability_rate":            0.45,
 		"min_walk_forward_pass_rate":    0.50,
-		"min_walk_forward_windows":      1,
+		"min_eval_walk_forward_windows": 1,
 		"min_parameter_stable_rate":     0.50,
 		"require_positive_return":       true,
 		"allow_missing_parameter_tests": true,
@@ -2617,7 +3691,7 @@ func (app *App) resolvePortfolioStrategyNames(value any) []string {
 	selected := strategyParam(value)
 	names := make([]string, 0)
 	if selected == "all" || selected == "enabled" {
-		for _, name := range researchStrategyUniverse {
+		for _, name := range app.orderedConfiguredStrategyNames() {
 			strategy, ok := app.settings.Strategies[name]
 			if !ok {
 				continue
@@ -2635,6 +3709,31 @@ func (app *App) resolvePortfolioStrategyNames(value any) []string {
 		}
 	}
 	sort.Strings(names)
+	return names
+}
+
+func (app *App) orderedConfiguredStrategyNames() []string {
+	strategies := app.settings.Strategies
+	if len(strategies) == 0 {
+		homeDir, _ := os.UserHomeDir()
+		strategies = config.DefaultSettings(homeDir).Strategies
+	}
+	seen := map[string]bool{}
+	names := make([]string, 0, len(strategies))
+	for _, name := range researchStrategyUniverse {
+		if _, ok := strategies[name]; ok {
+			names = append(names, name)
+			seen[name] = true
+		}
+	}
+	extras := make([]string, 0)
+	for name := range strategies {
+		if !seen[name] {
+			extras = append(extras, name)
+		}
+	}
+	sort.Strings(extras)
+	names = append(names, extras...)
 	return names
 }
 
@@ -2659,10 +3758,10 @@ func (app *App) admittedPortfolioStrategyNames(names []string) ([]string, bool) 
 	}
 	rows, err := app.database.Conn().Query(`
 		SELECT strategy, admission
-		FROM strategy_evaluation
+		FROM eval_strategy_admission
 		WHERE run_id = (
 			SELECT run_id
-			FROM strategy_evaluation
+			FROM eval_strategy_admission
 			ORDER BY datetime(generated_at) DESC, datetime(updated_at) DESC
 			LIMIT 1
 		)`)
@@ -2681,7 +3780,7 @@ func (app *App) admittedPortfolioStrategyNames(names []string) ([]string, bool) 
 		}
 		seen = true
 		switch strings.TrimSpace(admission) {
-		case "可启用", "限制启用":
+		case "可启用", "限制启用", "继续观察":
 			allowed[strategyName] = true
 		}
 	}
@@ -2801,6 +3900,8 @@ func (app *App) reconcileTaskStatus(t task.Task) task.Task {
 
 	now := time.Now()
 	if t.TaskType == task.TypePortfolioOptimization && t.ParentID == "" {
+		app.reconcileEvaluationWorkerProcesses()
+		app.reconcileOrphanRunningChildren(t.ID)
 		children, err := app.taskService.Repository().ListChildren(t.ID)
 		if err == nil && len(children) > 0 {
 			status := portfolioParentStatus(children)
@@ -2813,10 +3914,15 @@ func (app *App) reconcileTaskStatus(t task.Task) task.Task {
 			}
 			_ = app.taskService.Repository().UpdateStatus(t)
 			_ = app.taskService.Repository().UpdateRuntime(t)
+			if t.Status == task.StatusRunning && !hasLiveRunningChild(children) && hasRunnableChild(children) {
+				go app.runPortfolioOptimizationChildren(t)
+			}
 			return t
 		}
 	}
 	if t.TaskType == task.TypeStrategyEvaluation && t.ParentID == "" {
+		app.reconcileEvaluationWorkerProcesses()
+		app.reconcileOrphanRunningChildren(t.ID)
 		children, err := app.taskService.Repository().ListChildren(t.ID)
 		if err == nil && len(children) > 0 {
 			t.Progress = portfolioParentProgress(children)
@@ -2831,6 +3937,9 @@ func (app *App) reconcileTaskStatus(t task.Task) task.Task {
 			}
 			_ = app.taskService.Repository().UpdateStatus(t)
 			_ = app.taskService.Repository().UpdateRuntime(t)
+			if t.Status == task.StatusRunning && !hasLiveRunningChild(children) && hasRunnableChild(children) {
+				go app.runStrategyEvaluationChildren(t)
+			}
 			return t
 		}
 	}
@@ -2970,7 +4079,7 @@ func (app *App) AnalyzePortfolioTask(id string) (task.DTO, error) {
 			"data_snapshot":         app.captureDataSnapshot("portfolio_optimization", t.ExternalRunID),
 			"analyzed_at":           now.Format(time.RFC3339),
 		})
-		_, _ = app.database.Conn().Exec(`UPDATE portfolio_optimization_runs SET summary_json = ?, validation_status = 'analyzed', validation_json = ?, updated_at = datetime('now') WHERE run_id = ?`, string(data), string(validationJSON), t.ExternalRunID)
+		_, _ = app.database.Conn().Exec(fmt.Sprintf(`UPDATE eval_portfolio_runs SET summary_json = ?, validation_status = 'analyzed', validation_json = ?, updated_at = %s WHERE run_id = ?`, app.database.CurrentTimestampSQL()), string(data), string(validationJSON), t.ExternalRunID)
 	}
 	app.saveResearchReport("portfolio_optimization", t.ExternalRunID, "optimizer_analysis", "方案评估优化分析", analysis, recommendation)
 	return task.ToDTO(t), nil
@@ -3001,13 +4110,13 @@ func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (Valid
 	}
 	version := req.Version
 	if version <= 0 {
-		row := app.database.Conn().QueryRow(`SELECT version FROM strategy_settings_versions WHERE strategy = ? ORDER BY version DESC LIMIT 1`, strategyName)
+		row := app.database.Conn().QueryRow(`SELECT version FROM strategy_config_versions WHERE strategy = ? ORDER BY version DESC LIMIT 1`, strategyName)
 		if err := row.Scan(&version); err != nil {
 			return ValidationReviewDTO{}, err
 		}
 	}
 	row := app.database.Conn().QueryRow(`SELECT run_id, annual_return, max_drawdown, sharpe, calmar, avg_turnover, monthly_win_rate, positive_3m_rate, payload_json
-		FROM strategy_evaluation
+		FROM eval_strategy_admission
 		WHERE strategy = ? AND COALESCE(strategy_version, 0) = ?
 		ORDER BY datetime(generated_at) DESC LIMIT 1`, strategyName, version)
 	review := ValidationReviewDTO{
@@ -3059,7 +4168,7 @@ func (app *App) ReviewStrategyVersion(req StrategyVersionActivateRequest) (Valid
 		"calmar_positive":        floatValue(metrics["calmar"], 0) >= numberParam(rules, "min_calmar", 0.25),
 		"turnover_acceptable":    floatValue(metrics["avg_turnover"], 0) <= numberParam(rules, "max_turnover", 0.45),
 		"stability_acceptable":   floatValue(metrics["monthly_win_rate"], 0) >= numberParam(rules, "min_stability_rate", 0.45) || floatValue(metrics["positive_3m_rate"], 0) >= numberParam(rules, "min_stability_rate", 0.45),
-		"walk_forward_ok":        floatValue(walkForward["pass_rate"], 0) >= numberParam(rules, "min_walk_forward_pass_rate", 0.50) && floatValue(walkForward["window_count"], 0) >= numberParam(rules, "min_walk_forward_windows", 1),
+		"walk_forward_ok":        floatValue(walkForward["pass_rate"], 0) >= numberParam(rules, "min_walk_forward_pass_rate", 0.50) && floatValue(walkForward["window_count"], 0) >= numberParam(rules, "min_eval_walk_forward_windows", 1),
 		"neighborhood_stable":    (boolParam(rules, "allow_missing_parameter_tests", true) && floatValue(neighborhood["checked_versions"], 0) == 0) || floatValue(neighborhood["pass_rate"], 0) >= numberParam(rules, "min_parameter_stable_rate", 0.50),
 	}
 	passed := 0
@@ -3096,13 +4205,13 @@ func (app *App) RefreshRecommendationHindsight() ([]RecommendationHindsightDTO, 
 	scriptPath := filepath.Join(quantRoot, "trading", "execution", "validation.py")
 	cmd := exec.Command(pythonPath, scriptPath, "--persist", "--db-path", dbPath, "--horizons", "1,3,5,10,20")
 	cmd.Dir = quantRoot
-	cmd.Env = append(os.Environ(), "DESKTOP_DB_PATH="+dbPath)
+	cmd.Env = append(os.Environ(), app.pythonDBEnv(dbPath)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if output, err := cmd.Output(); err != nil {
 		return nil, fmt.Errorf("刷新推荐回看失败：%v %s", err, strings.TrimSpace(stderr.String()+string(output)))
 	}
-	app.saveResearchReport("daily_recommendation", "hindsight", "recommendation_hindsight", "推荐结果回看", "已刷新推荐信号与次日表现回看。", map[string]any{"refreshed_at": time.Now().Format(time.RFC3339)})
+	app.saveResearchReport("rec_daily_recommendations", "hindsight", "rec_hindsight", "推荐结果回看", "已刷新推荐信号与次日表现回看。", map[string]any{"refreshed_at": time.Now().Format(time.RFC3339)})
 	return app.ListRecommendationHindsight()
 }
 
@@ -3137,7 +4246,7 @@ func (app *App) ListRecommendationHindsight() ([]RecommendationHindsightDTO, err
 		return nil, err
 	}
 	rows, err := app.database.Conn().Query(`SELECT id, recommendation_date, horizon_days, next_date, n_holdings, n_eval, weighted_return, equal_weight_return, hit_rate, COALESCE(payload_json, '{}'), created_at, updated_at
-		FROM recommendation_hindsight
+		FROM rec_hindsight
 		ORDER BY recommendation_date DESC, horizon_days ASC
 		LIMIT 200`)
 	if err != nil {
@@ -3290,7 +4399,7 @@ func (app *App) ListValidationEvidence(query ValidationEvidenceQuery) (Validatio
 			}
 		}
 	}
-	snapshotSQL := `SELECT id, subject_type, subject_id, COALESCE(snapshot_json, '{}'), created_at FROM evaluation_data_snapshots`
+	snapshotSQL := `SELECT id, subject_type, subject_id, COALESCE(snapshot_json, '{}'), created_at FROM eval_data_snapshots`
 	snapshotWhere := []string{}
 	args = []any{}
 	if subjectType != "" {
@@ -3322,7 +4431,7 @@ func (app *App) ListValidationEvidence(query ValidationEvidenceQuery) (Validatio
 }
 
 func (app *App) refreshRiskExposureSnapshots() error {
-	row := app.database.Conn().QueryRow(`SELECT date, payload_json FROM daily_recommendation ORDER BY date DESC LIMIT 1`)
+	row := app.database.Conn().QueryRow(`SELECT date, payload_json FROM rec_daily_recommendations ORDER BY date DESC LIMIT 1`)
 	var date string
 	var payloadJSON string
 	if err := row.Scan(&date, &payloadJSON); err != nil {
@@ -3387,13 +4496,13 @@ func (app *App) refreshRiskExposureSnapshots() error {
 	auditJSON, _ := json.Marshal(auditPayload)
 	_, err := app.database.Conn().Exec(`INSERT INTO risk_exposure_snapshots(
 		id, subject_type, subject_id, as_of_date, n_holdings, total_weight, max_single_weight, top5_weight, industry_json, strategy_json, payload_json, created_at
-	) VALUES (?, 'daily_recommendation', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, 'rec_daily_recommendations', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"res_"+strings.ReplaceAll(task.NewID(), "-", ""), date, date, len(weights), totalWeight, maxSingle, top5, string(industryJSON), string(strategyJSON), string(auditJSON), time.Now().Format(time.RFC3339))
 	return err
 }
 
 func (app *App) refreshPaperTradingLog() error {
-	rows, err := app.database.Conn().Query(`SELECT date, payload_json FROM daily_recommendation ORDER BY date DESC LIMIT 120`)
+	rows, err := app.database.Conn().Query(`SELECT date, payload_json FROM rec_daily_recommendations ORDER BY date DESC LIMIT 120`)
 	if err != nil {
 		return err
 	}
@@ -3421,30 +4530,28 @@ func (app *App) refreshPaperTradingLog() error {
 			status := "signal_recorded"
 			reason := "已记录信号，等待模拟盘成交确认"
 			var actual sql.NullFloat64
-			_ = app.database.Conn().QueryRow(`SELECT weight FROM pool_holdings WHERE ts_code = ?`, code).Scan(&actual)
+			_ = app.database.Conn().QueryRow(`SELECT weight FROM portfolio_pool_holdings WHERE ts_code = ?`, code).Scan(&actual)
 			if actual.Valid {
 				status = "tracked"
 				reason = "已匹配当前持仓权重"
 			}
 			itemJSON, _ := json.Marshal(item)
-			_, _ = app.database.Conn().Exec(`INSERT INTO paper_trading_log(
-				id, signal_date, ts_code, name, action, target_weight, actual_weight, status, reason, payload_json, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(signal_date, ts_code, action) DO UPDATE SET
-				target_weight = excluded.target_weight,
-				actual_weight = excluded.actual_weight,
-				status = excluded.status,
-				reason = excluded.reason,
-				payload_json = excluded.payload_json,
-				updated_at = excluded.updated_at`,
-				"pt_"+strings.ReplaceAll(task.NewID(), "-", ""), date, code, name, action, targetWeight, nullableSQLValue(actual), status, reason, string(itemJSON), time.Now().Format(time.RFC3339), time.Now().Format(time.RFC3339))
+			now := time.Now().Format(time.RFC3339)
+			_, _ = app.database.Conn().Exec(
+				app.database.UpsertSQL(
+					"trade_paper_log",
+					[]string{"id", "signal_date", "ts_code", "name", "action", "target_weight", "actual_weight", "status", "reason", "payload_json", "created_at", "updated_at"},
+					[]string{"signal_date", "ts_code", "action"},
+					[]string{"target_weight", "actual_weight", "status", "reason", "payload_json", "updated_at"},
+				),
+				"pt_"+strings.ReplaceAll(task.NewID(), "-", ""), date, code, name, action, targetWeight, nullableSQLValue(actual), status, reason, string(itemJSON), now, now)
 		}
 	}
 	return rows.Err()
 }
 
 func (app *App) refreshPromotionDecisions() error {
-	rows, err := app.database.Conn().Query(`SELECT strategy, version, COALESCE(promotion_status, 'research'), COALESCE(validation_json, '{}') FROM strategy_settings_versions ORDER BY strategy, version DESC`)
+	rows, err := app.database.Conn().Query(`SELECT strategy, version, COALESCE(promotion_status, 'research'), COALESCE(validation_json, '{}') FROM strategy_config_versions ORDER BY strategy, version DESC`)
 	if err != nil {
 		return err
 	}
@@ -3475,16 +4582,13 @@ func (app *App) refreshPromotionDecisions() error {
 			reason = "可信度不足，不建议启用"
 		}
 		payloadJSON, _ := json.Marshal(map[string]any{"validation": validation, "governance_rules": rules})
-		_, _ = app.database.Conn().Exec(`INSERT INTO promotion_decisions(
-			id, strategy, strategy_version, current_status, recommended_status, score, reason, payload_json, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(strategy, strategy_version) DO UPDATE SET
-			current_status = excluded.current_status,
-			recommended_status = excluded.recommended_status,
-			score = excluded.score,
-			reason = excluded.reason,
-			payload_json = excluded.payload_json,
-			updated_at = excluded.updated_at`,
+		_, _ = app.database.Conn().Exec(
+			app.database.UpsertSQL(
+				"strategy_promotion_decisions",
+				[]string{"id", "strategy", "strategy_version", "current_status", "recommended_status", "score", "reason", "payload_json", "created_at", "updated_at"},
+				[]string{"strategy", "strategy_version"},
+				[]string{"current_status", "recommended_status", "score", "reason", "payload_json", "updated_at"},
+			),
 			"pd_"+strings.ReplaceAll(task.NewID(), "-", ""), strategy, version, status, recommended, score, reason, string(payloadJSON), now, now)
 	}
 	return rows.Err()
@@ -3492,7 +4596,7 @@ func (app *App) refreshPromotionDecisions() error {
 
 func (app *App) refreshWalkForwardAndParameterExperiments() error {
 	rows, err := app.database.Conn().Query(`SELECT run_id, strategy, COALESCE(strategy_version, 0), start_date, end_date, annual_return, max_drawdown, sharpe, calmar, avg_turnover, COALESCE(payload_json, '{}')
-		FROM strategy_evaluation ORDER BY strategy, start_date`)
+		FROM eval_strategy_admission ORDER BY strategy, start_date`)
 	if err != nil {
 		return err
 	}
@@ -3514,17 +4618,16 @@ func (app *App) refreshWalkForwardAndParameterExperiments() error {
 			status = "fail"
 		}
 		metricsJSON, _ := json.Marshal(map[string]any{"run_id": runID, "annual_return": nullableFloatPtr(annual), "max_drawdown": nullableFloatPtr(drawdown), "sharpe": nullableFloatPtr(sharpe), "calmar": nullableFloatPtr(calmar), "avg_turnover": nullableFloatPtr(turnover), "payload": jsonRawMap(payloadJSON)})
-		_, _ = app.database.Conn().Exec(`INSERT INTO walk_forward_windows(
-			id, subject_type, subject_id, window_name, start_date, end_date, status, score, metrics_json, created_at, updated_at
-		) VALUES (?, 'strategy_version', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(subject_type, subject_id, window_name) DO UPDATE SET
-			status = excluded.status,
-			score = excluded.score,
-			metrics_json = excluded.metrics_json,
-			updated_at = excluded.updated_at`,
-			"wfw_"+strings.ReplaceAll(task.NewID(), "-", ""), subjectID, runID, startDate, endDate, status, score, string(metricsJSON), now, now)
+		_, _ = app.database.Conn().Exec(
+			app.database.UpsertSQL(
+				"eval_walk_forward_windows",
+				[]string{"id", "subject_type", "subject_id", "window_name", "start_date", "end_date", "status", "score", "metrics_json", "created_at", "updated_at"},
+				[]string{"subject_type", "subject_id", "window_name"},
+				[]string{"status", "score", "metrics_json", "updated_at"},
+			),
+			"wfw_"+strings.ReplaceAll(task.NewID(), "-", ""), "strategy_version", subjectID, runID, startDate, endDate, status, score, string(metricsJSON), now, now)
 	}
-	versionRows, err := app.database.Conn().Query(`SELECT strategy, version, config_json, COALESCE(validation_json, '{}') FROM strategy_settings_versions ORDER BY strategy, version DESC`)
+	versionRows, err := app.database.Conn().Query(`SELECT strategy, version, config_json, COALESCE(validation_json, '{}') FROM strategy_config_versions ORDER BY strategy, version DESC`)
 	if err != nil {
 		return err
 	}
@@ -3544,16 +4647,14 @@ func (app *App) refreshWalkForwardAndParameterExperiments() error {
 		} else if score > 0 && score < 0.55 {
 			status = "unstable"
 		}
-		_, _ = app.database.Conn().Exec(`INSERT INTO parameter_experiments(
-			id, strategy, strategy_version, param_set, status, score, params_json, metrics_json, created_at, updated_at
-		) VALUES (?, ?, ?, 'version_config', ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(strategy, strategy_version, param_set) DO UPDATE SET
-			status = excluded.status,
-			score = excluded.score,
-			params_json = excluded.params_json,
-			metrics_json = excluded.metrics_json,
-			updated_at = excluded.updated_at`,
-			"pe_"+strings.ReplaceAll(task.NewID(), "-", ""), strategy, version, status, score, configJSON, validationJSON, now, now)
+		_, _ = app.database.Conn().Exec(
+			app.database.UpsertSQL(
+				"eval_parameter_experiments",
+				[]string{"id", "strategy", "strategy_version", "param_set", "status", "score", "params_json", "metrics_json", "created_at", "updated_at"},
+				[]string{"strategy", "strategy_version", "param_set"},
+				[]string{"status", "score", "params_json", "metrics_json", "updated_at"},
+			),
+			"pe_"+strings.ReplaceAll(task.NewID(), "-", ""), strategy, version, "version_config", status, score, configJSON, validationJSON, now, now)
 	}
 	return nil
 }
@@ -3585,7 +4686,7 @@ func (app *App) listRiskExposureSnapshots() ([]RiskExposureDTO, error) {
 
 func (app *App) listWalkForwardWindows() ([]WalkForwardWindowDTO, error) {
 	rows, err := app.database.Conn().Query(`SELECT id, subject_type, subject_id, window_name, start_date, end_date, status, score, COALESCE(metrics_json, '{}'), created_at, updated_at
-		FROM walk_forward_windows ORDER BY datetime(updated_at) DESC LIMIT 200`)
+		FROM eval_walk_forward_windows ORDER BY datetime(updated_at) DESC LIMIT 200`)
 	if err != nil {
 		return nil, err
 	}
@@ -3606,7 +4707,7 @@ func (app *App) listWalkForwardWindows() ([]WalkForwardWindowDTO, error) {
 
 func (app *App) listParameterExperiments() ([]ParameterExperimentDTO, error) {
 	rows, err := app.database.Conn().Query(`SELECT id, strategy, strategy_version, param_set, status, score, COALESCE(params_json, '{}'), COALESCE(metrics_json, '{}'), created_at, updated_at
-		FROM parameter_experiments ORDER BY strategy, strategy_version DESC LIMIT 200`)
+		FROM eval_parameter_experiments ORDER BY strategy, strategy_version DESC LIMIT 200`)
 	if err != nil {
 		return nil, err
 	}
@@ -3629,7 +4730,7 @@ func (app *App) listParameterExperiments() ([]ParameterExperimentDTO, error) {
 
 func (app *App) listPaperTradingLog() ([]PaperTradingLogDTO, error) {
 	rows, err := app.database.Conn().Query(`SELECT id, signal_date, ts_code, name, action, target_weight, actual_weight, status, reason, COALESCE(payload_json, '{}'), created_at, updated_at
-		FROM paper_trading_log ORDER BY signal_date DESC, updated_at DESC LIMIT 200`)
+		FROM trade_paper_log ORDER BY signal_date DESC, updated_at DESC LIMIT 200`)
 	if err != nil {
 		return nil, err
 	}
@@ -3652,7 +4753,7 @@ func (app *App) listPaperTradingLog() ([]PaperTradingLogDTO, error) {
 
 func (app *App) listPromotionDecisions() ([]PromotionDecisionDTO, error) {
 	rows, err := app.database.Conn().Query(`SELECT id, strategy, strategy_version, current_status, recommended_status, score, reason, COALESCE(payload_json, '{}'), created_at, updated_at
-		FROM promotion_decisions ORDER BY strategy, strategy_version DESC LIMIT 200`)
+		FROM strategy_promotion_decisions ORDER BY strategy, strategy_version DESC LIMIT 200`)
 	if err != nil {
 		return nil, err
 	}
@@ -3672,7 +4773,7 @@ func (app *App) listPromotionDecisions() ([]PromotionDecisionDTO, error) {
 }
 
 func (app *App) dataQualitySummary() (map[string]any, error) {
-	rows, err := app.database.Conn().Query(`SELECT data_type, COUNT(*), COALESCE(SUM(row_count), 0), COALESCE(MAX(updated_at), '') FROM market_data_files GROUP BY data_type ORDER BY data_type`)
+	rows, err := app.database.Conn().Query(`SELECT data_type, COUNT(*), COALESCE(SUM(row_count), 0), COALESCE(MAX(updated_at), '') FROM data_market_files GROUP BY data_type ORDER BY data_type`)
 	if err != nil {
 		return nil, err
 	}
@@ -3804,7 +4905,7 @@ func (app *App) recoverySummary() map[string]any {
 	total := 0
 	retryable := 0
 	blocked := 0
-	rows, err := app.database.Conn().Query(`SELECT status, attempt, max_attempts FROM evaluation_tasks WHERE task_type IN (?, ?, ?, ?, ?)`,
+	rows, err := app.database.Conn().Query(`SELECT status, attempt, max_attempts FROM task_jobs WHERE task_type IN (?, ?, ?, ?, ?)`,
 		string(task.TypeEvaluationTimeMachine), string(task.TypeStrategyEvaluation), string(task.TypePortfolioOptimization), string(task.TypeWalkForwardEvaluation), string(task.TypeParameterExperiment))
 	if err == nil {
 		defer rows.Close()
@@ -3999,22 +5100,19 @@ func (app *App) persistValidationReview(review ValidationReviewDTO) (ValidationR
 	review.UpdatedAt = now
 	gatesJSON, _ := json.Marshal(review.Gates)
 	metricsJSON, _ := json.Marshal(review.Metrics)
-	if _, err := app.database.Conn().Exec(`INSERT INTO strategy_validation_reviews(
-		id, subject_type, subject_id, strategy, strategy_version, source_run_id, status, score, gates_json, metrics_json, recommendation, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(id) DO UPDATE SET
-		status = excluded.status,
-		score = excluded.score,
-		gates_json = excluded.gates_json,
-		metrics_json = excluded.metrics_json,
-		recommendation = excluded.recommendation,
-		updated_at = excluded.updated_at`,
+	if _, err := app.database.Conn().Exec(
+		app.database.UpsertSQL(
+			"strategy_validation_reviews",
+			[]string{"id", "subject_type", "subject_id", "strategy", "strategy_version", "source_run_id", "status", "score", "gates_json", "metrics_json", "recommendation", "created_at", "updated_at"},
+			[]string{"id"},
+			[]string{"status", "score", "gates_json", "metrics_json", "recommendation", "updated_at"},
+		),
 		review.ID, review.SubjectType, review.SubjectID, review.Strategy, review.StrategyVersion, review.SourceRunID, review.Status, review.Score, string(gatesJSON), string(metricsJSON), review.Recommendation, review.CreatedAt, review.UpdatedAt); err != nil {
 		return ValidationReviewDTO{}, err
 	}
 	validationJSON, _ := json.Marshal(map[string]any{"review_id": review.ID, "status": review.Status, "score": review.Score, "gates": review.Gates, "metrics": review.Metrics, "recommendation": review.Recommendation, "updated_at": review.UpdatedAt})
 	if review.SubjectType == "strategy_version" && review.Strategy != "" && review.StrategyVersion > 0 {
-		_, _ = app.database.Conn().Exec(`UPDATE strategy_settings_versions SET promotion_status = ?, validation_json = ? WHERE strategy = ? AND version = ?`,
+		_, _ = app.database.Conn().Exec(`UPDATE strategy_config_versions SET promotion_status = ?, validation_json = ? WHERE strategy = ? AND version = ?`,
 			review.Status, string(validationJSON), review.Strategy, review.StrategyVersion)
 	}
 	app.saveResearchReport(review.SubjectType, review.SubjectID, "validation_review", "策略版本复核", review.Recommendation, map[string]any{
@@ -4030,7 +5128,7 @@ func (app *App) persistValidationReview(review ValidationReviewDTO) (ValidationR
 func (app *App) strategyValidationEvidence(strategyName string, version int) (map[string]any, map[string]any) {
 	walkForward := map[string]any{"window_count": 0, "pass_rate": 0.0, "avg_annual_return": nil, "worst_drawdown": nil}
 	rows, err := app.database.Conn().Query(`SELECT annual_return, max_drawdown, sharpe, calmar, avg_turnover, monthly_win_rate, positive_3m_rate
-		FROM strategy_evaluation
+		FROM eval_strategy_admission
 		WHERE strategy = ? AND COALESCE(strategy_version, 0) = ?`, strategyName, version)
 	if err == nil {
 		defer rows.Close()
@@ -4063,7 +5161,7 @@ func (app *App) strategyValidationEvidence(strategyName string, version int) (ma
 	}
 	neighborhood := map[string]any{"checked_versions": 0, "pass_rate": 0.0}
 	rows, err = app.database.Conn().Query(`SELECT COALESCE(validation_json, '{}')
-		FROM strategy_settings_versions
+		FROM strategy_config_versions
 		WHERE strategy = ? AND version <> ? AND ABS(version - ?) <= 2`, strategyName, version, version)
 	if err == nil {
 		defer rows.Close()
@@ -4098,9 +5196,9 @@ func (app *App) multipleTestPenalty(runID string) float64 {
 		return 0
 	}
 	var strategyTests int
-	_ = app.database.Conn().QueryRow(`SELECT COUNT(*) FROM strategy_evaluation WHERE run_id = ?`, runID).Scan(&strategyTests)
+	_ = app.database.Conn().QueryRow(`SELECT COUNT(*) FROM eval_strategy_admission WHERE run_id = ?`, runID).Scan(&strategyTests)
 	var candidateTests int
-	_ = app.database.Conn().QueryRow(`SELECT COUNT(*) FROM portfolio_optimization_candidates WHERE run_id = ?`, runID).Scan(&candidateTests)
+	_ = app.database.Conn().QueryRow(`SELECT COUNT(*) FROM eval_portfolio_candidates WHERE run_id = ?`, runID).Scan(&candidateTests)
 	tests := strategyTests + candidateTests
 	if tests <= 1 {
 		return 0
@@ -4120,7 +5218,7 @@ func (app *App) captureDataSnapshot(subjectType string, subjectID string) map[st
 		"captured_at": time.Now().Format(time.RFC3339),
 	}
 	typeCount := map[string]any{}
-	rows, err := app.database.Conn().Query(`SELECT data_type, COUNT(*), COALESCE(SUM(row_count), 0), COALESCE(MAX(updated_at), '') FROM market_data_files GROUP BY data_type ORDER BY data_type`)
+	rows, err := app.database.Conn().Query(`SELECT data_type, COUNT(*), COALESCE(SUM(row_count), 0), COALESCE(MAX(updated_at), '') FROM data_market_files GROUP BY data_type ORDER BY data_type`)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -4134,21 +5232,76 @@ func (app *App) captureDataSnapshot(subjectType string, subjectID string) map[st
 		}
 	}
 	datasetStatus := []map[string]any{}
-	rows, err = app.database.Conn().Query(`SELECT dataset, category, state, progress_done, progress_total, updated_at FROM dataset_update_status ORDER BY category, dataset LIMIT 200`)
+	rows, err = app.database.Conn().Query(`SELECT COALESCE(subtask_key, ''), status, COALESCE(params_json, '{}'), COALESCE(summary_json, '{}'), updated_at FROM task_jobs WHERE task_type='data_update' AND COALESCE(subtask_key, '') <> '' ORDER BY COALESCE(sequence, 0), subtask_key LIMIT 200`)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var dataset, category, state, updatedAt string
-			var done, total int
-			if err := rows.Scan(&dataset, &category, &state, &done, &total, &updatedAt); err == nil {
-				datasetStatus = append(datasetStatus, map[string]any{"dataset": dataset, "category": category, "state": state, "done": done, "total": total, "updated_at": updatedAt})
+			var dataset, status, paramsJSON, summaryJSON, updatedAt string
+			if err := rows.Scan(&dataset, &status, &paramsJSON, &summaryJSON, &updatedAt); err == nil {
+				params := map[string]any{}
+				summary := map[string]any{}
+				_ = json.Unmarshal([]byte(paramsJSON), &params)
+				_ = json.Unmarshal([]byte(summaryJSON), &summary)
+				datasetStatus = append(datasetStatus, map[string]any{
+					"dataset":    firstNonEmptyString(dataset, stringFromAny(params["dataset"])),
+					"category":   stringFromAny(params["category"]),
+					"state":      dataUpdateTaskState(status),
+					"done":       intFromAny(summary["progress_done"]),
+					"total":      intFromAny(summary["progress_total"]),
+					"updated_at": updatedAt,
+				})
 			}
 		}
 	}
-	snapshot["market_data_files"] = typeCount
+	snapshot["data_market_files"] = typeCount
 	snapshot["dataset_status"] = datasetStatus
 	app.saveDataSnapshot(subjectType, subjectID, snapshot)
 	return snapshot
+}
+
+func dataUpdateTaskState(status string) string {
+	switch status {
+	case "created", "queued":
+		return "pending"
+	case "running", "success":
+		return status
+	case "failed", "cancelled", "interrupted", "error":
+		return "failed"
+	default:
+		return status
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func stringFromAny(value any) string {
+	if s, ok := value.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func intFromAny(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return int(n)
+	default:
+		return 0
+	}
 }
 
 func (app *App) saveDataSnapshot(subjectType string, subjectID string, snapshot map[string]any) {
@@ -4156,7 +5309,7 @@ func (app *App) saveDataSnapshot(subjectType string, subjectID string, snapshot 
 		return
 	}
 	data, _ := json.Marshal(snapshot)
-	_, _ = app.database.Conn().Exec(`INSERT INTO evaluation_data_snapshots(id, subject_type, subject_id, snapshot_json, created_at) VALUES(?, ?, ?, ?, ?)`,
+	_, _ = app.database.Conn().Exec(`INSERT INTO eval_data_snapshots(id, subject_type, subject_id, snapshot_json, created_at) VALUES(?, ?, ?, ?, ?)`,
 		"eds_"+strings.ReplaceAll(task.NewID(), "-", ""), subjectType, subjectID, string(data), time.Now().Format(time.RFC3339))
 }
 
@@ -4312,7 +5465,7 @@ func (app *App) buildPortfolioAnalysisContext(parent task.Task, children []task.
 	rows := make([]map[string]any, 0)
 	if app.database != nil && runID != "" {
 		dbRows, err := app.database.Conn().Query(`SELECT rank, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json
-			FROM portfolio_optimization_candidates
+			FROM eval_portfolio_candidates
 			WHERE run_id = ?
 			ORDER BY CASE WHEN rank > 0 THEN rank ELSE 999999 END ASC, score DESC
 			LIMIT ?`, runID, analysisLimit)
@@ -5170,7 +6323,7 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	if t.Status != task.StatusCreated && t.Status != task.StatusQueued && t.Status != task.StatusInterrupted && t.Status != task.StatusFailed && t.Status != task.StatusCancelled {
 		return task.DTO{}, errors.New("task cannot be started in current status")
 	}
-	if t.TaskType != task.TypeEvaluationTimeMachine && t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment {
+	if t.TaskType != task.TypeEvaluationTimeMachine && t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypeFactorResearch {
 		return task.DTO{}, errors.New("only evaluation tasks can be started")
 	}
 	if err := app.ensureDataQualityForEvaluation(); err != nil {
@@ -5195,6 +6348,9 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 		}
 		return app.startPortfolioOptimizationTask(t)
 	}
+	if t.TaskType == task.TypeFactorResearch {
+		return app.startFactorResearchTask(t)
+	}
 	runID := t.ExternalRunID
 	if runID == "" {
 		runID = "tm_" + strings.ReplaceAll(t.ID, "-", "")
@@ -5212,6 +6368,8 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 		DataPath:       app.settings.DataPath,
 		DBPath:         filepath.Join(app.settings.DataPath, "meta.db"),
 		ConfigDBPath:   filepath.Join(app.settings.DataPath, "meta.db"),
+		DBBackend:      app.settings.DatabaseBackend,
+		DBDSN:          app.settings.MySQLDSN,
 		TaskID:         t.ID,
 		RunID:          runID,
 		LogPath:        logPath,
@@ -5222,7 +6380,7 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	}
 	now := time.Now()
 	t.Status = task.StatusRunning
-	t.Progress = 0
+	t.Progress = 0.02
 	t.ResultPath = runPath
 	t.LogPath = logPath
 	t.WorkerPID = info.PID
@@ -5236,34 +6394,98 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	return task.ToDTO(t), nil
 }
 
+func (app *App) RetryTask(id string) (task.DTO, error) {
+	if err := app.ensureTaskService(); err != nil {
+		return task.DTO{}, err
+	}
+	t, err := app.taskService.Repository().Get(id)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	if t.ParentID == "" {
+		return app.StartTask(id)
+	}
+	if t.Status == task.StatusRunning {
+		return task.ToDTO(t), nil
+	}
+	if t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeFactorResearch {
+		return task.DTO{}, errors.New("task cannot be retried")
+	}
+	if err := app.ensureDataQualityForEvaluation(); err != nil {
+		return task.DTO{}, err
+	}
+	parent, err := app.taskService.Repository().Get(t.ParentID)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	parentAlreadyRunning := parent.Status == task.StatusRunning
+	if !parentAlreadyRunning {
+		running, err := app.taskService.Repository().HasRunningEvaluation(t.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		if running {
+			return task.DTO{}, errors.New("已有评估任务正在运行，同一时间只能运行一个评估")
+		}
+	}
+	app.reconcileOrphanRunningChildren(parent.ID)
+	now := time.Now()
+	t.Status = task.StatusCreated
+	t.Progress = 0
+	t.WorkerPID = 0
+	t.ErrorMessage = ""
+	t.SummaryJSON = ""
+	t.QueuedAt = now
+	t.StartedAt = time.Time{}
+	t.FinishedAt = time.Time{}
+	t.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
+		return task.DTO{}, err
+	}
+	if err := app.taskService.Repository().UpdateStatus(t); err != nil {
+		return task.DTO{}, err
+	}
+	children, _ := app.taskService.Repository().ListChildren(parent.ID)
+	parent.Status = task.StatusRunning
+	parent.Progress = portfolioParentProgress(children)
+	parent.ErrorMessage = ""
+	parent.FinishedAt = time.Time{}
+	parent.UpdatedAt = now
+	parent.SummaryJSON = app.strategyEvaluationSummaryForParent(parent, children)
+	if t.TaskType == task.TypePortfolioOptimization {
+		parent.SummaryJSON = app.portfolioSummaryForParent(parent, children)
+	} else if t.TaskType == task.TypeFactorResearch {
+		parent.SummaryJSON = app.factorResearchSummaryForParent(parent, children)
+	}
+	_ = app.taskService.Repository().UpdateStatus(parent)
+	_ = app.taskService.Repository().UpdateRuntime(parent)
+	if t.TaskType == task.TypePortfolioOptimization {
+		go app.runPortfolioOptimizationChildren(parent)
+	} else if t.TaskType == task.TypeFactorResearch {
+		go app.runFactorResearchChildren(parent)
+	} else {
+		go app.runStrategyEvaluationChildren(parent)
+	}
+
+	deadline := time.Now().Add(750 * time.Millisecond)
+	for {
+		latest, err := app.taskService.Repository().Get(t.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		if latest.Status == task.StatusRunning || latest.Status == task.StatusFailed || latest.Status == task.StatusSuccess {
+			return task.ToDTO(latest), nil
+		}
+		if time.Now().After(deadline) {
+			return task.ToDTO(latest), nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func (app *App) startStrategyEvaluationTask(t task.Task) (task.DTO, error) {
 	if t.ParentID != "" {
-		go func() {
-			updated, err := app.startStrategyEvaluationChildTaskSync(t)
-			if err != nil && updated.WorkerPID == 0 && updated.Status != task.StatusFailed {
-				now := time.Now()
-				updated.Status = task.StatusFailed
-				updated.Progress = 1
-				updated.ErrorMessage = err.Error()
-				updated.FinishedAt = now
-				updated.UpdatedAt = now
-				_ = app.taskService.Repository().UpdateRuntime(updated)
-			}
-		}()
-		deadline := time.Now().Add(750 * time.Millisecond)
-		for {
-			latest, err := app.taskService.Repository().Get(t.ID)
-			if err != nil {
-				return task.DTO{}, err
-			}
-			if latest.Status == task.StatusRunning || latest.Status == task.StatusFailed || latest.Status == task.StatusSuccess {
-				return task.ToDTO(latest), nil
-			}
-			if time.Now().After(deadline) {
-				return task.ToDTO(latest), nil
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+		return app.RetryTask(t.ID)
 	}
 	children, err := app.taskService.Repository().ListChildren(t.ID)
 	if err != nil {
@@ -5319,7 +6541,270 @@ func (app *App) startStrategyEvaluationTask(t task.Task) (task.DTO, error) {
 	return task.ToDTO(t), nil
 }
 
+func (app *App) startFactorResearchTask(t task.Task) (task.DTO, error) {
+	if t.ParentID != "" {
+		return app.RetryTask(t.ID)
+	}
+	children, err := app.taskService.Repository().ListChildren(t.ID)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	if len(children) == 0 {
+		if err := app.initializeFactorResearch(t); err != nil {
+			return task.DTO{}, err
+		}
+		children, err = app.taskService.Repository().ListChildren(t.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+	}
+	now := time.Now()
+	for _, child := range children {
+		if child.Status == task.StatusCancelled || child.Status == task.StatusInterrupted {
+			child.Status = task.StatusCreated
+			child.Progress = 0
+			child.WorkerPID = 0
+			child.ErrorMessage = ""
+			child.StartedAt = time.Time{}
+			child.FinishedAt = time.Time{}
+			child.UpdatedAt = now
+			_ = app.taskService.Repository().UpdateRuntime(child)
+		}
+	}
+	children, err = app.taskService.Repository().ListChildren(t.ID)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	t.Status = task.StatusRunning
+	t.Progress = portfolioParentProgress(children)
+	t.WorkerPID = 0
+	t.ErrorMessage = ""
+	t.Total = len(children)
+	t.StartedAt = now
+	t.FinishedAt = time.Time{}
+	t.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
+		return task.DTO{}, err
+	}
+	go app.runFactorResearchChildren(t)
+	return task.ToDTO(t), nil
+}
+
+func (app *App) runFactorResearchChildren(parent task.Task) {
+	app.schedulerMu.Lock()
+	defer app.schedulerMu.Unlock()
+	for {
+		latestParent, err := app.taskService.Repository().Get(parent.ID)
+		if err != nil {
+			app.finishFactorResearchParent(parent, task.StatusFailed, err.Error(), nil)
+			return
+		}
+		if latestParent.Status != task.StatusRunning {
+			return
+		}
+		parent = latestParent
+		app.reconcileOrphanRunningChildren(parent.ID)
+		children, err := app.taskService.Repository().ListChildren(parent.ID)
+		if err != nil {
+			app.finishFactorResearchParent(parent, task.StatusFailed, err.Error(), children)
+			return
+		}
+		next := runnablePortfolioChildren(children, 1)
+		if len(next) == 0 {
+			status := portfolioParentStatus(children)
+			if status != task.StatusRunning {
+				app.finishFactorResearchParent(parent, status, "", children)
+				return
+			}
+			parent.Progress = portfolioParentProgress(children)
+			parent.SummaryJSON = app.factorResearchSummaryForParent(parent, children)
+			parent.UpdatedAt = time.Now()
+			_ = app.taskService.Repository().UpdateStatus(parent)
+			_ = app.taskService.Repository().UpdateRuntime(parent)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		app.startChildTaskBatch(next[:1], app.startFactorResearchChildTaskSync)
+		time.Sleep(1 * time.Second)
+		children, _ = app.taskService.Repository().ListChildren(parent.ID)
+		parent.Progress = portfolioParentProgress(children)
+		parent.SummaryJSON = app.factorResearchSummaryForParent(parent, children)
+		parent.UpdatedAt = time.Now()
+		_ = app.taskService.Repository().UpdateStatus(parent)
+		_ = app.taskService.Repository().UpdateRuntime(parent)
+	}
+}
+
+func (app *App) startFactorResearchChildTaskSync(t task.Task) (task.Task, error) {
+	runID := t.ExternalRunID
+	if runID == "" {
+		runID = t.GroupRunID
+	}
+	if runID == "" {
+		return t, errors.New("factor research child requires run id")
+	}
+	params := task.ToDTO(t).Params
+	stage := stringParam(params, "stage", t.SubtaskKey)
+	startDate := stringParam(params, "start_date", "")
+	endDate := stringParam(params, "end_date", "")
+	if stage == "" || startDate == "" || endDate == "" {
+		return t, errors.New("factor research child requires stage, start_date and end_date")
+	}
+	runPath := filepath.Join(app.settings.DataPath, "factor_research", runID, stage)
+	logPath := filepath.Join(runPath, "worker.log")
+	if err := os.MkdirAll(runPath, 0o755); err != nil {
+		return t, err
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return t, err
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	args := []string{
+		"scripts/factor_research_worker.py",
+		"--run-id", runID,
+		"--stage", stage,
+		"--start", startDate,
+		"--end", endDate,
+		"--freq", stringParam(params, "freq", "monthly"),
+		"--label", stringParam(params, "label", "fwd20_excess_industry"),
+		"--db-path", filepath.Join(app.settings.DataPath, "meta.db"),
+		"--min-train-years", strconv.Itoa(int(numberParam(params, "min_train_years", 4))),
+		"--min-test-year", strconv.Itoa(int(numberParam(params, "min_test_year", 0))),
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv(filepath.Join(app.settings.DataPath, "meta.db"))...)...)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		return t, err
+	}
+	now := time.Now()
+	t.Status = task.StatusRunning
+	t.Progress = 0
+	t.ResultPath = runPath
+	t.LogPath = logPath
+	t.WorkerPID = cmd.Process.Pid
+	t.ExternalRunID = runID
+	t.GroupRunID = runID
+	t.ErrorMessage = ""
+	t.Attempt++
+	t.StartedAt = now
+	t.FinishedAt = time.Time{}
+	t.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
+		_ = logFile.Close()
+		return t, err
+	}
+	waitErr := cmd.Wait()
+	_ = logFile.Close()
+	finishedAt := time.Now()
+	latest, latestErr := app.taskService.Repository().Get(t.ID)
+	if latestErr == nil && latest.Status == task.StatusCancelled {
+		return latest, nil
+	}
+	t.WorkerPID = 0
+	t.Progress = 1
+	t.UpdatedAt = finishedAt
+	t.FinishedAt = finishedAt
+	if waitErr != nil {
+		t.Status = task.StatusFailed
+		t.ErrorMessage = waitErr.Error()
+		_ = app.taskService.Repository().UpdateRuntime(t)
+		return t, waitErr
+	}
+	t.Status = task.StatusSuccess
+	t.SummaryJSON = readFactorResearchStageSummaryFromDB(app.database.Conn(), runID, stage)
+	_ = app.taskService.Repository().UpdateRuntime(t)
+	if t.SummaryJSON != "" {
+		_ = app.taskService.Repository().UpdateStatus(t)
+	}
+	return t, nil
+}
+
+func (app *App) factorResearchSummaryForParent(parent task.Task, children []task.Task) string {
+	summary := ""
+	if app.database != nil && app.database.Conn() != nil && parent.ExternalRunID != "" {
+		summary = readFactorResearchSummaryFromDB(app.database.Conn(), parent.ExternalRunID)
+	}
+	payload := map[string]any{}
+	if summary != "" {
+		_ = json.Unmarshal([]byte(summary), &payload)
+	} else if parent.SummaryJSON != "" {
+		_ = json.Unmarshal([]byte(parent.SummaryJSON), &payload)
+	}
+	childRows := make([]any, 0, len(children))
+	successChildren := 0
+	failedChildren := 0
+	runningChildren := 0
+	for _, child := range children {
+		switch child.Status {
+		case task.StatusSuccess:
+			successChildren++
+		case task.StatusFailed, task.StatusCancelled, task.StatusInterrupted:
+			failedChildren++
+		case task.StatusRunning:
+			runningChildren++
+		}
+		row := map[string]any{
+			"stage":       child.SubtaskKey,
+			"stage_name":  child.SubtaskName,
+			"task_status": child.Status,
+			"progress":    child.Progress,
+			"sequence":    child.Sequence,
+			"total":       child.Total,
+			"error":       child.ErrorMessage,
+			"result_path": child.ResultPath,
+			"log_path":    child.LogPath,
+		}
+		if child.SummaryJSON != "" {
+			var childSummary map[string]any
+			if json.Unmarshal([]byte(child.SummaryJSON), &childSummary) == nil {
+				for key, value := range childSummary {
+					row[key] = value
+				}
+			}
+		}
+		childRows = append(childRows, row)
+	}
+	payload["planned_count"] = len(children)
+	payload["completed_count"] = successChildren
+	payload["failed_task_count"] = failedChildren
+	payload["running_count"] = runningChildren
+	payload["progress"] = portfolioParentProgress(children)
+	if len(childRows) > 0 {
+		payload["rows"] = childRows
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return parent.SummaryJSON
+	}
+	return string(out)
+}
+
+func (app *App) finishFactorResearchParent(parent task.Task, status task.Status, message string, children []task.Task) {
+	now := time.Now()
+	app.releaseChildSlotsForParent(parent.ID)
+	parent.Status = status
+	parent.Progress = portfolioParentProgress(children)
+	if status == task.StatusSuccess {
+		parent.Progress = 1
+	}
+	parent.WorkerPID = 0
+	parent.ErrorMessage = message
+	parent.SummaryJSON = app.factorResearchSummaryForParent(parent, children)
+	parent.FinishedAt = now
+	parent.UpdatedAt = now
+	_ = app.taskService.Repository().UpdateStatus(parent)
+	_ = app.taskService.Repository().UpdateRuntime(parent)
+}
+
 func (app *App) runStrategyEvaluationChildren(parent task.Task) {
+	app.schedulerMu.Lock()
+	defer app.schedulerMu.Unlock()
 	for {
 		latestParent, err := app.taskService.Repository().Get(parent.ID)
 		if err != nil {
@@ -5330,17 +6815,29 @@ func (app *App) runStrategyEvaluationChildren(parent task.Task) {
 			return
 		}
 		parent = latestParent
+		app.reconcileOrphanRunningChildren(parent.ID)
 		children, err := app.taskService.Repository().ListChildren(parent.ID)
 		if err != nil {
 			app.finishStrategyEvaluationParent(parent, task.StatusFailed, err.Error(), children)
 			return
 		}
-		next := runnablePortfolioChildren(children, app.taskConcurrency())
+		next := runnablePortfolioChildren(children, app.availableChildSlots(children))
 		if len(next) == 0 {
-			app.finishStrategyEvaluationParent(parent, portfolioParentStatus(children), "", children)
-			return
+			status := portfolioParentStatus(children)
+			if status != task.StatusRunning {
+				app.finishStrategyEvaluationParent(parent, status, "", children)
+				return
+			}
+			parent.Progress = portfolioParentProgress(children)
+			parent.SummaryJSON = app.strategyEvaluationSummaryForParent(parent, children)
+			parent.UpdatedAt = time.Now()
+			_ = app.taskService.Repository().UpdateStatus(parent)
+			_ = app.taskService.Repository().UpdateRuntime(parent)
+			time.Sleep(1 * time.Second)
+			continue
 		}
-		app.runChildTaskBatch(next, app.startStrategyEvaluationChildTaskSync)
+		app.startChildTaskBatch(next, app.startStrategyEvaluationChildTaskSync)
+		time.Sleep(1 * time.Second)
 		children, _ = app.taskService.Repository().ListChildren(parent.ID)
 		parent.Progress = portfolioParentProgress(children)
 		parent.SummaryJSON = app.strategyEvaluationSummaryForParent(parent, children)
@@ -5400,11 +6897,8 @@ func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, er
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(),
-		"DATA_ROOT="+app.settings.DataPath,
-		"DESKTOP_DB_PATH="+filepath.Join(app.settings.DataPath, "meta.db"),
-		"DESKTOP_CONFIG_DB_PATH="+filepath.Join(app.settings.DataPath, "meta.db"),
-	)
+	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv(dbPath)...)...)
 	if overrides := mapParam(params, "strategy_overrides"); len(overrides) > 0 {
 		if data, err := json.Marshal(overrides); err == nil {
 			cmd.Env = append(cmd.Env, "QUANT_STRATEGY_OVERRIDES_JSON="+string(data))
@@ -5460,6 +6954,7 @@ func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, er
 
 func (app *App) finishStrategyEvaluationParent(parent task.Task, status task.Status, message string, children []task.Task) {
 	now := time.Now()
+	app.releaseChildSlotsForParent(parent.ID)
 	parent.Status = status
 	parent.Progress = portfolioParentProgress(children)
 	if status == task.StatusSuccess {
@@ -5491,15 +6986,14 @@ func (app *App) persistStrategyExperimentArtifacts(child task.Task, strategyName
 	if windowName := strings.TrimSpace(fmt.Sprint(params["walk_window"])); windowName != "" && windowName != "<nil>" {
 		metricsJSON, _ := json.Marshal(summary)
 		subjectID := fmt.Sprintf("%s@%d", strategyName, int(numberParam(params, "strategy_version", 0)))
-		_, _ = app.database.Conn().Exec(`INSERT INTO walk_forward_windows(
-			id, subject_type, subject_id, window_name, start_date, end_date, status, score, metrics_json, created_at, updated_at
-		) VALUES (?, 'strategy', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(subject_type, subject_id, window_name) DO UPDATE SET
-			status = excluded.status,
-			score = excluded.score,
-			metrics_json = excluded.metrics_json,
-			updated_at = excluded.updated_at`,
-			"wfw_"+strings.ReplaceAll(task.NewID(), "-", ""), subjectID, windowName, stringParam(params, "start_date", ""), stringParam(params, "end_date", ""), status, score, string(metricsJSON), now, now)
+		_, _ = app.database.Conn().Exec(
+			app.database.UpsertSQL(
+				"eval_walk_forward_windows",
+				[]string{"id", "subject_type", "subject_id", "window_name", "start_date", "end_date", "status", "score", "metrics_json", "created_at", "updated_at"},
+				[]string{"subject_type", "subject_id", "window_name"},
+				[]string{"status", "score", "metrics_json", "updated_at"},
+			),
+			"wfw_"+strings.ReplaceAll(task.NewID(), "-", ""), "strategy", subjectID, windowName, stringParam(params, "start_date", ""), stringParam(params, "end_date", ""), status, score, string(metricsJSON), now, now)
 	}
 	if paramSet := strings.TrimSpace(fmt.Sprint(params["param_set"])); paramSet != "" && paramSet != "<nil>" {
 		metricsJSON, _ := json.Marshal(summary)
@@ -5510,16 +7004,14 @@ func (app *App) persistStrategyExperimentArtifacts(child task.Task, strategyName
 		} else if score < 0.45 {
 			expStatus = "unstable"
 		}
-		_, _ = app.database.Conn().Exec(`INSERT INTO parameter_experiments(
-			id, strategy, strategy_version, param_set, status, score, params_json, metrics_json, created_at, updated_at
-		) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(strategy, strategy_version, param_set) DO UPDATE SET
-			status = excluded.status,
-			score = excluded.score,
-			params_json = excluded.params_json,
-			metrics_json = excluded.metrics_json,
-			updated_at = excluded.updated_at`,
-			"pe_"+strings.ReplaceAll(task.NewID(), "-", ""), strategyName, paramSet, expStatus, score, string(overridesJSON), string(metricsJSON), now, now)
+		_, _ = app.database.Conn().Exec(
+			app.database.UpsertSQL(
+				"eval_parameter_experiments",
+				[]string{"id", "strategy", "strategy_version", "param_set", "status", "score", "params_json", "metrics_json", "created_at", "updated_at"},
+				[]string{"strategy", "strategy_version", "param_set"},
+				[]string{"status", "score", "params_json", "metrics_json", "updated_at"},
+			),
+			"pe_"+strings.ReplaceAll(task.NewID(), "-", ""), strategyName, 0, paramSet, expStatus, score, string(overridesJSON), string(metricsJSON), now, now)
 	}
 }
 
@@ -5639,6 +7131,8 @@ func (app *App) startPortfolioOptimizationTask(t task.Task) (task.DTO, error) {
 }
 
 func (app *App) runPortfolioOptimizationChildren(parent task.Task) {
+	app.schedulerMu.Lock()
+	defer app.schedulerMu.Unlock()
 	for {
 		latestParent, err := app.taskService.Repository().Get(parent.ID)
 		if err != nil {
@@ -5649,17 +7143,29 @@ func (app *App) runPortfolioOptimizationChildren(parent task.Task) {
 			return
 		}
 		parent = latestParent
+		app.reconcileOrphanRunningChildren(parent.ID)
 		children, err := app.taskService.Repository().ListChildren(parent.ID)
 		if err != nil {
 			app.finishPortfolioParent(parent, task.StatusFailed, err.Error(), children)
 			return
 		}
-		next := runnablePortfolioChildren(children, app.taskConcurrency())
+		next := runnablePortfolioChildren(children, app.availableChildSlots(children))
 		if len(next) == 0 {
-			app.finishPortfolioParent(parent, portfolioParentStatus(children), "", children)
-			return
+			status := portfolioParentStatus(children)
+			if status != task.StatusRunning {
+				app.finishPortfolioParent(parent, status, "", children)
+				return
+			}
+			parent.Progress = portfolioParentProgress(children)
+			parent.SummaryJSON = app.portfolioSummaryForParent(parent, children)
+			parent.UpdatedAt = time.Now()
+			_ = app.taskService.Repository().UpdateStatus(parent)
+			_ = app.taskService.Repository().UpdateRuntime(parent)
+			time.Sleep(1 * time.Second)
+			continue
 		}
-		app.runChildTaskBatch(next, app.startPortfolioCandidateTaskSync)
+		app.startChildTaskBatch(next, app.startPortfolioCandidateTaskSync)
+		time.Sleep(1 * time.Second)
 		children, _ = app.taskService.Repository().ListChildren(parent.ID)
 		parent.Progress = portfolioParentProgress(children)
 		parent.SummaryJSON = app.portfolioSummaryForParent(parent, children)
@@ -5670,32 +7176,7 @@ func (app *App) runPortfolioOptimizationChildren(parent task.Task) {
 }
 
 func (app *App) startPortfolioCandidateTask(t task.Task) (task.DTO, error) {
-	go func() {
-		updated, err := app.startPortfolioCandidateTaskSync(t)
-		if err != nil && updated.WorkerPID == 0 && updated.Status != task.StatusFailed {
-			now := time.Now()
-			updated.Status = task.StatusFailed
-			updated.Progress = 1
-			updated.ErrorMessage = err.Error()
-			updated.FinishedAt = now
-			updated.UpdatedAt = now
-			_ = app.taskService.Repository().UpdateRuntime(updated)
-		}
-	}()
-	deadline := time.Now().Add(750 * time.Millisecond)
-	for {
-		latest, err := app.taskService.Repository().Get(t.ID)
-		if err != nil {
-			return task.DTO{}, err
-		}
-		if latest.Status == task.StatusRunning || latest.Status == task.StatusFailed || latest.Status == task.StatusSuccess {
-			return task.ToDTO(latest), nil
-		}
-		if time.Now().After(deadline) {
-			return task.ToDTO(latest), nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	return app.RetryTask(t.ID)
 }
 
 func (app *App) startPortfolioCandidateTaskSync(t task.Task) (task.Task, error) {
@@ -5769,11 +7250,8 @@ func (app *App) startPortfolioCandidateTaskSync(t task.Task) (task.Task, error) 
 		return t, err
 	}
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(),
-		"DATA_ROOT="+app.settings.DataPath,
-		"DESKTOP_DB_PATH="+filepath.Join(app.settings.DataPath, "meta.db"),
-		"DESKTOP_CONFIG_DB_PATH="+filepath.Join(app.settings.DataPath, "meta.db"),
-	)
+	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv(dbPath)...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return t, err
@@ -5848,7 +7326,7 @@ func runnablePortfolioChildren(children []task.Task, limit int) []task.Task {
 	out := make([]task.Task, 0, limit)
 	for idx := range children {
 		child := children[idx]
-		if child.Status == task.StatusSuccess || child.Status == task.StatusRunning || child.Status == task.StatusCancelled || child.Status == task.StatusInterrupted {
+		if child.Status == task.StatusSuccess || child.Status == task.StatusRunning || child.Status == task.StatusQueued || child.Status == task.StatusCancelled || child.Status == task.StatusInterrupted {
 			continue
 		}
 		if child.MaxAttempts > 0 && child.Attempt >= child.MaxAttempts && child.Status == task.StatusFailed {
@@ -5860,6 +7338,139 @@ func runnablePortfolioChildren(children []task.Task, limit int) []task.Task {
 		}
 	}
 	return out
+}
+
+func (app *App) reconcileOrphanRunningChildren(parentID string) {
+	children, err := app.taskService.Repository().ListChildren(parentID)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, child := range children {
+		if child.Status != task.StatusRunning || child.WorkerPID <= 0 || processExists(child.WorkerPID) {
+			continue
+		}
+		child.Status = task.StatusInterrupted
+		child.Progress = 1
+		child.WorkerPID = 0
+		child.ErrorMessage = "worker process is no longer running"
+		child.FinishedAt = now
+		child.UpdatedAt = now
+		_ = app.taskService.Repository().UpdateStatus(child)
+		_ = app.taskService.Repository().UpdateRuntime(child)
+		app.releaseChildSlotForTask(child.ID)
+	}
+}
+
+func (app *App) reconcileEvaluationWorkerProcesses() {
+	if app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT id, worker_pid
+		FROM task_jobs
+		WHERE status = ? AND COALESCE(worker_pid, 0) > 0`,
+		task.StatusRunning,
+	)
+	if err != nil {
+		return
+	}
+	active := map[int]string{}
+	for rows.Next() {
+		var id string
+		var pid int
+		if err := rows.Scan(&id, &pid); err == nil && pid > 0 {
+			active[pid] = id
+		}
+	}
+	_ = rows.Close()
+
+	osWorkers := evaluationWorkerPIDs()
+	now := time.Now().Format(time.RFC3339)
+	for pid, id := range active {
+		if osWorkers[pid] {
+			continue
+		}
+		_, _ = app.database.Conn().Exec(`
+			UPDATE task_jobs
+			SET status = ?, progress = 1, worker_pid = NULL,
+				error_message = ?, finished_at = ?, updated_at = ?
+			WHERE id = ? AND status = ?`,
+			task.StatusInterrupted,
+			"worker process is no longer running",
+			now,
+			now,
+			id,
+			task.StatusRunning,
+		)
+	}
+
+	for pid := range osWorkers {
+		if _, ok := active[pid]; ok {
+			continue
+		}
+		_ = worker.NewManager().Cancel(pid)
+	}
+}
+
+func evaluationWorkerPIDs() map[int]bool {
+	out := map[int]bool{}
+	cmd := exec.Command("ps", "-axo", "pid=,command=")
+	data, err := cmd.Output()
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(parts[0])
+		if err != nil || pid <= 0 || pid == os.Getpid() {
+			continue
+		}
+		if strings.Contains(line, "scripts/evaluate_strategies.py") ||
+			strings.Contains(line, "scripts/run_portfolio_candidate.py") ||
+			strings.Contains(line, "scripts/factor_research_worker.py") {
+			out[pid] = true
+		}
+	}
+	return out
+}
+
+func hasLiveRunningChild(children []task.Task) bool {
+	for _, child := range children {
+		if child.Status == task.StatusRunning && child.WorkerPID > 0 && processExists(child.WorkerPID) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRunnableChild(children []task.Task) bool {
+	return len(runnablePortfolioChildren(children, 1)) > 0
+}
+
+func (app *App) availableChildSlots(children []task.Task) int {
+	limit := app.taskConcurrency()
+	if limit <= 0 {
+		limit = 1
+	}
+	running := 0
+	for _, child := range children {
+		if child.Status == task.StatusRunning || child.Status == task.StatusQueued {
+			running++
+		}
+	}
+	slots := limit - running
+	if slots < 0 {
+		return 0
+	}
+	return slots
 }
 
 func (app *App) runChildTaskBatch(children []task.Task, runner func(task.Task) (task.Task, error)) {
@@ -5881,6 +7492,125 @@ func (app *App) runChildTaskBatch(children []task.Task, runner func(task.Task) (
 	wg.Wait()
 }
 
+func (app *App) startChildTaskBatch(children []task.Task, runner func(task.Task) (task.Task, error)) {
+	for _, child := range children {
+		child := child
+		lockName, acquired, err := app.tryAcquireChildSlot(child.ParentID, child.ID)
+		if err != nil {
+			app.markChildTaskFailed(child, err)
+			continue
+		}
+		if !acquired {
+			continue
+		}
+		child.Status = task.StatusQueued
+		child.UpdatedAt = time.Now()
+		_ = app.taskService.Repository().UpdateStatus(child)
+		_ = app.taskService.Repository().UpdateRuntime(child)
+		go func() {
+			defer app.releaseChildSlot(lockName)
+			updated, err := runner(child)
+			if err != nil {
+				if updated.ID == "" {
+					updated = child
+				}
+				app.markChildTaskFailed(updated, err)
+			}
+		}()
+	}
+}
+
+func (app *App) tryAcquireChildSlot(parentID string, childID string) (string, bool, error) {
+	if app.database == nil || app.database.Conn() == nil {
+		return "", false, errors.New("database is not initialized")
+	}
+	parentID = strings.TrimSpace(parentID)
+	childID = strings.TrimSpace(childID)
+	if parentID == "" || childID == "" {
+		return "", false, errors.New("child slot requires parent and child id")
+	}
+	if err := app.cleanupChildSlotLocks(parentID); err != nil {
+		return "", false, err
+	}
+	limit := app.taskConcurrency()
+	if limit <= 0 {
+		limit = 1
+	}
+	now := time.Now().Format(time.RFC3339)
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "local"
+	}
+	insertSQL := app.database.InsertIgnoreSQL("task_run_locks", []string{"name", "pid", "hostname", "acquired_at", "heartbeat", "task"})
+	for slot := 1; slot <= limit; slot++ {
+		lockName := childSlotLockName(parentID, slot)
+		result, err := app.database.Conn().Exec(insertSQL, lockName, 0, hostname, now, now, childID)
+		if err != nil {
+			return "", false, err
+		}
+		affected, _ := result.RowsAffected()
+		if affected > 0 {
+			return lockName, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (app *App) cleanupChildSlotLocks(parentID string) error {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" || app.database == nil || app.database.Conn() == nil {
+		return nil
+	}
+	prefix := childSlotLockPrefix(parentID) + "%"
+	_, err := app.database.Conn().Exec(`
+		DELETE FROM task_run_locks
+		WHERE name LIKE ?
+		  AND (
+			task IS NULL
+			OR task = ''
+			OR task NOT IN (
+				SELECT id FROM task_jobs
+				WHERE parent_id = ? AND status IN ('queued', 'running')
+			)
+		  )`,
+		prefix,
+		parentID,
+	)
+	return err
+}
+
+func (app *App) releaseChildSlot(lockName string) {
+	lockName = strings.TrimSpace(lockName)
+	if lockName == "" || app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	_, _ = app.database.Conn().Exec(`DELETE FROM task_run_locks WHERE name = ?`, lockName)
+}
+
+func (app *App) releaseChildSlotsForParent(parentID string) {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" || app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	_, _ = app.database.Conn().Exec(`DELETE FROM task_run_locks WHERE name LIKE ?`, childSlotLockPrefix(parentID)+"%")
+}
+
+func (app *App) releaseChildSlotForTask(taskID string) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" || app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	_, _ = app.database.Conn().Exec(`DELETE FROM task_run_locks WHERE name LIKE 'eval_child_slot:%' AND task = ?`, taskID)
+}
+
+func childSlotLockPrefix(parentID string) string {
+	return "eval_child_slot:" + parentID + ":"
+}
+
+func childSlotLockName(parentID string, slot int) string {
+	return fmt.Sprintf("%s%d", childSlotLockPrefix(parentID), slot)
+}
+
 func (app *App) markChildTaskFailed(child task.Task, err error) {
 	if err == nil || child.Status == task.StatusFailed || child.Status == task.StatusCancelled {
 		return
@@ -5893,9 +7623,16 @@ func (app *App) markChildTaskFailed(child task.Task, err error) {
 	child.FinishedAt = now
 	child.UpdatedAt = now
 	_ = app.taskService.Repository().UpdateRuntime(child)
+	app.releaseChildSlotForTask(child.ID)
 }
 
 func (app *App) taskConcurrency() int {
+	if app.database != nil {
+		app.configService.WithDatabase(app.database)
+		if settings, err := app.configService.Load(app.settings); err == nil {
+			app.settings = settings
+		}
+	}
 	value := app.settings.TaskConcurrency
 	if value < 1 {
 		return 1
@@ -5942,6 +7679,7 @@ func portfolioParentStatus(children []task.Task) task.Status {
 
 func (app *App) finishPortfolioParent(parent task.Task, status task.Status, message string, children []task.Task) {
 	now := time.Now()
+	app.releaseChildSlotsForParent(parent.ID)
 	parent.Status = status
 	parent.Progress = portfolioParentProgress(children)
 	if status == task.StatusSuccess {
@@ -5991,7 +7729,7 @@ func (app *App) portfolioSummaryForParent(parent task.Task, children []task.Task
 	if err != nil {
 		return parent.SummaryJSON
 	}
-	_, _ = app.database.Conn().Exec(`UPDATE portfolio_optimization_runs SET summary_json = ?, updated_at = datetime('now') WHERE run_id = ?`, string(out), parent.ExternalRunID)
+	_, _ = app.database.Conn().Exec(fmt.Sprintf(`UPDATE eval_portfolio_runs SET summary_json = ?, updated_at = %s WHERE run_id = ?`, app.database.CurrentTimestampSQL()), string(out), parent.ExternalRunID)
 	return string(out)
 }
 
@@ -6011,7 +7749,7 @@ func copyAISummaryFields(dst map[string]any, src map[string]any) {
 }
 
 func (app *App) reRankPortfolioCandidates(runID string) error {
-	rows, err := app.database.Conn().Query(`SELECT candidate_id, score FROM portfolio_optimization_candidates WHERE run_id = ? AND status = 'ok' ORDER BY score DESC`, runID)
+	rows, err := app.database.Conn().Query(`SELECT candidate_id, score FROM eval_portfolio_candidates WHERE run_id = ? AND status = 'ok' ORDER BY score DESC`, runID)
 	if err != nil {
 		return err
 	}
@@ -6032,7 +7770,7 @@ func (app *App) reRankPortfolioCandidates(runID string) error {
 		return err
 	}
 	for idx, item := range items {
-		if _, err := app.database.Conn().Exec(`UPDATE portfolio_optimization_candidates SET rank = ?, updated_at = datetime('now') WHERE run_id = ? AND candidate_id = ?`, idx+1, runID, item.ID); err != nil {
+		if _, err := app.database.Conn().Exec(fmt.Sprintf(`UPDATE eval_portfolio_candidates SET rank = ?, updated_at = %s WHERE run_id = ? AND candidate_id = ?`, app.database.CurrentTimestampSQL()), idx+1, runID, item.ID); err != nil {
 			return err
 		}
 	}
@@ -6040,7 +7778,7 @@ func (app *App) reRankPortfolioCandidates(runID string) error {
 }
 
 func readPortfolioCandidateSummaryFromDB(db *sql.DB, runID string, candidateID string) string {
-	row := db.QueryRow(`SELECT payload_json FROM portfolio_optimization_candidates WHERE run_id = ? AND candidate_id = ?`, runID, candidateID)
+	row := db.QueryRow(`SELECT payload_json FROM eval_portfolio_candidates WHERE run_id = ? AND candidate_id = ?`, runID, candidateID)
 	var payloadJSON string
 	if err := row.Scan(&payloadJSON); err != nil {
 		return ""
@@ -6089,8 +7827,10 @@ func (app *App) CancelTask(id string) (task.DTO, error) {
 				child.FinishedAt = time.Now()
 				child.UpdatedAt = child.FinishedAt
 				_ = app.taskService.Repository().UpdateRuntime(child)
+				app.releaseChildSlotForTask(child.ID)
 			}
 		}
+		app.releaseChildSlotsForParent(t.ID)
 		t.Status = task.StatusCancelled
 		t.WorkerPID = 0
 		t.ErrorMessage = "task cancelled"
@@ -6111,8 +7851,10 @@ func (app *App) CancelTask(id string) (task.DTO, error) {
 				child.FinishedAt = time.Now()
 				child.UpdatedAt = child.FinishedAt
 				_ = app.taskService.Repository().UpdateRuntime(child)
+				app.releaseChildSlotForTask(child.ID)
 			}
 		}
+		app.releaseChildSlotsForParent(t.ID)
 		t.Status = task.StatusCancelled
 		t.WorkerPID = 0
 		t.ErrorMessage = "task cancelled"
@@ -6260,7 +8002,7 @@ func (app *App) ensureMarketService() error {
 	if app.database == nil {
 		return errors.New("database is not initialized")
 	}
-	app.marketService = market.NewService(market.NewRepository(app.database.Conn()))
+	app.marketService = market.NewService(market.NewRepository(app.database))
 	return nil
 }
 
@@ -6271,7 +8013,8 @@ func (app *App) ensurePositionService() error {
 	if err := app.ensureMarketService(); err != nil {
 		return err
 	}
-	app.positionService = position.NewService(app.marketService, app.database.Conn())
+	app.positionService = position.NewService(app.marketService, app.database)
+	app.positionService.SetRuntimeDatabaseConfig(app.settings.DatabaseBackend, app.settings.MySQLDSN)
 	return nil
 }
 
@@ -6289,38 +8032,100 @@ func (app *App) reopenDatabase() error {
 
 func (app *App) ensureDatabase() error {
 	app.settings.DataPath = app.fixedDataPath()
+	backend, packagedDSN := config.PackagedDatabaseConfig()
+	app.settings.DatabaseBackend = backend
+	if backend != "mysql" {
+		app.settings.MySQLDSN = packagedDSN
+	} else if strings.TrimSpace(app.settings.MySQLDSN) == "" {
+		app.settings.MySQLDSN = packagedDSN
+	}
 	if app.database != nil {
 		return nil
 	}
 	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+	var bootstrap *database.MySQLBootstrapConfig
+	if app.settings.DatabaseBackend == "mysql" {
+		mysqlCfg := config.PackagedMySQLBootstrapConfig(app.settings.MySQLDSN)
+		bootstrap = &database.MySQLBootstrapConfig{
+			AdminDSN: mysqlCfg.AdminDSN,
+			Database: mysqlCfg.Database,
+			User:     mysqlCfg.User,
+			Password: mysqlCfg.Password,
+			AppDSN:   mysqlCfg.AppDSN,
+		}
+	} else if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return err
 	}
-	db, err := database.Open(dbPath)
+	db, err := database.OpenConfigured(database.Config{
+		Backend:        app.settings.DatabaseBackend,
+		SQLitePath:     dbPath,
+		MySQLDSN:       app.settings.MySQLDSN,
+		MySQLBootstrap: bootstrap,
+	})
 	if err != nil {
 		return err
 	}
 	app.database = db
-	app.configService.WithDB(db.Conn())
+	app.configService.WithDatabase(db)
 	if settings, err := app.configService.Load(app.settings); err == nil {
 		settings.DataPath = app.fixedDataPath()
 		app.settings = settings
 		_ = app.configService.Save(app.settings)
 	}
 	app.taskService = task.NewService(task.NewRepository(db.Conn()))
-	app.marketService = market.NewService(market.NewRepository(db.Conn()))
-	app.positionService = position.NewService(app.marketService, app.database.Conn())
+	app.marketService = market.NewService(market.NewRepository(db))
+	app.positionService = position.NewService(app.marketService, app.database)
+	app.positionService.SetRuntimeDatabaseConfig(app.settings.DatabaseBackend, app.settings.MySQLDSN)
 	return nil
 }
 
 func (app *App) fixedDataPath() string {
+	if dataPath, ok := inferWorkspaceDataPath(); ok {
+		return dataPath
+	}
+	if app.settings.DataPath != "" {
+		return filepath.Clean(app.settings.DataPath)
+	}
 	if homeDir, err := os.UserHomeDir(); err == nil {
 		return config.DefaultSettings(homeDir).DataPath
 	}
-	if app.settings.DataPath != "" {
-		return app.settings.DataPath
-	}
 	return filepath.Join("data_store")
+}
+
+func inferWorkspaceDataPath() (string, bool) {
+	starts := make([]string, 0, 2)
+	if wd, err := os.Getwd(); err == nil {
+		starts = append(starts, wd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		starts = append(starts, filepath.Dir(exe))
+	}
+	for _, start := range starts {
+		if dataPath, ok := findDataStoreUpwards(start); ok {
+			return dataPath, true
+		}
+	}
+	return "", false
+}
+
+func findDataStoreUpwards(start string) (string, bool) {
+	dir := filepath.Clean(start)
+	for {
+		dataPath := filepath.Join(dir, "data_store")
+		if pathExists(dataPath) {
+			return dataPath, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func mustGetwd() string {

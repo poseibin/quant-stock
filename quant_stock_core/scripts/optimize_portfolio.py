@@ -1,7 +1,7 @@
 """组合优化时光机。
 
 批量生成候选策略组合，用向量化回放快速筛选 Top 组合，结果写入
-SQLite，供 desktop 统一读取。真实逐日撮合时光机用于 Top 组合复核。
+配置数据库，供 desktop 统一读取。真实逐日撮合时光机用于 Top 组合复核。
 """
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import argparse
 import itertools
 import json
 import os
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.config.desktop_settings import load_portfolio_risk, load_strategy_settings
-from common.infra.db import write_transaction
+from common.infra.db import current_timestamp_sql, upsert_sql, write_transaction
 from common.utils import get_logger
 from trading.backtest import BacktestConfig, CostModel, run as bt_run
 from trading.strategy import registry
@@ -60,7 +59,7 @@ def main() -> None:
     if args.save:
         db_path = _resolve_db_path(args.db_path)
         save_portfolio_optimization(db_path, args.save, payload)
-        log.info(f"组合优化结果已保存到 SQLite: {db_path} run_id={args.save}")
+        log.info(f"组合优化结果已保存到数据库: {db_path} run_id={args.save}")
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default))
     else:
@@ -223,13 +222,13 @@ def _generate_candidates(
         add("三策略夏普权重-" + "+".join(registry.get_label(x) for x in combo), _metric_weights(combo, individual))
 
     if objective == "稳健":
-        defensive = [x for x in pool if x in {"dividend_low_vol", "garp_quality", "forecast_revision", core}]
+        defensive = [x for x in pool if x in {"market_regime_timing", "dividend_quality", "multi_factor_composite", core}]
         add("稳健低回撤组合", {x: 1.0 for x in defensive if x})
     elif objective == "进攻":
-        aggressive = [x for x in pool if x in {"forecast_revision", "trend_quality", "moneyflow_pullback", core}]
+        aggressive = [x for x in pool if x in {"turtle_breakout", "trend_pullback", "earnings_revision", core}]
         add("小资金进攻组合", {x: 1.0 for x in aggressive if x})
     else:
-        balanced = [x for x in pool if x in {"small_cap_quality", "forecast_revision", "garp_quality", "dividend_low_vol"}]
+        balanced = [x for x in pool if x in {"small_cap_quality", "multi_factor_composite", "trend_pullback", "turtle_breakout", "dividend_quality"}]
         add("平衡核心组合", {x: 1.0 for x in balanced if x})
 
     return candidates[:max(1, max_candidates)]
@@ -327,27 +326,24 @@ def save_portfolio_optimization(db_path: Path, run_id: str, payload: dict[str, A
     generated_at = pd.Timestamp.now().isoformat()
     with write_transaction(db_path) as conn:
         _ensure_tables(conn)
-        conn.execute("DELETE FROM portfolio_optimization_candidates WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM eval_portfolio_candidates WHERE run_id = ?", (run_id,))
+        now_sql = current_timestamp_sql()
+        run_columns = [
+            "run_id", "start_date", "end_date", "objective", "benchmark", "strategy_count",
+            "viable_count", "candidate_count", "top_n", "generated_at", "summary_json",
+            "created_at", "updated_at",
+        ]
         conn.execute(
-            """
-            INSERT INTO portfolio_optimization_runs(
-                run_id, start_date, end_date, objective, benchmark, strategy_count,
-                viable_count, candidate_count, top_n, generated_at, summary_json,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-            ON CONFLICT(run_id) DO UPDATE SET
-                start_date = excluded.start_date,
-                end_date = excluded.end_date,
-                objective = excluded.objective,
-                benchmark = excluded.benchmark,
-                strategy_count = excluded.strategy_count,
-                viable_count = excluded.viable_count,
-                candidate_count = excluded.candidate_count,
-                top_n = excluded.top_n,
-                generated_at = excluded.generated_at,
-                summary_json = excluded.summary_json,
-                updated_at = excluded.updated_at
-            """,
+            upsert_sql(
+                "eval_portfolio_runs",
+                run_columns,
+                ["run_id"],
+                [
+                    "start_date", "end_date", "objective", "benchmark", "strategy_count",
+                    "viable_count", "candidate_count", "top_n", "generated_at",
+                    "summary_json", "updated_at",
+                ],
+            ),
             (
                 run_id,
                 payload.get("start", ""),
@@ -360,17 +356,19 @@ def save_portfolio_optimization(db_path: Path, run_id: str, payload: dict[str, A
                 int(payload.get("top_n") or 0),
                 generated_at,
                 json.dumps(payload, ensure_ascii=False, default=_json_default),
+                generated_at,
+                generated_at,
             ),
         )
         for row in payload.get("rows") or []:
             conn.execute(
-                """
-                INSERT INTO portfolio_optimization_candidates(
+                f"""
+                INSERT INTO eval_portfolio_candidates(
                     run_id, candidate_id, rank, name, objective, status, score,
                     strategies, weights_json, annual_return, max_drawdown, sharpe,
                     calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount,
                     reason, payload_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {now_sql}, {now_sql})
                 """,
                 (
                     run_id,
@@ -396,10 +394,10 @@ def save_portfolio_optimization(db_path: Path, run_id: str, payload: dict[str, A
             )
 
 
-def _ensure_tables(conn: sqlite3.Connection) -> None:
+def _ensure_tables(conn) -> None:
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS portfolio_optimization_runs (
+        CREATE TABLE IF NOT EXISTS eval_portfolio_runs (
             run_id TEXT PRIMARY KEY,
             start_date TEXT NOT NULL,
             end_date TEXT NOT NULL,
@@ -418,7 +416,7 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS portfolio_optimization_candidates (
+        CREATE TABLE IF NOT EXISTS eval_portfolio_candidates (
             run_id TEXT NOT NULL,
             candidate_id TEXT NOT NULL,
             rank INTEGER NOT NULL DEFAULT 0,

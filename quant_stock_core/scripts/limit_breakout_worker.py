@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sqlite3
 import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -16,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.infra.db import write_transaction
+from common.infra.db import upsert_sql, write_transaction
 from common.infra import status as run_status
 
 
@@ -308,9 +307,9 @@ def scan(data_path: Path, lookback: int, recent_days: int, limit: int, on_progre
     return candidates[:limit]
 
 
-def ensure_tables(conn: sqlite3.Connection) -> None:
+def ensure_tables(conn) -> None:
     conn.execute(
-        """CREATE TABLE IF NOT EXISTS limit_breakout_cache (
+        """CREATE TABLE IF NOT EXISTS market_limit_breakout_cache (
             cache_key TEXT NOT NULL,
             rank INTEGER NOT NULL DEFAULT 0,
             ts_code TEXT NOT NULL,
@@ -323,7 +322,7 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
         )"""
     )
     conn.execute(
-        """CREATE TABLE IF NOT EXISTS limit_breakout_cache_meta (
+        """CREATE TABLE IF NOT EXISTS market_limit_breakout_cache_meta (
             cache_key TEXT PRIMARY KEY,
             item_count INTEGER NOT NULL DEFAULT 0,
             generated_at TEXT NOT NULL,
@@ -333,9 +332,9 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
     ensure_prediction_tables(conn)
 
 
-def ensure_prediction_tables(conn: sqlite3.Connection) -> None:
+def ensure_prediction_tables(conn) -> None:
     conn.execute(
-        """CREATE TABLE IF NOT EXISTS limit_signal_predictions (
+        """CREATE TABLE IF NOT EXISTS market_limit_signal_predictions (
             id TEXT PRIMARY KEY,
             signal_type TEXT NOT NULL,
             strategy_version TEXT NOT NULL DEFAULT 'v1',
@@ -365,11 +364,11 @@ def ensure_prediction_tables(conn: sqlite3.Connection) -> None:
         )"""
     )
     conn.execute(
-        """CREATE INDEX IF NOT EXISTS idx_limit_signal_predictions_type_date
-           ON limit_signal_predictions(signal_type, signal_date)"""
+        """CREATE INDEX IF NOT EXISTS idx_market_limit_signal_predictions_type_date
+           ON market_limit_signal_predictions(signal_type, signal_date)"""
     )
     conn.execute(
-        """CREATE TABLE IF NOT EXISTS limit_signal_evaluation_summary (
+        """CREATE TABLE IF NOT EXISTS market_limit_signal_eval_summary (
             signal_type TEXT NOT NULL,
             strategy_version TEXT NOT NULL DEFAULT 'v1',
             parameter_key TEXT NOT NULL,
@@ -395,12 +394,14 @@ def write_cache(db_path: Path, cache_key: str, candidates: list[Candidate]) -> N
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with write_transaction(db_path) as conn:
         ensure_tables(conn)
-        conn.execute("DELETE FROM limit_breakout_cache WHERE cache_key = ?", (cache_key,))
+        conn.execute("DELETE FROM market_limit_breakout_cache WHERE cache_key = ?", (cache_key,))
         conn.execute(
-            """INSERT INTO limit_breakout_cache_meta(cache_key,item_count,generated_at,updated_at)
-               VALUES(?,?,?,?)
-               ON CONFLICT(cache_key) DO UPDATE SET item_count=excluded.item_count,
-               generated_at=excluded.generated_at, updated_at=excluded.updated_at""",
+            upsert_sql(
+                "market_limit_breakout_cache_meta",
+                ["cache_key", "item_count", "generated_at", "updated_at"],
+                ["cache_key"],
+                ["item_count", "generated_at", "updated_at"],
+            ),
             (cache_key, len(candidates), ts, ts),
         )
         rows = []
@@ -408,7 +409,7 @@ def write_cache(db_path: Path, cache_key: str, candidates: list[Candidate]) -> N
             payload = json.dumps(asdict(item), ensure_ascii=False, separators=(",", ":"))
             rows.append((cache_key, idx, item.ts_code, item.latest_date, item.score, payload, ts, ts))
         conn.executemany(
-            """INSERT INTO limit_breakout_cache(
+            """INSERT INTO market_limit_breakout_cache(
                 cache_key, rank, ts_code, latest_date, score, payload_json, generated_at, updated_at
             ) VALUES(?,?,?,?,?,?,?,?)""",
             rows,
@@ -423,20 +424,19 @@ def write_cache(db_path: Path, cache_key: str, candidates: list[Candidate]) -> N
                 "breakout_watch", payload, ts, ts,
             ))
         conn.executemany(
-            """INSERT INTO limit_signal_predictions(
-                id, signal_type, strategy_version, parameter_key, cache_key, rank, ts_code,
-                name, industry, signal_date, signal_price, score, recommendation, payload_json,
-                created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(signal_type, parameter_key, ts_code, signal_date) DO UPDATE SET
-                rank=excluded.rank,
-                name=excluded.name,
-                industry=excluded.industry,
-                signal_price=excluded.signal_price,
-                score=excluded.score,
-                recommendation=excluded.recommendation,
-                payload_json=excluded.payload_json,
-                updated_at=excluded.updated_at""",
+            upsert_sql(
+                "market_limit_signal_predictions",
+                [
+                    "id", "signal_type", "strategy_version", "parameter_key", "cache_key",
+                    "rank", "ts_code", "name", "industry", "signal_date", "signal_price",
+                    "score", "recommendation", "payload_json", "created_at", "updated_at",
+                ],
+                ["signal_type", "parameter_key", "ts_code", "signal_date"],
+                [
+                    "rank", "name", "industry", "signal_price", "score",
+                    "recommendation", "payload_json", "updated_at",
+                ],
+            ),
             prediction_rows,
         )
 

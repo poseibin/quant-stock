@@ -1,4 +1,4 @@
-"""Run one portfolio candidate and write its result to desktop SQLite.
+"""Run one portfolio candidate and write its result to the desktop database.
 
 The desktop app owns orchestration. This script intentionally handles exactly
 one candidate so Go can monitor progress, retry failures, and resume a parent
@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.config.desktop_settings import load_portfolio_risk
-from common.infra.db import write_transaction
+from common.infra.db import upsert_sql, write_transaction
 from trading.strategy import registry
 from scripts.optimize_portfolio import (
     _combine_candidate,
@@ -151,53 +151,37 @@ def main() -> None:
 def save_candidate(db_path: Path, run_id: str, row: dict[str, Any]) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with write_transaction(db_path) as conn:
+        now = pd.Timestamp.now().isoformat()
+        columns = [
+            "run_id", "candidate_id", "rank", "name", "objective", "status", "score",
+            "strategies", "weights_json", "total_return", "excess_annual_return",
+            "win_rate", "annual_volatility", "annual_return", "max_drawdown", "sharpe",
+            "calmar", "avg_turnover", "avg_holdings", "avg_total_mv", "avg_amount",
+            "exit_architecture_type", "exit_architecture_label", "exit_architecture_json",
+            "rebalance_freq", "market_regime_filter", "position_max_weight",
+            "validation_status", "validation_json", "reason", "payload_json",
+            "created_at", "updated_at",
+        ]
         conn.execute(
-            """
-            INSERT INTO portfolio_optimization_candidates(
-                run_id, candidate_id, rank, name, objective, status, score,
-                strategies, weights_json, total_return, excess_annual_return,
-                win_rate, annual_volatility, annual_return, max_drawdown, sharpe,
-                calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount,
-                exit_architecture_type, exit_architecture_label, exit_architecture_json,
-                rebalance_freq, market_regime_filter, position_max_weight,
-                validation_status, validation_json,
-                reason, payload_json, created_at, updated_at
-            ) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-            ON CONFLICT(run_id, candidate_id) DO UPDATE SET
-                rank = excluded.rank,
-                name = excluded.name,
-                objective = excluded.objective,
-                status = excluded.status,
-                score = excluded.score,
-                strategies = excluded.strategies,
-                weights_json = excluded.weights_json,
-                total_return = excluded.total_return,
-                excess_annual_return = excluded.excess_annual_return,
-                win_rate = excluded.win_rate,
-                annual_volatility = excluded.annual_volatility,
-                annual_return = excluded.annual_return,
-                max_drawdown = excluded.max_drawdown,
-                sharpe = excluded.sharpe,
-                calmar = excluded.calmar,
-                avg_turnover = excluded.avg_turnover,
-                avg_holdings = excluded.avg_holdings,
-                avg_total_mv = excluded.avg_total_mv,
-                avg_amount = excluded.avg_amount,
-                exit_architecture_type = excluded.exit_architecture_type,
-                exit_architecture_label = excluded.exit_architecture_label,
-                exit_architecture_json = excluded.exit_architecture_json,
-                rebalance_freq = excluded.rebalance_freq,
-                market_regime_filter = excluded.market_regime_filter,
-                position_max_weight = excluded.position_max_weight,
-                validation_status = excluded.validation_status,
-                validation_json = excluded.validation_json,
-                reason = excluded.reason,
-                payload_json = excluded.payload_json,
-                updated_at = excluded.updated_at
-            """,
+            upsert_sql(
+                "eval_portfolio_candidates",
+                columns,
+                ["run_id", "candidate_id"],
+                [
+                    "rank", "name", "objective", "status", "score", "strategies",
+                    "weights_json", "total_return", "excess_annual_return", "win_rate",
+                    "annual_volatility", "annual_return", "max_drawdown", "sharpe",
+                    "calmar", "avg_turnover", "avg_holdings", "avg_total_mv",
+                    "avg_amount", "exit_architecture_type", "exit_architecture_label",
+                    "exit_architecture_json", "rebalance_freq", "market_regime_filter",
+                    "position_max_weight", "validation_status", "validation_json",
+                    "reason", "payload_json", "updated_at",
+                ],
+            ),
             (
                 run_id,
                 row.get("candidate_id", ""),
+                0,
                 row.get("name", ""),
                 row.get("objective", ""),
                 row.get("status", ""),
@@ -226,6 +210,8 @@ def save_candidate(db_path: Path, run_id: str, row: dict[str, Any]) -> None:
                 json.dumps(row.get("validation") or {}, ensure_ascii=False, default=_json_default),
                 row.get("reason", ""),
                 json.dumps(row, ensure_ascii=False, default=_json_default),
+                now,
+                now,
             ),
         )
 

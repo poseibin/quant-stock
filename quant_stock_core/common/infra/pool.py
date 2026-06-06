@@ -1,4 +1,4 @@
-"""真实账户持仓管理（pool_summary / pool_holdings / pool_trades）。
+"""真实账户持仓管理（portfolio_pool_summary / portfolio_pool_holdings / portfolio_pool_trades）。
 
 桌面 app 通过 Go 调用 daily_signal.py / pool_confirm.py 触发。
 本模块负责所有 pool 表的读写，以及基于行情刷新估值。
@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from common.config import COMMISSION_RATE, DEFAULT_SLIPPAGE, STAMP_TAX_RATE
-from common.infra.db import open_db
+from common.infra.db import add_column, open_db, table_columns
 
 INITIAL_CASH: float = 500_000.0
 LOT_SIZE: int = 100
@@ -28,14 +28,14 @@ def _trade_fee(amount: float, side: str, slippage: float | None = None) -> float
 
 
 def _ensure_fee_columns(conn) -> None:
-    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(pool_trades)").fetchall()}
+    cols = table_columns(conn, "portfolio_pool_trades")
     if "fee" not in cols:
-        conn.execute("ALTER TABLE pool_trades ADD COLUMN fee REAL NOT NULL DEFAULT 0")
+        add_column(conn, "portfolio_pool_trades", "fee", "REAL NOT NULL DEFAULT 0")
     if "net_amount" not in cols:
-        conn.execute("ALTER TABLE pool_trades ADD COLUMN net_amount REAL NOT NULL DEFAULT 0")
-    summary_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(pool_summary)").fetchall()}
+        add_column(conn, "portfolio_pool_trades", "net_amount", "REAL NOT NULL DEFAULT 0")
+    summary_cols = table_columns(conn, "portfolio_pool_summary")
     if "total_fee" not in summary_cols:
-        conn.execute("ALTER TABLE pool_summary ADD COLUMN total_fee REAL NOT NULL DEFAULT 0")
+        add_column(conn, "portfolio_pool_summary", "total_fee", "REAL NOT NULL DEFAULT 0")
 
 
 def list_summary() -> dict[str, Any]:
@@ -45,7 +45,7 @@ def list_summary() -> dict[str, Any]:
             """SELECT initial_cash, current_cash, market_value, total_assets, total_cost,
                       COALESCE(total_fee,0), total_pnl, today_pnl, today_pct, unrealized_pnl, unrealized_pct,
                       realized_pnl, cum_return, n_closed, updated_at
-               FROM pool_summary WHERE id = 1"""
+               FROM portfolio_pool_summary WHERE id = 1"""
         ).fetchone()
     if not row:
         return {
@@ -89,7 +89,7 @@ def list_holdings() -> list[dict[str, Any]]:
         rows = conn.execute(
             """SELECT ts_code, name, industry, shares, avg_cost, last_price,
                       market_value, weight, pnl, pnl_pct, open_date, updated_at
-               FROM pool_holdings WHERE shares > 0 ORDER BY weight DESC"""
+               FROM portfolio_pool_holdings WHERE shares > 0 ORDER BY weight DESC"""
         ).fetchall()
     out: list[dict[str, Any]] = []
     for r in rows:
@@ -118,7 +118,7 @@ def list_trades(limit: int = 200) -> list[dict[str, Any]]:
         rows = conn.execute(
             """SELECT id, ts_code, side, shares, price, amount, trade_date, pnl, created_at,
                       COALESCE(fee,0), COALESCE(net_amount,0)
-               FROM pool_trades ORDER BY id DESC LIMIT ?""",
+               FROM portfolio_pool_trades ORDER BY id DESC LIMIT ?""",
             (int(limit),),
         ).fetchall()
     return [
@@ -140,7 +140,7 @@ def list_trades(limit: int = 200) -> list[dict[str, Any]]:
 
 
 def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
-    """处理用户成交确认，更新 pool_holdings + pool_trades + pool_summary。
+    """处理用户成交确认，更新 portfolio_pool_holdings + portfolio_pool_trades + portfolio_pool_summary。
 
     trades item: {ts_code, side(buy/sell), shares, price, trade_date}
     """
@@ -153,11 +153,11 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
         try:
             _ensure_fee_columns(conn)
             summary = conn.execute(
-                "SELECT initial_cash, current_cash FROM pool_summary WHERE id = 1"
+                "SELECT initial_cash, current_cash FROM portfolio_pool_summary WHERE id = 1"
             ).fetchone()
             if not summary:
                 conn.execute(
-                    """INSERT INTO pool_summary(id, initial_cash, current_cash, total_assets, updated_at)
+                    """INSERT INTO portfolio_pool_summary(id, initial_cash, current_cash, total_assets, updated_at)
                        VALUES(1, ?, ?, ?, ?)""",
                     (INITIAL_CASH, INITIAL_CASH, INITIAL_CASH, now),
                 )
@@ -181,7 +181,7 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                 net_amount = amount + fee if side == "buy" else amount - fee
 
                 row = conn.execute(
-                    "SELECT shares, avg_cost FROM pool_holdings WHERE ts_code = ?",
+                    "SELECT shares, avg_cost FROM portfolio_pool_holdings WHERE ts_code = ?",
                     (ts_code,),
                 ).fetchone()
                 cur_shares = int(row[0]) if row else 0
@@ -196,13 +196,13 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                     current_cash -= net_amount
                     if row:
                         conn.execute(
-                            """UPDATE pool_holdings SET shares=?, avg_cost=?, updated_at=?
+                            """UPDATE portfolio_pool_holdings SET shares=?, avg_cost=?, updated_at=?
                                WHERE ts_code=?""",
                             (new_shares, new_cost, now, ts_code),
                         )
                     else:
                         conn.execute(
-                            """INSERT INTO pool_holdings(ts_code, shares, avg_cost, last_price,
+                            """INSERT INTO portfolio_pool_holdings(ts_code, shares, avg_cost, last_price,
                                market_value, open_date, updated_at)
                                VALUES(?, ?, ?, ?, ?, ?, ?)""",
                             (ts_code, new_shares, new_cost, price, amount, trade_date, now),
@@ -216,23 +216,23 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                     realized_pnl_total += realized_pnl
                     if new_shares > 0:
                         conn.execute(
-                            "UPDATE pool_holdings SET shares=?, updated_at=? WHERE ts_code=?",
+                            "UPDATE portfolio_pool_holdings SET shares=?, updated_at=? WHERE ts_code=?",
                             (new_shares, now, ts_code),
                         )
                     else:
-                        conn.execute("DELETE FROM pool_holdings WHERE ts_code=?", (ts_code,))
+                        conn.execute("DELETE FROM portfolio_pool_holdings WHERE ts_code=?", (ts_code,))
 
                 conn.execute(
-                    """INSERT INTO pool_trades(ts_code, side, shares, price, amount, trade_date, pnl, created_at, fee, net_amount)
+                    """INSERT INTO portfolio_pool_trades(ts_code, side, shares, price, amount, trade_date, pnl, created_at, fee, net_amount)
                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (ts_code, side, shares, price, amount, trade_date, realized_pnl, now, fee, net_amount),
                 )
 
             conn.execute(
-                """UPDATE pool_summary SET current_cash=?, updated_at=?
+                """UPDATE portfolio_pool_summary SET current_cash=?, updated_at=?
                        , total_pnl = total_pnl + ?
                        , total_fee = COALESCE(total_fee,0) + (
-                         SELECT COALESCE(SUM(fee),0) FROM pool_trades WHERE created_at = ?
+                         SELECT COALESCE(SUM(fee),0) FROM portfolio_pool_trades WHERE created_at = ?
                        )
                    WHERE id=1""",
                 (current_cash, now, realized_pnl_total, now),
@@ -247,27 +247,27 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def refresh_valuation(date: str | None = None) -> None:
-    """用最新行情刷新 pool_holdings.last_price/market_value/weight/pnl 与 pool_summary。"""
+    """用最新行情刷新 portfolio_pool_holdings.last_price/market_value/weight/pnl 与 portfolio_pool_summary。"""
     holdings_rows = list_holdings()
     if not holdings_rows:
         with open_db() as conn:
             row = conn.execute(
-                "SELECT current_cash, initial_cash FROM pool_summary WHERE id=1"
+                "SELECT current_cash, initial_cash FROM portfolio_pool_summary WHERE id=1"
             ).fetchone()
             current_cash = float(row[0] or INITIAL_CASH) if row else INITIAL_CASH
             initial_cash = float(row[1] or INITIAL_CASH) if row else INITIAL_CASH
             realized = conn.execute(
-                "SELECT COALESCE(SUM(pnl),0) FROM pool_trades WHERE side='sell'"
+                "SELECT COALESCE(SUM(pnl),0) FROM portfolio_pool_trades WHERE side='sell'"
             ).fetchone()
             realized_total = float(realized[0]) if realized else 0.0
             n_closed = conn.execute(
-                "SELECT COUNT(DISTINCT ts_code) FROM pool_trades WHERE side='sell'"
+                "SELECT COUNT(DISTINCT ts_code) FROM portfolio_pool_trades WHERE side='sell'"
             ).fetchone()
             n_closed_val = int(n_closed[0]) if n_closed else 0
             total_pnl = current_cash - initial_cash
             cum_return = total_pnl / initial_cash if initial_cash > 0 else 0.0
             conn.execute(
-                """UPDATE pool_summary SET market_value=0, total_assets=?, total_cost=0,
+                """UPDATE portfolio_pool_summary SET market_value=0, total_assets=?, total_cost=0,
                        today_pnl=0, today_pct=0, unrealized_pnl=0, unrealized_pct=0,
                        realized_pnl=?, total_pnl=?, cum_return=?, n_closed=?,
                        updated_at=? WHERE id=1""",
@@ -340,7 +340,7 @@ def refresh_valuation(date: str | None = None) -> None:
 
                 meta = name_map.get(ts, {})
                 conn.execute(
-                    """UPDATE pool_holdings SET name=?, industry=?, last_price=?, market_value=?,
+                    """UPDATE portfolio_pool_holdings SET name=?, industry=?, last_price=?, market_value=?,
                        pnl=?, pnl_pct=?, updated_at=? WHERE ts_code=?""",
                     (
                         meta.get("name", h.get("name", "")),
@@ -359,7 +359,7 @@ def refresh_valuation(date: str | None = None) -> None:
                 total_cost += avg_cost * shares
 
             row = conn.execute(
-                "SELECT current_cash, initial_cash FROM pool_summary WHERE id=1"
+                "SELECT current_cash, initial_cash FROM portfolio_pool_summary WHERE id=1"
             ).fetchone()
             current_cash = float(row[0] or INITIAL_CASH) if row else INITIAL_CASH
             initial_cash = float(row[1] or INITIAL_CASH) if row else INITIAL_CASH
@@ -367,17 +367,17 @@ def refresh_valuation(date: str | None = None) -> None:
             total_assets = current_cash + total_market_value
             if total_assets > 0:
                 conn.execute(
-                    """UPDATE pool_holdings SET weight = market_value / ? WHERE shares > 0""",
+                    """UPDATE portfolio_pool_holdings SET weight = market_value / ? WHERE shares > 0""",
                     (total_assets,),
                 )
 
             realized = conn.execute(
-                "SELECT COALESCE(SUM(pnl),0) FROM pool_trades WHERE side='sell'"
+                "SELECT COALESCE(SUM(pnl),0) FROM portfolio_pool_trades WHERE side='sell'"
             ).fetchone()
             realized_total = float(realized[0]) if realized else 0.0
 
             n_closed = conn.execute(
-                "SELECT COUNT(DISTINCT ts_code) FROM pool_trades WHERE side='sell'"
+                "SELECT COUNT(DISTINCT ts_code) FROM portfolio_pool_trades WHERE side='sell'"
             ).fetchone()
             n_closed_val = int(n_closed[0]) if n_closed else 0
 
@@ -388,7 +388,7 @@ def refresh_valuation(date: str | None = None) -> None:
             cum_return = total_pnl / initial_cash if initial_cash > 0 else 0.0
 
             conn.execute(
-                """UPDATE pool_summary SET market_value=?, total_assets=?, total_cost=?,
+                """UPDATE portfolio_pool_summary SET market_value=?, total_assets=?, total_cost=?,
                    today_pnl=?, today_pct=?, unrealized_pnl=?, unrealized_pct=?,
                    realized_pnl=?, total_pnl=?, cum_return=?, n_closed=?,
                    updated_at=? WHERE id=1""",

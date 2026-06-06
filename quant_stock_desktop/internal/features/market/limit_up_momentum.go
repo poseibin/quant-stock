@@ -94,7 +94,7 @@ func (service *Service) ClearLimitUpMomentumCandidates() error {
 }
 
 func (repo *Repository) ListLimitUpMomentumCache(cacheKey string, limit int) ([]LimitUpMomentumCandidate, error) {
-	rows, err := repo.db.Query(`SELECT payload_json FROM limit_up_momentum_cache
+	rows, err := repo.db.Conn().Query(`SELECT payload_json FROM market_limit_momentum_cache
 		WHERE cache_key = ? ORDER BY rank ASC LIMIT ?`, cacheKey, limit)
 	if err != nil {
 		return nil, err
@@ -117,31 +117,33 @@ func (repo *Repository) ListLimitUpMomentumCache(cacheKey string, limit int) ([]
 
 func (repo *Repository) HasLimitUpMomentumCache(cacheKey string) (bool, error) {
 	var count int
-	err := repo.db.QueryRow(`SELECT COUNT(1) FROM limit_up_momentum_cache_meta WHERE cache_key = ?`, cacheKey).Scan(&count)
+	err := repo.db.Conn().QueryRow(`SELECT COUNT(1) FROM market_limit_momentum_cache_meta WHERE cache_key = ?`, cacheKey).Scan(&count)
 	return count > 0, err
 }
 
 func (repo *Repository) ReplaceLimitUpMomentumCache(cacheKey string, items []LimitUpMomentumCandidate) error {
 	now := time.Now().Format("2006-01-02 15:04:05")
-	tx, err := repo.db.Begin()
+	tx, err := repo.db.Conn().Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM limit_up_momentum_cache WHERE cache_key = ?`, cacheKey); err != nil {
+	if _, err := tx.Exec(`DELETE FROM market_limit_momentum_cache WHERE cache_key = ?`, cacheKey); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO limit_up_momentum_cache_meta (
-		cache_key, item_count, generated_at, updated_at
-	) VALUES (?, ?, ?, ?)
-	ON CONFLICT(cache_key) DO UPDATE SET
-		item_count = excluded.item_count,
-		generated_at = excluded.generated_at,
-		updated_at = excluded.updated_at`, cacheKey, len(items), now, now); err != nil {
+	if _, err := tx.Exec(
+		repo.db.UpsertSQL(
+			"market_limit_momentum_cache_meta",
+			[]string{"cache_key", "item_count", "generated_at", "updated_at"},
+			[]string{"cache_key"},
+			[]string{"item_count", "generated_at", "updated_at"},
+		),
+		cacheKey, len(items), now, now,
+	); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	stmt, err := tx.Prepare(`INSERT INTO limit_up_momentum_cache (
+	stmt, err := tx.Prepare(`INSERT INTO market_limit_momentum_cache (
 		cache_key, rank, ts_code, trade_date, score, payload_json, generated_at, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
@@ -164,15 +166,15 @@ func (repo *Repository) ReplaceLimitUpMomentumCache(cacheKey string, items []Lim
 }
 
 func (repo *Repository) ClearLimitUpMomentumCache() error {
-	tx, err := repo.db.Begin()
+	tx, err := repo.db.Conn().Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM limit_up_momentum_cache`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM market_limit_momentum_cache`); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM limit_up_momentum_cache_meta`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM market_limit_momentum_cache_meta`); err != nil {
 		_ = tx.Rollback()
 		return err
 	}

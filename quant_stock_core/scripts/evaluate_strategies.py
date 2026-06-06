@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,10 +25,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.config.desktop_settings import load_strategy_settings
-from common.infra.db import write_transaction
+from common.infra.db import add_column, db_backend, replace_sql, table_columns, table_exists, write_transaction
 from common.utils import get_logger
 from research.data.storage import duckdb_query as dq
 from trading.backtest import BacktestConfig, CostModel, run as bt_run
+from trading.backtest.metrics import summary as metric_summary
 from trading.strategy import registry
 
 log = get_logger("evaluate_strategies")
@@ -43,7 +43,7 @@ def main() -> None:
     parser.add_argument("--benchmark", default="000905.SH")
     parser.add_argument("--slippage", type=float, default=0.002)
     parser.add_argument("--baseline", default="small_cap_quality")
-    parser.add_argument("--save", default=None, help="保存 run id；结果写入 SQLite strategy_evaluation 表")
+    parser.add_argument("--save", default=None, help="保存 run id；结果写入 SQLite eval_strategy_admission 表")
     parser.add_argument("--append-save", action="store_true", help="追加保存单个策略结果，不清空同 run_id 已有记录")
     parser.add_argument("--db-path", default=None, help="SQLite 路径，默认 DESKTOP_DB_PATH 或 DATA_ROOT/meta.db")
     parser.add_argument("--strategy-version-mode", choices=["active", "latest"], default="latest", help="策略参数版本：评估默认 latest，实盘推股默认 active")
@@ -79,8 +79,8 @@ def main() -> None:
     }
     if args.save:
         db_path = _resolve_db_path(args.db_path)
-        save_strategy_evaluation(db_path, args.save, payload, delete_existing=not args.append_save)
-        log.info(f"策略评估结果已保存到 SQLite: {db_path} run_id={args.save}")
+        save_eval_strategy_admission(db_path, args.save, payload, delete_existing=not args.append_save)
+        log.info(f"策略评估结果已保存到 {db_backend()}: {db_path} run_id={args.save}")
         if args.export_files:
             log.info("--export-files 已废弃：策略评估结果统一写入 SQLite，不再导出 JSON/CSV")
 
@@ -139,6 +139,7 @@ def evaluate(
             )
             result = bt_run(weights, cfg)
             row.update(result.summary)
+            row.update(_effective_period_metrics(result))
             row.update(_weight_exposure(result.weights))
             row.update(_return_stability(result.returns))
             returns_by_name[name] = result.returns
@@ -166,6 +167,30 @@ def evaluate(
     return rows
 
 
+def _effective_period_metrics(result) -> dict[str, Any]:
+    weights = result.weights
+    returns = result.returns
+    if weights.empty or returns.empty:
+        return {}
+    active_mask = weights.where(weights > 1e-8, 0.0).sum(axis=1) > 1e-8
+    if not active_mask.any():
+        return {}
+    active_start = str(active_mask[active_mask].index[0])
+    active_end = str(active_mask[active_mask].index[-1])
+    effective_returns = returns.loc[active_start:active_end]
+    effective_weights = weights.loc[active_start:active_end]
+    if effective_returns.empty:
+        return {}
+    full_summary = {f"full_{key}": value for key, value in result.summary.items()}
+    benchmark = result.benchmark.loc[effective_returns.index.intersection(result.benchmark.index)] if result.benchmark is not None else None
+    effective_summary = metric_summary(effective_returns, weights=effective_weights, benchmark=benchmark)
+    full_summary.update(effective_summary)
+    full_summary["effective_start"] = active_start
+    full_summary["effective_end"] = active_end
+    full_summary["effective_n_days"] = int(len(effective_returns))
+    return full_summary
+
+
 def _resolve_strategy_names(arg: str) -> list[str]:
     names = registry.all_names()
     if arg == "all":
@@ -184,6 +209,9 @@ def _weight_exposure(weights: pd.DataFrame) -> dict[str, float]:
     active = weights.where(weights > 1e-8, 0.0)
     if active.empty:
         return {"avg_holdings": 0.0, "avg_total_mv": 0.0, "avg_amount": 0.0}
+    active_days = active.sum(axis=1) > 1e-8
+    if active_days.any():
+        active = active.loc[active_days[active_days].index[0]:active_days[active_days].index[-1]]
     avg_holdings = float((active > 0).sum(axis=1).mean())
     long_rows = (
         active.stack()
@@ -258,6 +286,9 @@ def _return_stability(returns: pd.Series) -> dict[str, float | int]:
             "positive_3m_rate": 0.0,
         }
     series = returns.copy()
+    nonzero = series.abs() > 1e-12
+    if nonzero.any():
+        series = series.loc[nonzero[nonzero].index[0]:nonzero[nonzero].index[-1]]
     series.index = pd.to_datetime(series.index)
     monthly = (1.0 + series).resample("ME").prod() - 1.0
     monthly = monthly.dropna()
@@ -310,14 +341,17 @@ def _admission_decision(row: dict[str, Any], *, is_baseline: bool) -> dict[str, 
         "independence_score": 100.0 if is_baseline else 0.55 * _inverse_linear_score(corr, 0.45, 0.85)
         + 0.45 * _inverse_linear_score(overlap, 0.18, 0.48),
     }
+    # Strategy admission is the research funnel into walk-forward testing, not
+    # final live approval. Keep drawdown visible, but do not let a naked
+    # long-only stress test veto every potentially useful alpha sleeve.
     weights = {
-        "return_score": 0.20,
-        "drawdown_score": 0.18,
-        "risk_adjusted_score": 0.22,
+        "return_score": 0.30,
+        "drawdown_score": 0.05,
+        "risk_adjusted_score": 0.15,
         "cost_score": 0.12,
-        "capacity_score": 0.08,
-        "stability_score": 0.12,
-        "independence_score": 0.08,
+        "capacity_score": 0.06,
+        "stability_score": 0.20,
+        "independence_score": 0.12,
     }
     score = sum(components[key] * weight for key, weight in weights.items())
 
@@ -330,17 +364,17 @@ def _admission_decision(row: dict[str, Any], *, is_baseline: bool) -> dict[str, 
     if annual_return <= 0:
         reject_reasons.append("年化收益未转正")
     if max_drawdown < -0.28:
-        reject_reasons.append("最大回撤超过硬风控线")
+        caution_reasons.append("裸策略回撤超过实盘线")
     if sharpe < 0:
         reject_reasons.append("夏普为负")
 
-    if reject_reasons:
+    if annual_return <= 0 and sharpe < 0:
         admission = "暂不启用"
-    elif caution_reasons and score >= 68:
+    elif caution_reasons and score >= 55 and annual_return >= 0.06 and sharpe >= 0.25:
         admission = "限制启用"
-    elif caution_reasons and score >= 45:
+    elif caution_reasons and score >= 38 and annual_return > 0:
         admission = "继续观察"
-    elif caution_reasons:
+    elif reject_reasons:
         admission = "暂不启用"
     elif score >= 75:
         admission = "可启用"
@@ -443,7 +477,7 @@ def _resolve_db_path(value: str | None) -> Path:
     return (ROOT.parent / "data_store" / "meta.db").resolve()
 
 
-def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any], *, delete_existing: bool = True) -> None:
+def save_eval_strategy_admission(db_path: Path, run_id: str, payload: dict[str, Any], *, delete_existing: bool = True) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     generated_at = pd.Timestamp.now().isoformat()
     start = str(payload.get("start") or "")
@@ -452,9 +486,9 @@ def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]
     baseline = str(payload.get("baseline") or "")
     rows = list(payload.get("rows") or [])
     with write_transaction(db_path) as conn:
-        _ensure_strategy_evaluation_table(conn)
+        _ensure_eval_strategy_admission_table(conn)
         if delete_existing:
-            conn.execute("DELETE FROM strategy_evaluation WHERE run_id = ?", (run_id,))
+            conn.execute("DELETE FROM eval_strategy_admission WHERE run_id = ?", (run_id,))
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -465,6 +499,9 @@ def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]
                 "total_return", "annual_return", "annual_volatility", "sharpe", "max_drawdown",
                 "calmar", "win_rate", "n_days", "month_count", "monthly_win_rate", "worst_month_return",
                 "positive_3m_rate", "avg_turnover", "avg_holdings", "avg_total_mv", "avg_amount",
+                "effective_start", "effective_end", "effective_n_days",
+                "full_total_return", "full_annual_return", "full_annual_volatility", "full_sharpe",
+                "full_max_drawdown", "full_calmar", "full_win_rate", "full_n_days", "full_avg_turnover",
                 "overlap_with_baseline", "corr_with_baseline", "return_score", "drawdown_score",
                 "risk_adjusted_score", "cost_score", "capacity_score", "stability_score",
                 "independence_score", "strategy_version", "strategy_version_mode",
@@ -499,6 +536,18 @@ def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]
                 _float_or_none(row.get("avg_holdings")),
                 _float_or_none(row.get("avg_total_mv")),
                 _float_or_none(row.get("avg_amount")),
+                str(row.get("effective_start") or ""),
+                str(row.get("effective_end") or ""),
+                _int_or_none(row.get("effective_n_days")),
+                _float_or_none(row.get("full_total_return")),
+                _float_or_none(row.get("full_annual_return")),
+                _float_or_none(row.get("full_annual_volatility")),
+                _float_or_none(row.get("full_sharpe")),
+                _float_or_none(row.get("full_max_drawdown")),
+                _float_or_none(row.get("full_calmar")),
+                _float_or_none(row.get("full_win_rate")),
+                _int_or_none(row.get("full_n_days")),
+                _float_or_none(row.get("full_avg_turnover")),
                 _float_or_none(row.get("overlap_with_baseline")),
                 _float_or_none(row.get("corr_with_baseline")),
                 _float_or_none(row.get("return_score")),
@@ -516,84 +565,169 @@ def save_strategy_evaluation(db_path: Path, run_id: str, payload: dict[str, Any]
                 pd.Timestamp.now().isoformat(),
                 pd.Timestamp.now().isoformat(),
             ]
-            placeholders = ", ".join("?" for _ in columns)
             conn.execute(
-                f"INSERT OR REPLACE INTO strategy_evaluation ({', '.join(columns)}) VALUES ({placeholders})",
+                replace_sql("eval_strategy_admission", columns, ["run_id", "strategy"]),
                 values,
             )
 
 
-def _ensure_strategy_evaluation_table(conn: sqlite3.Connection) -> None:
-    existing = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'strategy_evaluation'"
-    ).fetchone()
-    if existing:
-        cols = {
-            str(row[1]).lower()
-            for row in conn.execute("PRAGMA table_info(strategy_evaluation)").fetchall()
-        }
+def _ensure_eval_strategy_admission_table(conn) -> None:
+    if table_exists(conn, "eval_strategy_admission"):
+        cols = table_columns(conn, "eval_strategy_admission")
         if "run_id" not in cols:
-            conn.execute("ALTER TABLE strategy_evaluation RENAME TO strategy_evaluation_legacy")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS strategy_evaluation (
-            run_id TEXT NOT NULL,
-            strategy TEXT NOT NULL,
-            label TEXT NOT NULL DEFAULT '',
-            enabled INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT '',
-            admission TEXT NOT NULL DEFAULT '',
-            admission_score REAL,
-            reason TEXT NOT NULL DEFAULT '',
-            start_date TEXT NOT NULL,
-            end_date TEXT NOT NULL,
-            benchmark TEXT NOT NULL DEFAULT '',
-            baseline TEXT NOT NULL DEFAULT '',
-            total_return REAL,
-            annual_return REAL,
-            annual_volatility REAL,
-            sharpe REAL,
-            max_drawdown REAL,
-            calmar REAL,
-            win_rate REAL,
-            n_days INTEGER,
-            month_count INTEGER,
-            monthly_win_rate REAL,
-            worst_month_return REAL,
-            positive_3m_rate REAL,
-            avg_turnover REAL,
-            avg_holdings REAL,
-            avg_total_mv REAL,
-            avg_amount REAL,
-            overlap_with_baseline REAL,
-            corr_with_baseline REAL,
-            return_score REAL,
-            drawdown_score REAL,
-            risk_adjusted_score REAL,
-            cost_score REAL,
-            capacity_score REAL,
-            stability_score REAL,
-            independence_score REAL,
-            strategy_version INTEGER,
-            strategy_version_mode TEXT,
-            error TEXT NOT NULL DEFAULT '',
-            generated_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY(run_id, strategy)
+            if conn.backend == "mysql":
+                conn.execute("RENAME TABLE eval_strategy_admission TO eval_strategy_admission_legacy")
+            else:
+                conn.execute("ALTER TABLE eval_strategy_admission RENAME TO eval_strategy_admission_legacy")
+    if conn.backend == "mysql":
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS eval_strategy_admission (
+                run_id VARCHAR(255) NOT NULL,
+                strategy VARCHAR(255) NOT NULL,
+                label VARCHAR(255) NOT NULL DEFAULT '',
+                enabled BIGINT NOT NULL DEFAULT 0,
+                status VARCHAR(255) NOT NULL DEFAULT '',
+                admission VARCHAR(255) NOT NULL DEFAULT '',
+                admission_score DOUBLE,
+                reason LONGTEXT NOT NULL,
+                start_date VARCHAR(64) NOT NULL,
+                end_date VARCHAR(64) NOT NULL,
+                benchmark VARCHAR(255) NOT NULL DEFAULT '',
+                baseline VARCHAR(255) NOT NULL DEFAULT '',
+                total_return DOUBLE,
+                annual_return DOUBLE,
+                annual_volatility DOUBLE,
+                sharpe DOUBLE,
+                max_drawdown DOUBLE,
+                calmar DOUBLE,
+                win_rate DOUBLE,
+                n_days BIGINT,
+                month_count BIGINT,
+                monthly_win_rate DOUBLE,
+                worst_month_return DOUBLE,
+                positive_3m_rate DOUBLE,
+                avg_turnover DOUBLE,
+                avg_holdings DOUBLE,
+                avg_total_mv DOUBLE,
+                avg_amount DOUBLE,
+                effective_start VARCHAR(64) NOT NULL DEFAULT '',
+                effective_end VARCHAR(64) NOT NULL DEFAULT '',
+                effective_n_days BIGINT,
+                full_total_return DOUBLE,
+                full_annual_return DOUBLE,
+                full_annual_volatility DOUBLE,
+                full_sharpe DOUBLE,
+                full_max_drawdown DOUBLE,
+                full_calmar DOUBLE,
+                full_win_rate DOUBLE,
+                full_n_days BIGINT,
+                full_avg_turnover DOUBLE,
+                overlap_with_baseline DOUBLE,
+                corr_with_baseline DOUBLE,
+                return_score DOUBLE,
+                drawdown_score DOUBLE,
+                risk_adjusted_score DOUBLE,
+                cost_score DOUBLE,
+                capacity_score DOUBLE,
+                stability_score DOUBLE,
+                independence_score DOUBLE,
+                strategy_version BIGINT,
+                strategy_version_mode VARCHAR(255),
+                error LONGTEXT NOT NULL,
+                generated_at VARCHAR(64) NOT NULL,
+                payload_json LONGTEXT NOT NULL,
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL,
+                PRIMARY KEY(run_id, strategy)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
         )
-        """
-    )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS eval_strategy_admission (
+                run_id TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT '',
+                admission TEXT NOT NULL DEFAULT '',
+                admission_score REAL,
+                reason TEXT NOT NULL DEFAULT '',
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                benchmark TEXT NOT NULL DEFAULT '',
+                baseline TEXT NOT NULL DEFAULT '',
+                total_return REAL,
+                annual_return REAL,
+                annual_volatility REAL,
+                sharpe REAL,
+                max_drawdown REAL,
+                calmar REAL,
+                win_rate REAL,
+                n_days INTEGER,
+                month_count INTEGER,
+                monthly_win_rate REAL,
+                worst_month_return REAL,
+                positive_3m_rate REAL,
+                avg_turnover REAL,
+                avg_holdings REAL,
+                avg_total_mv REAL,
+                avg_amount REAL,
+                effective_start TEXT NOT NULL DEFAULT '',
+                effective_end TEXT NOT NULL DEFAULT '',
+                effective_n_days INTEGER,
+                full_total_return REAL,
+                full_annual_return REAL,
+                full_annual_volatility REAL,
+                full_sharpe REAL,
+                full_max_drawdown REAL,
+                full_calmar REAL,
+                full_win_rate REAL,
+                full_n_days INTEGER,
+                full_avg_turnover REAL,
+                overlap_with_baseline REAL,
+                corr_with_baseline REAL,
+                return_score REAL,
+                drawdown_score REAL,
+                risk_adjusted_score REAL,
+                cost_score REAL,
+                capacity_score REAL,
+                stability_score REAL,
+                independence_score REAL,
+                strategy_version INTEGER,
+                strategy_version_mode TEXT,
+                error TEXT NOT NULL DEFAULT '',
+                generated_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(run_id, strategy)
+            )
+            """
+        )
     _ensure_columns(
         conn,
-        "strategy_evaluation",
+        "eval_strategy_admission",
         {
             "admission_score": "REAL",
             "month_count": "INTEGER",
             "monthly_win_rate": "REAL",
             "worst_month_return": "REAL",
             "positive_3m_rate": "REAL",
+            "effective_start": "TEXT NOT NULL DEFAULT ''",
+            "effective_end": "TEXT NOT NULL DEFAULT ''",
+            "effective_n_days": "INTEGER",
+            "full_total_return": "REAL",
+            "full_annual_return": "REAL",
+            "full_annual_volatility": "REAL",
+            "full_sharpe": "REAL",
+            "full_max_drawdown": "REAL",
+            "full_calmar": "REAL",
+            "full_win_rate": "REAL",
+            "full_n_days": "INTEGER",
+            "full_avg_turnover": "REAL",
             "return_score": "REAL",
             "drawdown_score": "REAL",
             "risk_adjusted_score": "REAL",
@@ -605,19 +739,16 @@ def _ensure_strategy_evaluation_table(conn: sqlite3.Connection) -> None:
             "strategy_version_mode": "TEXT",
         },
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_run ON strategy_evaluation(run_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_strategy ON strategy_evaluation(strategy)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_strategy_evaluation_admission ON strategy_evaluation(admission)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_strategy_admission_run ON eval_strategy_admission(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_strategy_admission_strategy ON eval_strategy_admission(strategy)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_strategy_admission_admission ON eval_strategy_admission(admission)")
 
 
-def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
-    existing = {
-        str(row[1]).lower()
-        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-    }
+def _ensure_columns(conn, table: str, columns: dict[str, str]) -> None:
+    existing = table_columns(conn, table)
     for name, ddl in columns.items():
         if name.lower() not in existing:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+            add_column(conn, table, name, ddl)
 
 
 def _float_or_none(value: Any) -> float | None:

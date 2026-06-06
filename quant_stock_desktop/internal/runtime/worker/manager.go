@@ -14,6 +14,8 @@ type StartRequest struct {
 	DataPath       string
 	DBPath         string
 	ConfigDBPath   string
+	DBBackend      string
+	DBDSN          string
 	TaskID         string
 	RunID          string
 	LogPath        string
@@ -75,6 +77,12 @@ func (manager *Manager) Start(req StartRequest) (ProcessInfo, error) {
 	}
 	if req.ConfigDBPath != "" {
 		cmd.Env = append(cmd.Env, "DESKTOP_CONFIG_DB_PATH="+req.ConfigDBPath)
+	}
+	if req.DBBackend != "" {
+		cmd.Env = append(cmd.Env, "DESKTOP_DB_BACKEND="+req.DBBackend)
+	}
+	if req.DBDSN != "" {
+		cmd.Env = append(cmd.Env, "DESKTOP_DB_DSN="+req.DBDSN)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {

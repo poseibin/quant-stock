@@ -20,9 +20,13 @@ _DISCOVERED = False
 
 ACTIVE_UNIVERSE = [
     "market_regime_timing",
+    "ml_factor_ranker",
     "multi_factor_composite",
+    "momentum_quality_guard",
+    "quality_growth_cooldown",
     "small_cap_quality",
     "trend_pullback",
+    "turtle_breakout",
     "dividend_quality",
     "earnings_revision",
     "industry_prosperity",
@@ -71,9 +75,9 @@ def _discover() -> None:
 def all_names() -> list[str]:
     """返回所有已注册的策略名。"""
     _discover()
-    if all(name in _REGISTRY for name in ACTIVE_UNIVERSE):
-        return list(ACTIVE_UNIVERSE)
-    return list(_REGISTRY.keys())
+    names = [name for name in ACTIVE_UNIVERSE if name in _REGISTRY]
+    names.extend(sorted(name for name in _REGISTRY if name not in set(names)))
+    return names
 
 
 def get_factory(name: str) -> Callable:

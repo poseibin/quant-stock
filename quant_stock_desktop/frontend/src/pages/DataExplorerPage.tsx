@@ -4,6 +4,7 @@ import {
   scanMarketDataFiles,
   runDataUpdate,
   getDataUpdateStatus,
+  emptyRunStatus,
   listDatasetUpdateStatus,
   type MarketDataFile,
   type RunStatus,
@@ -90,24 +91,24 @@ export function DataExplorerPage() {
   const handleUpdate = useCallback(async () => {
     try {
       await runDataUpdate({ phase, start_date: '' })
-      setUpdateStatus({ task: 'data_update', state: 'running', idx: 0, total: 0, stage: '', name: '', message: '正在启动...', started_at: '', updated_at: '', finished_at: '' })
+      setUpdateStatus(emptyRunStatus('data_update', { state: 'running', message: '正在启动...' }))
       setDatasetStatuses((prev) => markPhaseDatasetsRunning(prev, phase))
       startPoll()
     } catch (error) {
       console.error('[data] start update failed', error)
-      setUpdateStatus({ task: 'data_update', state: 'error', idx: 0, total: 0, stage: '', name: '', message: error instanceof Error ? error.message : '启动失败', started_at: '', updated_at: '', finished_at: '' })
+      setUpdateStatus(emptyRunStatus('data_update', { state: 'error', message: error instanceof Error ? error.message : '启动失败' }))
     }
   }, [phase, startPoll])
 
   const handleUpdateDataset = useCallback(async (dataset: string) => {
     try {
       await runDataUpdate({ phase: 'all', start_date: '', dataset })
-      setUpdateStatus({ task: 'data_update', state: 'running', idx: 0, total: 1, stage: '', name: dataset, message: '正在启动...', started_at: '', updated_at: '', finished_at: '' })
+      setUpdateStatus(emptyRunStatus('data_update', { state: 'running', total: 1, name: dataset, message: '正在启动...' }))
       setDatasetStatuses((prev) => upsertDatasetStatus(prev, dataset, 'running'))
       startPoll()
     } catch (error) {
       console.error('[data] start dataset update failed', error)
-      setUpdateStatus({ task: 'data_update', state: 'error', idx: 0, total: 0, stage: '', name: dataset, message: error instanceof Error ? error.message : '启动失败', started_at: '', updated_at: '', finished_at: '' })
+      setUpdateStatus(emptyRunStatus('data_update', { state: 'error', name: dataset, message: error instanceof Error ? error.message : '启动失败' }))
     }
   }, [startPoll])
 

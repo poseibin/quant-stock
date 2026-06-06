@@ -3,8 +3,8 @@
 行为：
   1. 拿全局 py 进程锁（同一时刻只能一个）
   2. 调 signal.generate 重新计算目标持仓与调仓清单
-  3. signal.generate 自动写入 daily_recommendation
-  4. 刷新 pool_summary 估值
+  3. signal.generate 自动写入 rec_daily_recommendations
+  4. 刷新 portfolio_pool_summary 估值
   5. 输出 JSON / 文本报告 / 可选推送与模拟盘记录
 
 参数：

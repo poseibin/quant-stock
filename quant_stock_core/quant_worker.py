@@ -3,6 +3,7 @@
 Usage (mirrors original python invocations):
   quant_worker scripts/daily_signal.py [args...]
   quant_worker scripts/data_update_worker.py [args...]
+  quant_worker scripts/scan_market_files.py [args...]
   quant_worker scripts/limit_breakout_worker.py [args...]
   quant_worker scripts/limit_up_momentum_worker.py [args...]
   quant_worker scripts/evaluate_strategies.py [args...]
@@ -37,6 +38,7 @@ def main() -> None:
     script_map = {
         "scripts/daily_signal.py": "scripts.daily_signal",
         "scripts/data_update_worker.py": "scripts.data_update_worker",
+        "scripts/scan_market_files.py": "scripts.scan_market_files",
         "scripts/limit_breakout_worker.py": "scripts.limit_breakout_worker",
         "scripts/limit_up_momentum_worker.py": "scripts.limit_up_momentum_worker",
         "scripts/evaluate_strategies.py": "scripts.evaluate_strategies",

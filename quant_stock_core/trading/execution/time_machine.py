@@ -7,8 +7,8 @@
 
 输入：start_date, end_date, initial_cash
 输出：
-  - SQLite time_machine_snapshots / time_machine_trades / time_machine_positions
-  - 函数返回 summary / snapshots / trades，桌面端统一从 SQLite 读取
+  - portfolio_tm_snapshots / portfolio_tm_trades / portfolio_tm_positions
+  - 函数返回 summary / snapshots / trades，桌面端统一从配置数据库读取
 
 用法：
     from trading.execution.time_machine import run_time_machine
@@ -25,7 +25,7 @@ import pandas as pd
 
 from common.config import BACKTEST_DIR, RAW_DIR
 from common.config.desktop_settings import load_exit_rules
-from common.infra.db import write_transaction
+from common.infra.db import insert_ignore_sql, upsert_sql, write_transaction
 from research.data.storage import duckdb_query as dq
 from trading.execution import position_pool as pp
 from trading.execution import signal as sig_mod
@@ -75,7 +75,7 @@ def _progress_pct(fields: dict) -> float:
     return max(0.0, min(1.0, pct))
 
 
-def _sync_task_to_sqlite(run_id: str, fields: dict) -> None:
+def _sync_task_to_db(run_id: str, fields: dict) -> None:
     db_path = _desktop_db_path()
     if not db_path:
         return
@@ -93,7 +93,7 @@ def _sync_task_to_sqlite(run_id: str, fields: dict) -> None:
     try:
         with write_transaction(db_path) as conn:
             row = conn.execute(
-                "SELECT id, summary_json FROM evaluation_tasks WHERE external_run_id = ?",
+                "SELECT id, summary_json FROM task_jobs WHERE external_run_id = ?",
                 (run_id,),
             ).fetchone()
             if not row:
@@ -107,7 +107,7 @@ def _sync_task_to_sqlite(run_id: str, fields: dict) -> None:
             existing_summary.update({k: v for k, v in summary.items() if v is not None})
             finished_at = now if status in {"done", "failed", "cancelled", "interrupted"} else None
             conn.execute(
-                """UPDATE evaluation_tasks
+                """UPDATE task_jobs
                    SET status = ?, progress = ?, summary_json = ?, error_message = ?,
                        finished_at = COALESCE(?, finished_at), updated_at = ?
                    WHERE external_run_id = ?""",
@@ -122,30 +122,30 @@ def _sync_task_to_sqlite(run_id: str, fields: dict) -> None:
                 ),
             )
     except Exception as e:  # pragma: no cover
-        log.warning(f"同步评估任务到 SQLite 失败 {run_id}：{e}")
+        log.warning(f"同步评估任务到数据库失败 {run_id}：{e}")
 
 
-def _persist_snapshot_sqlite(run_id: str, row: dict) -> None:
+def _persist_snapshot_db(run_id: str, row: dict) -> None:
     db_path = _desktop_db_path()
     if not db_path:
         return
     now = datetime.now().isoformat()
     try:
         with write_transaction(db_path) as conn:
+            columns = [
+                "run_id", "trade_date", "cash", "market_value", "equity", "n_holdings",
+                "unrealized_pnl", "realized_pnl", "cum_return", "created_at", "updated_at",
+            ]
             conn.execute(
-                """INSERT INTO time_machine_snapshots (
-                       run_id, trade_date, cash, market_value, equity, n_holdings,
-                       unrealized_pnl, realized_pnl, cum_return, created_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(run_id, trade_date) DO UPDATE SET
-                       cash = excluded.cash,
-                       market_value = excluded.market_value,
-                       equity = excluded.equity,
-                       n_holdings = excluded.n_holdings,
-                       unrealized_pnl = excluded.unrealized_pnl,
-                       realized_pnl = excluded.realized_pnl,
-                       cum_return = excluded.cum_return,
-                       updated_at = excluded.updated_at""",
+                upsert_sql(
+                    "portfolio_tm_snapshots",
+                    columns,
+                    ["run_id", "trade_date"],
+                    [
+                        "cash", "market_value", "equity", "n_holdings",
+                        "unrealized_pnl", "realized_pnl", "cum_return", "updated_at",
+                    ],
+                ),
                 (
                     run_id,
                     str(row.get("date") or ""),
@@ -161,10 +161,10 @@ def _persist_snapshot_sqlite(run_id: str, row: dict) -> None:
                 ),
             )
     except Exception as e:  # pragma: no cover
-        log.warning(f"写入时光机快照到 SQLite 失败 {run_id}：{e}")
+        log.warning(f"写入时光机快照到数据库失败 {run_id}：{e}")
 
 
-def _persist_trades_sqlite(run_id: str, date: str, trades: list[dict]) -> None:
+def _persist_trades_db(run_id: str, date: str, trades: list[dict]) -> None:
     db_path = _desktop_db_path()
     if not db_path or not trades:
         return
@@ -190,17 +190,20 @@ def _persist_trades_sqlite(run_id: str, date: str, trades: list[dict]) -> None:
                     now,
                 ))
             conn.executemany(
-                """INSERT OR IGNORE INTO time_machine_trades (
-                       run_id, trade_date, ts_code, name, action, shares, price, amount,
-                       hold_days, realized_pnl, exit_reason, exec_date, is_new, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                insert_ignore_sql(
+                    "portfolio_tm_trades",
+                    [
+                        "run_id", "trade_date", "ts_code", "name", "action", "shares", "price", "amount",
+                        "hold_days", "realized_pnl", "exit_reason", "exec_date", "is_new", "created_at",
+                    ],
+                ),
                 rows,
             )
     except Exception as e:  # pragma: no cover
-        log.warning(f"写入时光机成交流水到 SQLite 失败 {run_id}：{e}")
+        log.warning(f"写入时光机成交流水到数据库失败 {run_id}：{e}")
 
 
-def _persist_positions_sqlite(run_id: str, date: str, positions: list[dict]) -> None:
+def _persist_positions_db(run_id: str, date: str, positions: list[dict]) -> None:
     db_path = _desktop_db_path()
     if not db_path:
         return
@@ -208,7 +211,7 @@ def _persist_positions_sqlite(run_id: str, date: str, positions: list[dict]) -> 
     try:
         with write_transaction(db_path) as conn:
             conn.execute(
-                "DELETE FROM time_machine_positions WHERE run_id = ? AND trade_date = ?",
+                "DELETE FROM portfolio_tm_positions WHERE run_id = ? AND trade_date = ?",
                 (run_id, str(date)),
             )
             rows = []
@@ -232,7 +235,7 @@ def _persist_positions_sqlite(run_id: str, date: str, positions: list[dict]) -> 
                     now,
                 ))
             conn.executemany(
-                """INSERT INTO time_machine_positions (
+                """INSERT INTO portfolio_tm_positions (
                        run_id, trade_date, ts_code, name, shares, avg_cost, price,
                        market_value, unrealized_pnl, unrealized_pct, today_pnl,
                        today_pct, weight, hold_days, created_at, updated_at
@@ -240,13 +243,13 @@ def _persist_positions_sqlite(run_id: str, date: str, positions: list[dict]) -> 
                 rows,
             )
     except Exception as e:  # pragma: no cover
-        log.warning(f"写入时光机持仓快照到 SQLite 失败 {run_id}：{e}")
+        log.warning(f"写入时光机持仓快照到数据库失败 {run_id}：{e}")
 
 
 def _collect_strategy_meta(strategies_filter: list[str] | None) -> list[dict]:
     """收集本次回测实际使用的策略明细：名字 / 中文标签 / 权重。
 
-    与 combiner.load_all 的选择口径一致：SQLite 配置中 enabled=true 且已注册的策略；
+    与 combiner.load_all 的选择口径一致：配置数据库中 enabled=true 且已注册的策略；
     若给定 strategies_filter 则进一步过滤。
     """
     from trading.strategy.base import StrategyConfig
@@ -260,7 +263,7 @@ def _collect_strategy_meta(strategies_filter: list[str] | None) -> list[dict]:
             cfg = StrategyConfig.from_yaml(name)
         except Exception:
             continue
-        # 显式勾选的策略即便 SQLite 配置 enabled=false 也算参与本次评估
+        # 显式勾选的策略即便配置数据库中 enabled=false 也算参与本次评估
         forced = flt is not None and name in flt
         if not forced and not cfg.enabled:
             continue
@@ -307,7 +310,7 @@ def write_status(run_id: str, **fields) -> None:
         tmp = p.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(cur, ensure_ascii=False, default=float), encoding="utf-8")
         tmp.replace(p)  # 原子替换，避免读到半截
-        _sync_task_to_sqlite(run_id, cur)
+        _sync_task_to_db(run_id, cur)
     except Exception as e:  # pragma: no cover
         log.warning(f"写入评估状态失败 {run_id}：{e}")
 
@@ -661,11 +664,11 @@ def run_time_machine(
         )
         if not progress_cb:
             if stage == "day_done" and today_trades:
-                _persist_trades_sqlite(run_id, cur_d, today_trades)
+                _persist_trades_db(run_id, cur_d, today_trades)
             return
         live = _live_state(cur_d, today_trades)
         if stage == "day_done" and today_trades:
-            _persist_trades_sqlite(run_id, cur_d, today_trades)
+            _persist_trades_db(run_id, cur_d, today_trades)
         progress_cb(i, len(cal), cur_d, stage, eta, live)
 
     def _record_snap(pool_obj: dict, d: str, prices: dict[str, float]):
@@ -695,10 +698,10 @@ def run_time_machine(
             "cum_return": total_pnl / pool_obj["initial_cash"] if pool_obj["initial_cash"] > 0 else 0.0,
         }
         snapshots_buf.append(snap_row)
-        _persist_snapshot_sqlite(run_id, snap_row)
+        _persist_snapshot_db(run_id, snap_row)
         try:
             pnl_view = pp.compute_pnl(pool_obj, last_prices, last_prev_closes, as_of_date=d)
-            _persist_positions_sqlite(run_id, d, pnl_view.get("positions") or [])
+            _persist_positions_db(run_id, d, pnl_view.get("positions") or [])
         except Exception:
             rows = []
             for p in pool_obj["positions"]:
@@ -718,7 +721,7 @@ def run_time_machine(
                     "weight": market / equity if equity > 0 else 0,
                     "hold_days": 0,
                 })
-            _persist_positions_sqlite(run_id, d, rows)
+            _persist_positions_db(run_id, d, rows)
 
     def _enrich_trades(trades_to_enrich: list[dict], pool_after: dict,
                        prev_pool_map: dict | None, d: str) -> list[dict]:
@@ -1127,15 +1130,15 @@ def _summarize(snaps: pd.DataFrame, initial_cash: float, final_pool: dict,
 # ──────────────────────────────────── 列出历史 ────────────────────────────────────
 
 def list_runs() -> list[dict]:
-    """历史结果不再扫描 summary.json；桌面端从 SQLite 查询。"""
+    """历史结果不再扫描 summary.json；桌面端从配置数据库查询。"""
     return []
 
 
 def list_ledger() -> list[dict]:
-    """历史台账不再写 index.jsonl；桌面端从 SQLite 查询。"""
+    """历史台账不再写 index.jsonl；桌面端从配置数据库查询。"""
     return []
 
 
 def load_run(run_id: str) -> dict | None:
-    """不再从结果目录加载 summary.json；桌面端从 SQLite 查询。"""
+    """不再从结果目录加载 summary.json；桌面端从配置数据库查询。"""
     return None

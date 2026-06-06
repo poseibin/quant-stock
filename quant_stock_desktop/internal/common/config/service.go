@@ -6,11 +6,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"quant_stock_desktop/internal/common/database"
 )
 
 type Service struct {
-	db *sql.DB
+	db *database.DB
 }
 
 func NewService() *Service {
@@ -18,12 +21,17 @@ func NewService() *Service {
 }
 
 func (service *Service) WithDB(db *sql.DB) *Service {
+	service.db = database.Wrap(db, database.BackendSQLite)
+	return service
+}
+
+func (service *Service) WithDatabase(db *database.DB) *Service {
 	service.db = db
 	return service
 }
 
 func DefaultSettings(homeDir string) Settings {
-	return normalize(Settings{
+	return normalize(applyPackagedDatabaseConfig(Settings{
 		DataPath:             defaultDataPathForHome(homeDir),
 		DefaultInitialCash:   500000,
 		DefaultRebalanceFreq: 5,
@@ -33,7 +41,7 @@ func DefaultSettings(homeDir string) Settings {
 		PortfolioRisk:        defaultPortfolioRisk(),
 		ExitRules:            defaultExitRules(),
 		GovernanceRules:      defaultGovernanceRules(),
-	})
+	}))
 }
 
 func (service *Service) Load(defaults Settings) (Settings, error) {
@@ -55,6 +63,7 @@ func (service *Service) Load(defaults Settings) (Settings, error) {
 
 func (service *Service) Save(settings Settings) error {
 	settings = normalize(settings)
+	settings = applyPackagedDatabaseConfig(settings)
 	if err := os.MkdirAll(settings.DataPath, 0o755); err != nil {
 		return err
 	}
@@ -65,7 +74,7 @@ func (service *Service) Save(settings Settings) error {
 }
 
 func (service *Service) loadFromDB(defaults Settings) (Settings, error) {
-	row := service.db.QueryRow(`SELECT value FROM app_settings WHERE key = ?`, "settings")
+	row := service.db.Conn().QueryRow("SELECT value FROM cfg_app_settings WHERE `key` = ?", "settings")
 	var value string
 	if err := row.Scan(&value); err != nil {
 		return Settings{}, err
@@ -83,7 +92,7 @@ func (service *Service) saveToDB(settings Settings) error {
 	if err != nil {
 		return err
 	}
-	tx, err := service.db.Begin()
+	tx, err := service.db.Conn().Begin()
 	if err != nil {
 		return err
 	}
@@ -92,9 +101,10 @@ func (service *Service) saveToDB(settings Settings) error {
 			_ = tx.Rollback()
 		}
 	}()
-	_, err = tx.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-		"settings", string(data), time.Now().Format("2006-01-02T15:04:05"))
+	_, err = tx.Exec(
+		service.db.UpsertSQL("cfg_app_settings", []string{"key", "value", "updated_at"}, []string{"key"}, []string{"value", "updated_at"}),
+		"settings", string(data), time.Now().Format("2006-01-02T15:04:05"),
+	)
 	if err != nil {
 		return err
 	}
@@ -110,10 +120,10 @@ func (service *Service) ensureStrategyVersions(settings Settings, source string,
 		return nil
 	}
 	var count int
-	if err := service.db.QueryRow(`SELECT COUNT(*) FROM strategy_settings_versions`).Scan(&count); err == nil && count > 0 {
+	if err := service.db.Conn().QueryRow(`SELECT COUNT(*) FROM strategy_config_versions`).Scan(&count); err == nil && count > 0 {
 		return nil
 	}
-	tx, err := service.db.Begin()
+	tx, err := service.db.Conn().Begin()
 	if err != nil {
 		return err
 	}
@@ -133,7 +143,7 @@ func (service *Service) saveStrategyVersions(tx *sql.Tx, settings Settings, sour
 		}
 		var latestVersion int
 		var latestConfig string
-		row := tx.QueryRow(`SELECT version, config_json FROM strategy_settings_versions WHERE strategy = ? ORDER BY version DESC LIMIT 1`, name)
+		row := tx.QueryRow(`SELECT version, config_json FROM strategy_config_versions WHERE strategy = ? ORDER BY version DESC LIMIT 1`, name)
 		scanErr := row.Scan(&latestVersion, &latestConfig)
 		switch {
 		case scanErr == nil && latestConfig == string(configJSON):
@@ -148,10 +158,10 @@ func (service *Service) saveStrategyVersions(tx *sql.Tx, settings Settings, sour
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			version = 1
 		}
-		if _, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 0 WHERE strategy = ?`, name); err != nil {
+		if _, err := tx.Exec(`UPDATE strategy_config_versions SET is_active = 0 WHERE strategy = ?`, name); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO strategy_settings_versions(
+		if _, err := tx.Exec(`INSERT INTO strategy_config_versions(
 			strategy, version, label, config_json, is_active, promotion_status, validation_json, source, note, created_at, activated_at
 		) VALUES (?, ?, ?, ?, 1, 'active', '{}', ?, ?, ?, ?)`,
 			name, version, strategy.Label, string(configJSON), source, note, now, now); err != nil {
@@ -162,10 +172,10 @@ func (service *Service) saveStrategyVersions(tx *sql.Tx, settings Settings, sour
 }
 
 func activateStrategyVersion(tx *sql.Tx, strategy string, version int, activatedAt string) error {
-	if _, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 0 WHERE strategy = ?`, strategy); err != nil {
+	if _, err := tx.Exec(`UPDATE strategy_config_versions SET is_active = 0 WHERE strategy = ?`, strategy); err != nil {
 		return err
 	}
-	_, err := tx.Exec(`UPDATE strategy_settings_versions SET is_active = 1, promotion_status = 'active', activated_at = ? WHERE strategy = ? AND version = ?`, activatedAt, strategy, version)
+	_, err := tx.Exec(`UPDATE strategy_config_versions SET is_active = 1, promotion_status = 'active', activated_at = ? WHERE strategy = ? AND version = ?`, activatedAt, strategy, version)
 	return err
 }
 
@@ -173,7 +183,7 @@ func (service *Service) applyActiveStrategyVersions(settings Settings) Settings 
 	if service.db == nil {
 		return settings
 	}
-	rows, err := service.db.Query(`SELECT strategy, config_json FROM strategy_settings_versions WHERE is_active = 1`)
+	rows, err := service.db.Conn().Query(`SELECT strategy, config_json FROM strategy_config_versions WHERE is_active = 1`)
 	if err != nil {
 		return settings
 	}
@@ -210,7 +220,17 @@ func (service *Service) Validate(settings Settings) []ValidationIssue {
 	}
 
 	settings = normalize(settings)
+	settings = applyPackagedDatabaseConfig(settings)
 	checkDir("data_path", settings.DataPath)
+	switch settings.DatabaseBackend {
+	case "sqlite":
+	case "mysql":
+		if strings.TrimSpace(settings.MySQLDSN) == "" {
+			issues = append(issues, ValidationIssue{Field: "mysql_dsn", Message: "MySQL DSN 不能为空"})
+		}
+	default:
+		issues = append(issues, ValidationIssue{Field: "database_backend", Message: "数据库类型必须是 sqlite 或 mysql"})
+	}
 
 	if settings.DefaultInitialCash <= 0 {
 		issues = append(issues, ValidationIssue{Field: "default_initial_cash", Message: "默认资金必须大于 0"})
@@ -240,6 +260,12 @@ func normalize(settings Settings) Settings {
 	if settings.DataPath == "" {
 		settings.DataPath = defaultDataPath()
 	}
+	settings.DatabaseBackend = strings.ToLower(strings.TrimSpace(settings.DatabaseBackend))
+	if settings.DatabaseBackend == "" {
+		settings.DatabaseBackend = "sqlite"
+	}
+	settings.MySQLDSN = strings.TrimSpace(settings.MySQLDSN)
+	settings = applyPackagedDatabaseConfig(settings)
 	if settings.DefaultInitialCash == 0 {
 		settings.DefaultInitialCash = 500000
 	}
@@ -261,6 +287,10 @@ func normalize(settings Settings) Settings {
 	}
 	settings.GovernanceRules = mergeAnyMap(defaultGovernanceRules(), settings.GovernanceRules)
 	return settings
+}
+
+func NormalizeForCompare(settings Settings) Settings {
+	return normalize(settings)
 }
 
 func defaultDataPath() string {
@@ -394,7 +424,7 @@ func defaultGovernanceRules() map[string]any {
 		"max_turnover":                  0.45,
 		"min_stability_rate":            0.45,
 		"min_walk_forward_pass_rate":    0.50,
-		"min_walk_forward_windows":      1,
+		"min_eval_walk_forward_windows": 1,
 		"min_parameter_stable_rate":     0.50,
 		"require_positive_return":       true,
 		"allow_missing_parameter_tests": true,
@@ -407,6 +437,24 @@ func defaultStrategies() map[string]StrategySettings {
 			Label: "市场状态择时", Enabled: true, Weight: 0.10, Rebalance: "weekly",
 			Filters:  map[string]any{"market_regime": map[string]any{"trend_window": 60, "breadth_window": 20, "min_breadth": 0.45, "normal_exposure": 1.0, "weak_exposure": 0.50, "bear_exposure": 0.25}},
 			Position: map[string]any{"n_holdings": 25, "max_single_weight": 0.05},
+		},
+		"ml_factor_ranker": {
+			Label:     "机器学习因子",
+			Enabled:   false,
+			Weight:    0.10,
+			Rebalance: "monthly",
+			Universe:  map[string]any{"exclude_bj": true, "min_total_mv": 2000000000, "max_total_mv": 120000000000, "min_amount": 30000000},
+			Filters: map[string]any{
+				"exclude_st":     true,
+				"max_day_return": 0.095,
+				"market_regime": map[string]any{
+					"continuous": false, "trend_window": 60, "breadth_window": 20,
+					"drawdown_window": 120, "volatility_window": 20,
+					"min_breadth": 0.45, "normal_exposure": 1.0, "weak_exposure": 0.45, "bear_exposure": 0.25,
+				},
+			},
+			Selection: map[string]any{"run_id": "fr_full_105_2010_2025_20260606", "min_pred_rank": 0.96},
+			Position:  map[string]any{"n_holdings": 30, "max_single_weight": 0.04, "max_industry_weight": 0.15},
 		},
 		"multi_factor_composite": {
 			Label: "多因子综合", Enabled: true, Weight: 0.18, Rebalance: "monthly",
@@ -432,6 +480,12 @@ func defaultStrategies() map[string]StrategySettings {
 				"score_weights": map[string]any{"trend": 0.38, "breakout": 0.17, "liquidity": 0.15, "low_vol": 0.15, "quality": 0.15},
 			},
 			Position: map[string]any{"n_holdings": 18, "max_single_weight": 0.05, "max_industry_weight": 0.30},
+		},
+		"turtle_breakout": {
+			Label: "海龟突破", Enabled: true, Weight: 0.08, Rebalance: "daily",
+			Universe: map[string]any{"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 50000000, "min_total_mv": 2000000000, "max_total_mv": 120000000000, "max_20d_return": 0.45, "max_amount_spike": 5.0},
+			Filters:  map[string]any{"entry_window": 55, "exit_window": 20, "atr_window": 20, "trend_window": 120},
+			Position: map[string]any{"n_holdings": 20, "max_units": 4, "risk_per_unit": 0.006, "max_unit_weight": 0.02, "max_single_weight": 0.06, "max_total_exposure": 1.0, "add_atr_step": 0.5, "stop_atr": 2.0},
 		},
 		"dividend_quality": {
 			Label: "红利质量", Enabled: true, Weight: 0.10, Rebalance: "monthly",
@@ -481,14 +535,6 @@ func defaultStrategies() map[string]StrategySettings {
 			Filters:  map[string]any{"min_yoy_profit": 0.0, "max_60d_return": 0.25},
 			Position: map[string]any{"n_holdings": 10, "max_single_weight": 0.06},
 		},
-		"reversal": {
-			Label: "业绩反转", Enabled: true, Weight: 0.25, Rebalance: "quarterly",
-			Filters: map[string]any{
-				"exclude_st": true, "universe_profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 20000000, "max_total_mv": 80000000000, "max_20d_return": 0.35, "min_yoy_revenue": 0.0, "min_quarter_profit_yoy": 0.30,
-				"last_year_negative_or_decline": 0.50, "min_cfo_to_ni_ratio": 0.50, "industry_60d_return_min": 0.0,
-			},
-			Position: map[string]any{"n_holdings": 15, "max_single_weight": 0.08, "max_industry_weight": 0.30},
-		},
 		"insider_buy": {
 			Label: "高管增持", Enabled: true, Weight: 0.20, Rebalance: "event",
 			Filters: map[string]any{
@@ -497,22 +543,10 @@ func defaultStrategies() map[string]StrategySettings {
 			},
 			Position: map[string]any{"max_single_weight": 0.05, "stop_loss": -0.15},
 		},
-		"beijing_se": {
-			Label: "北交所", Enabled: false, Weight: 0.15, Rebalance: "monthly",
-			Universe: map[string]any{"market": "BJ", "min_avg_amount": 5000000},
-			Filters:  map[string]any{"min_yoy_profit": 0.0, "max_60d_return": 0.30},
-			Position: map[string]any{"n_holdings": 12, "max_single_weight": 0.08},
-		},
 		"lhb_follow": {
 			Label: "龙虎榜", Enabled: true, Weight: 0.10, Rebalance: "event",
 			Filters:  map[string]any{"min_inst_net_buy": 50000000, "exclude_limit_up": true, "max_5d_return": 0.15, "holding_days": 7},
 			Position: map[string]any{"max_single_weight": 0.04, "stop_loss_break_5d_low": true},
-		},
-		"industry_rotation": {
-			Label: "行业轮动", Enabled: true, Weight: 0.15, Rebalance: "monthly",
-			Universe:  map[string]any{"profile": "retail_edge", "min_listed_days": 250, "min_avg_amount": 30000000, "max_total_mv": 120000000000, "max_20d_return": 0.35, "max_amount_spike": 5.0},
-			Selection: map[string]any{"top_n_industries": 4, "momentum_window": 20, "rank_within_industry": []any{3, 10}, "stocks_per_industry": 3, "min_industry_size": 5},
-			Position:  map[string]any{"n_holdings": 12, "max_single_weight": 0.05},
 		},
 		"trend_quality": {
 			Label: "趋势质量", Enabled: false, Weight: 0.12, Rebalance: "monthly",
@@ -523,25 +557,6 @@ func defaultStrategies() map[string]StrategySettings {
 				"score_weights": map[string]any{"trend": 0.45, "breakout": 0.20, "liquidity": 0.15, "low_vol": 0.10, "quality": 0.10},
 			},
 			Position: map[string]any{"n_holdings": 18, "max_single_weight": 0.05, "max_industry_weight": 0.30},
-		},
-		"dividend_low_vol": {
-			Label: "低波红利", Enabled: false, Weight: 0.10, Rebalance: "monthly",
-			Universe: map[string]any{"profile": "retail_edge", "min_listed_days": 730, "min_avg_amount": 30000000, "avg_amount_window": 20, "min_total_mv": 5000000000, "max_total_mv": 120000000000, "max_20d_return": 0.30, "max_amount_spike": 5.0},
-			Filters: map[string]any{
-				"exclude_st": true, "min_total_mv": 8000000000, "min_dv_ttm": 2.0, "max_pb": 3.0,
-				"vol_window": 60, "min_roe": 0.07, "max_debt_ratio": 0.70,
-				"score_weights": map[string]any{"dividend": 0.40, "low_vol": 0.25, "low_pb": 0.15, "quality": 0.15, "liquidity": 0.05},
-			},
-			Position: map[string]any{"n_holdings": 20, "max_single_weight": 0.05, "max_industry_weight": 0.25},
-		},
-		"forecast_revision": {
-			Label: "业绩预告", Enabled: false, Weight: 0.10, Rebalance: "event",
-			Filters: map[string]any{
-				"min_profit_growth": 30.0, "min_turnaround_profit": 20000000,
-				"max_post_ann_return": 0.18, "max_pe_ttm": 80.0, "max_pb": 8.0, "min_total_mv": 2000000000, "max_total_mv": 80000000000,
-				"min_avg_amount": 20000000, "lookback_days": 20, "holding_days": 40,
-			},
-			Position: map[string]any{"max_single_weight": 0.04, "max_active_events": 20},
 		},
 		"garp_quality": {
 			Label: "质量成长", Enabled: false, Weight: 0.12, Rebalance: "monthly",

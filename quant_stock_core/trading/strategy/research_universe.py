@@ -151,7 +151,23 @@ def _feature_frame(date: str, cfg: StrategyConfig, *, bj_only: bool = False) -> 
     fi = _latest_by_ann(
         "fina_indicator",
         date,
-        ["roe", "q_roe", "grossprofit_margin", "netprofit_yoy", "or_yoy", "debt_to_assets", "ocf_yoy"],
+        [
+            "roe",
+            "roe_dt",
+            "q_roe",
+            "roic",
+            "grossprofit_margin",
+            "netprofit_margin",
+            "netprofit_yoy",
+            "or_yoy",
+            "tr_yoy",
+            "q_sales_yoy",
+            "q_op_qoq",
+            "q_ocf_to_sales",
+            "ocfps",
+            "debt_to_assets",
+            "ocf_yoy",
+        ],
     )
     if not fi.empty:
         out = out.merge(fi.drop(columns=["ann_date"], errors="ignore"), on="ts_code", how="left")
@@ -270,12 +286,26 @@ def _weights_from_scores(df: pd.DataFrame, date: str, cfg: StrategyConfig, score
     return pd.DataFrame([dict(zip(ranked["ts_code"].astype(str), raw.astype(float)))], index=[date]).fillna(0.0)
 
 
+_MARKET_EXPOSURE_CACHE: dict[tuple, float] = {}
+
+
 def _market_exposure(date: str, cfg: StrategyConfig) -> float:
     regime = (cfg.filters or {}).get("market_regime") or {}
     if not regime:
         return 1.0
     trend_window = int(regime.get("trend_window", 60))
     breadth_window = int(regime.get("breadth_window", 20))
+    cache_key = (
+        date,
+        trend_window,
+        breadth_window,
+        float(regime.get("min_breadth", 0.45)),
+        float(regime.get("normal_exposure", 1.0)),
+        float(regime.get("weak_exposure", 0.50)),
+        float(regime.get("bear_exposure", 0.25)),
+    )
+    if cache_key in _MARKET_EXPOSURE_CACHE:
+        return _MARKET_EXPOSURE_CACHE[cache_key]
     price_start = _pad_date(date, max(trend_window, breadth_window) * 3)
     data = dq.sql(f"""
         SELECT trade_date, ts_code, close, pct_chg
@@ -292,10 +322,16 @@ def _market_exposure(date: str, cfg: StrategyConfig) -> float:
     market_trend = close.mean(axis=1).pct_change(trend_window).iloc[-1]
     breadth = pct.tail(breadth_window).gt(0).mean(axis=1).mean()
     if market_trend < -0.06 and breadth < float(regime.get("min_breadth", 0.45)) * 0.8:
-        return float(regime.get("bear_exposure", 0.25))
+        exposure = float(regime.get("bear_exposure", 0.25))
+        _MARKET_EXPOSURE_CACHE[cache_key] = exposure
+        return exposure
     if market_trend < 0 or breadth < float(regime.get("min_breadth", 0.45)):
-        return float(regime.get("weak_exposure", 0.50))
-    return float(regime.get("normal_exposure", 1.0))
+        exposure = float(regime.get("weak_exposure", 0.50))
+        _MARKET_EXPOSURE_CACHE[cache_key] = exposure
+        return exposure
+    exposure = float(regime.get("normal_exposure", 1.0))
+    _MARKET_EXPOSURE_CACHE[cache_key] = exposure
+    return exposure
 
 
 @dataclass
@@ -381,6 +417,75 @@ def _event_filter(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
     return out
 
 
+def _rank_score(df: pd.DataFrame, columns: dict[str, bool]) -> pd.Series:
+    parts = []
+    for col, high_good in columns.items():
+        if col in df.columns:
+            parts.append(_rank(_winsor(df[col]), high_good=high_good))
+    if not parts:
+        return pd.Series(0.5, index=df.index)
+    return pd.concat(parts, axis=1).mean(axis=1).fillna(0.5)
+
+
+def _momentum_quality_guard_filter(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
+    f = cfg.filters or {}
+    out = df.copy()
+    out["quality_guard_score"] = _rank_score(
+        out,
+        {
+            "roe": True,
+            "roe_dt": True,
+            "roic": True,
+            "grossprofit_margin": True,
+            "netprofit_margin": True,
+            "debt_to_assets": False,
+            "q_ocf_to_sales": True,
+            "ocfps": True,
+        },
+    )
+    out["momentum_score"] = _rank_score(out, {"ret_60": True, "ret_120": True})
+    out["value_guard_score"] = _rank_score(out, {"pb": False, "ps_ttm": False, "pe_ttm": False, "dv_ttm": True})
+    out = out[out["momentum_score"] >= float(f.get("min_momentum_score", 0.75))]
+    out = out[out["quality_guard_score"] >= float(f.get("min_quality_score", 0.55))]
+    out = out[_num_col(out, "ret_20").fillna(999) <= float(f.get("max_short_return", 0.30))]
+    out = out[_num_col(out, "debt_to_assets").fillna(999) <= float(f.get("max_debt_ratio", 0.75)) * 100]
+    if f.get("min_value_guard_score") is not None:
+        out = out[out["value_guard_score"] >= float(f["min_value_guard_score"])]
+    return out
+
+
+def _quality_growth_cooldown_filter(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
+    f = cfg.filters or {}
+    out = df.copy()
+    out["quality_guard_score"] = _rank_score(
+        out,
+        {
+            "roe": True,
+            "roe_dt": True,
+            "roic": True,
+            "grossprofit_margin": True,
+            "netprofit_margin": True,
+            "debt_to_assets": False,
+            "q_ocf_to_sales": True,
+            "ocfps": True,
+        },
+    )
+    out["growth_score"] = _rank_score(
+        out,
+        {"q_sales_yoy": True, "q_op_qoq": True, "netprofit_yoy": True, "tr_yoy": True, "or_yoy": True},
+    )
+    out["cooldown_score"] = _rank_score(out, {"vol_20": False, "turnover_rate": False})
+    out["value_guard_score"] = _rank_score(out, {"pb": False, "ps_ttm": False, "pe_ttm": False, "dv_ttm": True})
+    out = out[out["quality_guard_score"] >= float(f.get("min_quality_score", 0.70))]
+    out = out[out["growth_score"] >= float(f.get("min_growth_score", 0.65))]
+    out = out[_num_col(out, "ret_20").fillna(999) <= float(f.get("max_short_return", 0.25))]
+    out = out[_num_col(out, "vol_20").fillna(999) <= float(f.get("max_vol_20", 0.70))]
+    out = out[_num_col(out, "debt_to_assets").fillna(999) <= float(f.get("max_debt_ratio", 0.75)) * 100]
+    if f.get("min_value_guard_score") is not None:
+        out = out[out["value_guard_score"] >= float(f["min_value_guard_score"])]
+    return out
+
+
 class MarketRegimeTiming(QuantFactorStrategy):
     rule = RuleBook(
         weights={"ret_60": 0.22, "ret_20": -0.10, "roe": 0.20, "pb": -0.15, "vol_60": -0.18, "avg_amount_20": 0.10, "netprofit_yoy": 0.15},
@@ -396,6 +501,37 @@ class MultiFactorComposite(QuantFactorStrategy):
     )
 
 
+class MomentumQualityGuard(QuantFactorStrategy):
+    rule = RuleBook(
+        weights={
+            "momentum_score": 0.30,
+            "quality_guard_score": 0.24,
+            "ret_120": 0.16,
+            "ret_20": -0.10,
+            "vol_20": -0.08,
+            "debt_to_assets": -0.06,
+            "value_guard_score": 0.06,
+        },
+        pre_filter=_momentum_quality_guard_filter,
+        exposure_filter=True,
+    )
+
+
+class QualityGrowthCooldown(QuantFactorStrategy):
+    rule = RuleBook(
+        weights={
+            "quality_guard_score": 0.30,
+            "growth_score": 0.24,
+            "cooldown_score": 0.16,
+            "ret_60": 0.12,
+            "value_guard_score": 0.10,
+            "ret_20": -0.08,
+        },
+        pre_filter=_quality_growth_cooldown_filter,
+        exposure_filter=True,
+    )
+
+
 class ResearchSmallCapQuality(QuantFactorStrategy):
     rule = RuleBook(
         weights={"circ_mv_yuan": -0.28, "pb": -0.18, "roe": 0.18, "cfo_to_np": 0.12, "ret_20": 0.12, "vol_20": -0.12},
@@ -408,6 +544,254 @@ class TrendPullback(QuantFactorStrategy):
         weights={"ret_120": 0.22, "ret_60": 0.24, "pullback_20": -0.16, "vol_20": -0.12, "roe": 0.14, "avg_amount_20": 0.12},
         pre_filter=_trend_pullback_filter,
     )
+
+
+class TurtleBreakout(BaseStrategy):
+    """海龟突破策略。
+
+    用纯价格系统补足现有因子策略：N 日突破入场、ATR 波动率定仓、
+    0.5 ATR 金字塔加仓、跌破退出通道或 2 ATR 硬止损清仓。
+    """
+
+    def generate_target_weights(self, start: str, end: str) -> pd.DataFrame:
+        cfg = self.cfg
+        f = cfg.filters or {}
+        p = cfg.position or {}
+        entry_window = int(f.get("entry_window", 55))
+        exit_window = int(f.get("exit_window", 20))
+        atr_window = int(f.get("atr_window", 20))
+        trend_window = int(f.get("trend_window", 120))
+        min_avg_amount = float((cfg.universe or {}).get("min_avg_amount", 50_000_000))
+        min_total_mv = (cfg.universe or {}).get("min_total_mv")
+        max_total_mv = (cfg.universe or {}).get("max_total_mv")
+        max_20d_return = (cfg.universe or {}).get("max_20d_return", f.get("max_20d_return", 0.45))
+        max_amount_spike = float((cfg.universe or {}).get("max_amount_spike", 5.0))
+        n_holdings = int(p.get("n_holdings", 20))
+        max_units = int(p.get("max_units", 4))
+        add_atr_step = float(p.get("add_atr_step", 0.5))
+        stop_atr = float(p.get("stop_atr", 2.0))
+        risk_per_unit = float(p.get("risk_per_unit", 0.006))
+        max_unit_weight = float(p.get("max_unit_weight", 0.02))
+        max_single_weight = float(p.get("max_single_weight", 0.06))
+        max_total_exposure = float(p.get("max_total_exposure", 1.0))
+
+        data = self._load_price_data(
+            start,
+            end,
+            lookback=max(entry_window, exit_window, atr_window, trend_window) + 80,
+        )
+        if data.empty:
+            return pd.DataFrame()
+
+        close = data.pivot(index="trade_date", columns="ts_code", values="adj_close").sort_index()
+        high = data.pivot(index="trade_date", columns="ts_code", values="adj_high").sort_index()
+        low = data.pivot(index="trade_date", columns="ts_code", values="adj_low").sort_index()
+        amount = data.pivot(index="trade_date", columns="ts_code", values="amount_yuan").sort_index()
+        total_mv = data.pivot(index="trade_date", columns="ts_code", values="total_mv_yuan").sort_index()
+        list_date = data.sort_values("trade_date").groupby("ts_code")["list_date"].last().astype(str).to_dict()
+
+        entry_high = close.rolling(entry_window, min_periods=entry_window).max().shift(1)
+        exit_low = close.rolling(exit_window, min_periods=exit_window).min().shift(1)
+        atr_pct = self._atr_pct(high, low, close, atr_window)
+        avg_amount = amount.rolling(20, min_periods=10).mean()
+        amount_spike = amount / avg_amount.replace(0, np.nan)
+        ret_20 = close.pct_change(20)
+        ret_trend = close.pct_change(trend_window)
+
+        start_dates = [d for d in close.index.astype(str).tolist() if start <= d <= end]
+        min_listed_days = int((cfg.universe or {}).get("min_listed_days", 260))
+        positions: dict[str, dict[str, float]] = {}
+        rows: list[pd.Series] = []
+        known_codes: set[str] = set()
+
+        for date in start_dates:
+            if date not in close.index:
+                continue
+            current = close.loc[date]
+            current_atr = atr_pct.loc[date]
+
+            for code in list(positions.keys()):
+                cur = current.get(code)
+                atr = current_atr.get(code)
+                if pd.isna(cur) or pd.isna(atr) or atr <= 0:
+                    del positions[code]
+                    continue
+                stop_price = float(positions[code]["last_add_price"]) * (1.0 - stop_atr * float(atr))
+                exit_price = exit_low.loc[date].get(code)
+                if (not pd.isna(exit_price) and cur <= exit_price) or cur <= stop_price:
+                    del positions[code]
+                    continue
+                while (
+                    int(positions[code]["units"]) < max_units
+                    and cur >= float(positions[code]["last_add_price"]) * (1.0 + add_atr_step * float(atr))
+                ):
+                    positions[code]["units"] += 1
+                    positions[code]["last_add_price"] = float(cur)
+
+            room = max(0, n_holdings - len(positions))
+            if room > 0:
+                candidates = self._entry_candidates(
+                    date,
+                    current,
+                    entry_high.loc[date],
+                    atr_pct.loc[date],
+                    avg_amount.loc[date],
+                    amount_spike.loc[date],
+                    ret_20.loc[date],
+                    ret_trend.loc[date],
+                    total_mv.loc[date],
+                    list_date,
+                    min_listed_days=min_listed_days,
+                    min_avg_amount=min_avg_amount,
+                    min_total_mv=min_total_mv,
+                    max_total_mv=max_total_mv,
+                    max_20d_return=max_20d_return,
+                    max_amount_spike=max_amount_spike,
+                    exclude=set(positions),
+                )
+                for code in candidates[:room]:
+                    cur = current.get(code)
+                    if not pd.isna(cur):
+                        positions[code] = {"units": 1.0, "last_add_price": float(cur)}
+
+            row = self._position_row(positions, current_atr, max_units, risk_per_unit, max_unit_weight, max_single_weight)
+            if row.empty:
+                if not known_codes:
+                    continue
+                row = pd.Series({code: 0.0 for code in known_codes}, dtype=float)
+            else:
+                known_codes.update(row.index.astype(str))
+                total = float(row.sum())
+                if total > max_total_exposure > 0:
+                    row = row * (max_total_exposure / total)
+            row.name = date
+            rows.append(row)
+
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows).sort_index().fillna(0.0)
+
+    @staticmethod
+    def _load_price_data(start: str, end: str, *, lookback: int) -> pd.DataFrame:
+        pad = _pad_date(start, lookback * 2)
+        return dq.sql(f"""
+            SELECT d.trade_date, d.ts_code,
+                   d.high * COALESCE(a.adj_factor, 1.0) AS adj_high,
+                   d.low * COALESCE(a.adj_factor, 1.0) AS adj_low,
+                   d.close * COALESCE(a.adj_factor, 1.0) AS adj_close,
+                   d.amount * 1000 AS amount_yuan,
+                   db.total_mv * 10000 AS total_mv_yuan,
+                   sb.list_date
+            FROM read_parquet('{dq.RAW_DIR / "daily" / "*.parquet"}') d
+            LEFT JOIN read_parquet('{dq.RAW_DIR / "adj_factor" / "*.parquet"}') a
+              ON d.ts_code = a.ts_code AND d.trade_date = a.trade_date
+            LEFT JOIN read_parquet('{dq.RAW_DIR / "daily_basic" / "*.parquet"}') db
+              ON d.ts_code = db.ts_code AND d.trade_date = db.trade_date
+            JOIN read_parquet('{dq.RAW_DIR / "stock_basic" / "*.parquet"}') sb
+              ON d.ts_code = sb.ts_code
+            WHERE d.trade_date >= '{pad}' AND d.trade_date <= '{end}'
+              AND COALESCE(sb.list_status, 'L') = 'L'
+              AND COALESCE(sb.name, '') NOT LIKE '%ST%'
+              AND COALESCE(sb.exchange, '') NOT IN ('BJ', 'BSE')
+              AND COALESCE(sb.market, '') NOT LIKE '%北交%'
+              AND d.close > 0 AND d.high > 0 AND d.low > 0
+        """)
+
+    @staticmethod
+    def _atr_pct(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame, window: int) -> pd.DataFrame:
+        prev_close = close.shift(1)
+        tr = pd.concat(
+            [
+                (high - low).stack(),
+                (high - prev_close).abs().stack(),
+                (low - prev_close).abs().stack(),
+            ],
+            axis=1,
+        ).max(axis=1).unstack()
+        atr = tr.rolling(window, min_periods=max(5, window // 2)).mean()
+        return atr / close.replace(0, np.nan)
+
+    @staticmethod
+    def _entry_candidates(
+        date: str,
+        close: pd.Series,
+        entry_high: pd.Series,
+        atr_pct: pd.Series,
+        avg_amount: pd.Series,
+        amount_spike: pd.Series,
+        ret_20: pd.Series,
+        ret_trend: pd.Series,
+        total_mv: pd.Series,
+        list_date: dict[str, str],
+        *,
+        min_listed_days: int,
+        min_avg_amount: float,
+        min_total_mv,
+        max_total_mv,
+        max_20d_return,
+        max_amount_spike: float,
+        exclude: set[str],
+    ) -> list[str]:
+        df = pd.DataFrame({
+            "close": close,
+            "entry_high": entry_high,
+            "atr_pct": atr_pct,
+            "avg_amount": avg_amount,
+            "amount_spike": amount_spike,
+            "ret_20": ret_20,
+            "ret_trend": ret_trend,
+            "total_mv": total_mv,
+        }).dropna(subset=["close", "entry_high", "atr_pct", "avg_amount"])
+        if df.empty:
+            return []
+        cutoff = _market_cutoff(date, min_listed_days)
+        df = df[
+            (df["close"] > df["entry_high"])
+            & (df["atr_pct"] > 0)
+            & (df["avg_amount"] >= min_avg_amount)
+            & (df["amount_spike"].fillna(0) <= max_amount_spike)
+        ]
+        if max_20d_return is not None:
+            df = df[df["ret_20"].fillna(0) <= float(max_20d_return)]
+        if min_total_mv is not None:
+            df = df[df["total_mv"].fillna(0) >= float(min_total_mv)]
+        if max_total_mv is not None:
+            df = df[df["total_mv"].fillna(float("inf")) <= float(max_total_mv)]
+        if exclude:
+            df = df[~df.index.isin(exclude)]
+        if df.empty:
+            return []
+        listed_ok = pd.Series({code: str(list_date.get(code, "")) <= cutoff for code in df.index})
+        df = df[listed_ok.reindex(df.index).fillna(False)]
+        if df.empty:
+            return []
+        df["breakout_strength"] = df["close"] / df["entry_high"] - 1.0
+        df["score"] = (
+            _rank(df["breakout_strength"], high_good=True) * 0.35
+            + _rank(df["ret_trend"], high_good=True) * 0.30
+            + _rank(df["avg_amount"], high_good=True) * 0.20
+            + _rank(df["atr_pct"], high_good=False) * 0.15
+        )
+        return df.sort_values(["score", "breakout_strength"], ascending=False).index.astype(str).tolist()
+
+    @staticmethod
+    def _position_row(
+        positions: dict[str, dict[str, float]],
+        atr_pct: pd.Series,
+        max_units: int,
+        risk_per_unit: float,
+        max_unit_weight: float,
+        max_single_weight: float,
+    ) -> pd.Series:
+        weights: dict[str, float] = {}
+        for code, state in positions.items():
+            atr = atr_pct.get(code)
+            if pd.isna(atr) or atr <= 0:
+                continue
+            unit_weight = min(max_unit_weight, risk_per_unit / max(float(atr), 1e-6))
+            units = min(max_units, int(state.get("units", 1)))
+            weights[code] = min(max_single_weight, unit_weight * units)
+        return pd.Series(weights, dtype=float)
 
 
 class DividendQuality(QuantFactorStrategy):
@@ -440,6 +824,8 @@ class IndustryProsperity(QuantFactorStrategy):
             df = _quality_filter(df, self.cfg)
             if df.empty:
                 continue
+            if "netprofit_yoy" not in df.columns:
+                df["netprofit_yoy"] = np.nan
             industry_score = df.groupby("industry").apply(
                 lambda x: 0.45 * pd.to_numeric(x["ret_60"], errors="coerce").median()
                 + 0.25 * pd.to_numeric(x["breadth_20"], errors="coerce").median()
@@ -487,6 +873,16 @@ def build_multi_factor_composite():
     return MultiFactorComposite(StrategyConfig.from_yaml("multi_factor_composite"))
 
 
+@register("momentum_quality_guard", "动量质量护栏")
+def build_momentum_quality_guard():
+    return MomentumQualityGuard(StrategyConfig.from_yaml("momentum_quality_guard"))
+
+
+@register("quality_growth_cooldown", "质量成长冷却")
+def build_quality_growth_cooldown():
+    return QualityGrowthCooldown(StrategyConfig.from_yaml("quality_growth_cooldown"))
+
+
 @register("small_cap_quality", "小盘质量")
 def build_research_small_cap_quality():
     return ResearchSmallCapQuality(StrategyConfig.from_yaml("small_cap_quality"))
@@ -495,6 +891,11 @@ def build_research_small_cap_quality():
 @register("trend_pullback", "趋势回撤")
 def build_trend_pullback():
     return TrendPullback(StrategyConfig.from_yaml("trend_pullback"))
+
+
+@register("turtle_breakout", "海龟突破")
+def build_turtle_breakout():
+    return TurtleBreakout(StrategyConfig.from_yaml("turtle_breakout"))
 
 
 @register("dividend_quality", "红利质量")

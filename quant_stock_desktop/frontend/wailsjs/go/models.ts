@@ -1,5 +1,5 @@
 export namespace config {
-
+	
 	export class StrategySettings {
 	    label: string;
 	    enabled: boolean;
@@ -9,11 +9,11 @@ export namespace config {
 	    filters: Record<string, any>;
 	    selection: Record<string, any>;
 	    position: Record<string, any>;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StrategySettings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.label = source["label"];
@@ -28,6 +28,8 @@ export namespace config {
 	}
 	export class Settings {
 	    data_path: string;
+	    database_backend: string;
+	    mysql_dsn: string;
 	    default_initial_cash: number;
 	    default_rebalance_freq: number;
 	    task_concurrency: number;
@@ -38,14 +40,16 @@ export namespace config {
 	    portfolio_risk: Record<string, any>;
 	    exit_rules: Record<string, any>;
 	    governance_rules: Record<string, any>;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.data_path = source["data_path"];
+	        this.database_backend = source["database_backend"];
+	        this.mysql_dsn = source["mysql_dsn"];
 	        this.default_initial_cash = source["default_initial_cash"];
 	        this.default_rebalance_freq = source["default_rebalance_freq"];
 	        this.task_concurrency = source["task_concurrency"];
@@ -57,7 +61,7 @@ export namespace config {
 	        this.exit_rules = source["exit_rules"];
 	        this.governance_rules = source["governance_rules"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -76,15 +80,15 @@ export namespace config {
 		    return a;
 		}
 	}
-
+	
 	export class ValidationIssue {
 	    field: string;
 	    message: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ValidationIssue(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.field = source["field"];
@@ -95,7 +99,7 @@ export namespace config {
 }
 
 export namespace datafetch {
-
+	
 	export class DatasetStatus {
 	    dataset: string;
 	    category: string;
@@ -108,11 +112,11 @@ export namespace datafetch {
 	    started_at: string;
 	    finished_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DatasetStatus(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.dataset = source["dataset"];
@@ -130,29 +134,33 @@ export namespace datafetch {
 	}
 	export class RunStatus {
 	    task: string;
+	    task_type: string;
 	    state: string;
 	    idx: number;
 	    total: number;
 	    stage: string;
 	    name: string;
 	    message: string;
+	    worker_pid: number;
 	    started_at: string;
 	    updated_at: string;
 	    finished_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RunStatus(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.task = source["task"];
+	        this.task_type = source["task_type"];
 	        this.state = source["state"];
 	        this.idx = source["idx"];
 	        this.total = source["total"];
 	        this.stage = source["stage"];
 	        this.name = source["name"];
 	        this.message = source["message"];
+	        this.worker_pid = source["worker_pid"];
 	        this.started_at = source["started_at"];
 	        this.updated_at = source["updated_at"];
 	        this.finished_at = source["finished_at"];
@@ -162,11 +170,11 @@ export namespace datafetch {
 	    phase: string;
 	    start_date: string;
 	    dataset: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new UpdateRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.phase = source["phase"];
@@ -178,15 +186,15 @@ export namespace datafetch {
 }
 
 export namespace main {
-
+	
 	export class AppInfo {
 	    name: string;
 	    version: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new AppInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -196,29 +204,15 @@ export namespace main {
 	export class ApplyPortfolioCandidateRequest {
 	    run_id: string;
 	    candidate_id: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ApplyPortfolioCandidateRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.run_id = source["run_id"];
 	        this.candidate_id = source["candidate_id"];
-	    }
-	}
-	export class DataFetchJob {
-	    name: string;
-	    category: string;
-
-	    static createFrom(source: any = {}) {
-	        return new DataFetchJob(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.category = source["category"];
 	    }
 	}
 	export class DataSnapshotDTO {
@@ -227,11 +221,11 @@ export namespace main {
 	    subject_id: string;
 	    snapshot: Record<string, any>;
 	    created_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DataSnapshotDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -239,6 +233,200 @@ export namespace main {
 	        this.subject_id = source["subject_id"];
 	        this.snapshot = source["snapshot"];
 	        this.created_at = source["created_at"];
+	    }
+	}
+	export class FactorICResult {
+	    run_id: string;
+	    factor: string;
+	    family: string;
+	    variant: string;
+	    horizon: string;
+	    ic_mean: number;
+	    rank_ic_mean: number;
+	    ic_win_rate: number;
+	    icir: number;
+	    status: string;
+	    long_short_return: number;
+	    monotonic_score: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorICResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.factor = source["factor"];
+	        this.family = source["family"];
+	        this.variant = source["variant"];
+	        this.horizon = source["horizon"];
+	        this.ic_mean = source["ic_mean"];
+	        this.rank_ic_mean = source["rank_ic_mean"];
+	        this.ic_win_rate = source["ic_win_rate"];
+	        this.icir = source["icir"];
+	        this.status = source["status"];
+	        this.long_short_return = source["long_short_return"];
+	        this.monotonic_score = source["monotonic_score"];
+	    }
+	}
+	export class FactorCorrelationResult {
+	    run_id: string;
+	    feature_a: string;
+	    feature_b: string;
+	    correlation: number;
+	    abs_correlation: number;
+	    family_a: string;
+	    family_b: string;
+	    keep_feature: string;
+	    drop_feature: string;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorCorrelationResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.feature_a = source["feature_a"];
+	        this.feature_b = source["feature_b"];
+	        this.correlation = source["correlation"];
+	        this.abs_correlation = source["abs_correlation"];
+	        this.family_a = source["family_a"];
+	        this.family_b = source["family_b"];
+	        this.keep_feature = source["keep_feature"];
+	        this.drop_feature = source["drop_feature"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class FactorLatestPrediction {
+	    run_id: string;
+	    trade_date: string;
+	    ts_code: string;
+	    pred_score: number;
+	    pred_rank: number;
+	    is_top20: boolean;
+	    model_path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorLatestPrediction(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.trade_date = source["trade_date"];
+	        this.ts_code = source["ts_code"];
+	        this.pred_score = source["pred_score"];
+	        this.pred_rank = source["pred_rank"];
+	        this.is_top20 = source["is_top20"];
+	        this.model_path = source["model_path"];
+	    }
+	}
+	export class FactorStressResult {
+	    run_id: string;
+	    bucket_type: string;
+	    bucket_key: string;
+	    bucket_label: string;
+	    start_date: string;
+	    end_date: string;
+	    n_days: number;
+	    total_return: number;
+	    annual_return: number;
+	    max_drawdown: number;
+	    sharpe: number;
+	    win_rate: number;
+	    avg_daily_return: number;
+	    volatility: number;
+	    summary_json: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorStressResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.bucket_type = source["bucket_type"];
+	        this.bucket_key = source["bucket_key"];
+	        this.bucket_label = source["bucket_label"];
+	        this.start_date = source["start_date"];
+	        this.end_date = source["end_date"];
+	        this.n_days = source["n_days"];
+	        this.total_return = source["total_return"];
+	        this.annual_return = source["annual_return"];
+	        this.max_drawdown = source["max_drawdown"];
+	        this.sharpe = source["sharpe"];
+	        this.win_rate = source["win_rate"];
+	        this.avg_daily_return = source["avg_daily_return"];
+	        this.volatility = source["volatility"];
+	        this.summary_json = source["summary_json"];
+	    }
+	}
+	export class FactorModelRun {
+	    run_id: string;
+	    model_type: string;
+	    label: string;
+	    feature_count: number;
+	    status: string;
+	    model_path: string;
+	    rank_ic: number;
+	    top_bottom_spread: number;
+	    summary_json: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorModelRun(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.model_type = source["model_type"];
+	        this.label = source["label"];
+	        this.feature_count = source["feature_count"];
+	        this.status = source["status"];
+	        this.model_path = source["model_path"];
+	        this.rank_ic = source["rank_ic"];
+	        this.top_bottom_spread = source["top_bottom_spread"];
+	        this.summary_json = source["summary_json"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class FactorResearchRunSummary {
+	    run_id: string;
+	    start_date: string;
+	    end_date: string;
+	    freq: string;
+	    label: string;
+	    status: string;
+	    factor_count: number;
+	    sample_dates: number;
+	    sample_rows: number;
+	    panel_path: string;
+	    updated_at: string;
+	    model_status: string;
+	    rank_ic: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorResearchRunSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.start_date = source["start_date"];
+	        this.end_date = source["end_date"];
+	        this.freq = source["freq"];
+	        this.label = source["label"];
+	        this.status = source["status"];
+	        this.factor_count = source["factor_count"];
+	        this.sample_dates = source["sample_dates"];
+	        this.sample_rows = source["sample_rows"];
+	        this.panel_path = source["panel_path"];
+	        this.updated_at = source["updated_at"];
+	        this.model_status = source["model_status"];
+	        this.rank_ic = source["rank_ic"];
 	    }
 	}
 	export class ResearchReportDTO {
@@ -251,11 +439,11 @@ export namespace main {
 	    content_md: string;
 	    payload: Record<string, any>;
 	    created_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ResearchReportDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -280,11 +468,11 @@ export namespace main {
 	    metrics: Record<string, any>;
 	    created_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ParameterExperimentDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -311,11 +499,11 @@ export namespace main {
 	    metrics: Record<string, any>;
 	    created_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new WalkForwardWindowDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -342,11 +530,11 @@ export namespace main {
 	    payload: Record<string, any>;
 	    created_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new PromotionDecisionDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -374,11 +562,11 @@ export namespace main {
 	    payload: Record<string, any>;
 	    created_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new PaperTradingLogDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -408,11 +596,11 @@ export namespace main {
 	    strategy: Record<string, any>;
 	    payload: Record<string, any>;
 	    created_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RiskExposureDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -442,11 +630,11 @@ export namespace main {
 	    payload: Record<string, any>;
 	    created_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RecommendationHindsightDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -476,11 +664,11 @@ export namespace main {
 	    portfolio_attribution: any[];
 	    recovery: Record<string, any>;
 	    reports: ResearchReportDTO[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new GovernanceDashboardDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.hindsight = this.convertValues(source["hindsight"], RecommendationHindsightDTO);
@@ -496,7 +684,7 @@ export namespace main {
 	        this.recovery = source["recovery"];
 	        this.reports = this.convertValues(source["reports"], ResearchReportDTO);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -515,8 +703,8 @@ export namespace main {
 		    return a;
 		}
 	}
-
-
+	
+	
 	export class PolicySupportCandidateDTO {
 	    trade_date: string;
 	    ts_code: string;
@@ -530,11 +718,11 @@ export namespace main {
 	    institution_net_buy: number;
 	    reason: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new PolicySupportCandidateDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.trade_date = source["trade_date"];
@@ -563,11 +751,11 @@ export namespace main {
 	    reason: string;
 	    evidence_json: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new PolicySupportSignalDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.trade_date = source["trade_date"];
@@ -583,24 +771,24 @@ export namespace main {
 	        this.updated_at = source["updated_at"];
 	    }
 	}
-
-
-
-
+	
+	
+	
+	
 	export class SettingsResponse {
 	    settings: config.Settings;
 	    issues: config.ValidationIssue[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SettingsResponse(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.settings = this.convertValues(source["settings"], config.Settings);
 	        this.issues = this.convertValues(source["issues"], config.ValidationIssue);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -619,80 +807,126 @@ export namespace main {
 		    return a;
 		}
 	}
-	export class StateTeamChangeDTO {
-	    ts_code: string;
+	export class SignalPortfolioCandidateDTO {
+	    run_id: string;
+	    candidate_id: string;
+	    rank: number;
 	    name: string;
-	    industry: string;
-	    action: string;
-	    current_period: string;
-	    previous_period: string;
-	    current_holder_count: number;
-	    previous_holder_count: number;
-	    current_hold_amount: number;
-	    previous_hold_amount: number;
-	    current_hold_ratio: number;
-	    previous_hold_ratio: number;
-	    hold_ratio_delta: number;
-	    current_float_ratio: number;
-	    previous_float_ratio: number;
-	    current_holders: string;
-	    previous_holders: string;
-	    note: string;
+	    objective: string;
+	    status: string;
+	    score: number;
+	    strategies: string;
+	    weights: Record<string, number>;
+	    annual_return?: number;
+	    max_drawdown?: number;
+	    sharpe?: number;
+	    calmar?: number;
+	    avg_turnover?: number;
+	    avg_holdings?: number;
+	    rebalance_freq: number;
+	    validation_status: string;
+	    reason: string;
 	    updated_at: string;
-
+	    is_active: boolean;
+	
 	    static createFrom(source: any = {}) {
-	        return new StateTeamChangeDTO(source);
+	        return new SignalPortfolioCandidateDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ts_code = source["ts_code"];
+	        this.run_id = source["run_id"];
+	        this.candidate_id = source["candidate_id"];
+	        this.rank = source["rank"];
 	        this.name = source["name"];
-	        this.industry = source["industry"];
-	        this.action = source["action"];
-	        this.current_period = source["current_period"];
-	        this.previous_period = source["previous_period"];
-	        this.current_holder_count = source["current_holder_count"];
-	        this.previous_holder_count = source["previous_holder_count"];
-	        this.current_hold_amount = source["current_hold_amount"];
-	        this.previous_hold_amount = source["previous_hold_amount"];
-	        this.current_hold_ratio = source["current_hold_ratio"];
-	        this.previous_hold_ratio = source["previous_hold_ratio"];
-	        this.hold_ratio_delta = source["hold_ratio_delta"];
-	        this.current_float_ratio = source["current_float_ratio"];
-	        this.previous_float_ratio = source["previous_float_ratio"];
-	        this.current_holders = source["current_holders"];
-	        this.previous_holders = source["previous_holders"];
-	        this.note = source["note"];
+	        this.objective = source["objective"];
+	        this.status = source["status"];
+	        this.score = source["score"];
+	        this.strategies = source["strategies"];
+	        this.weights = source["weights"];
+	        this.annual_return = source["annual_return"];
+	        this.max_drawdown = source["max_drawdown"];
+	        this.sharpe = source["sharpe"];
+	        this.calmar = source["calmar"];
+	        this.avg_turnover = source["avg_turnover"];
+	        this.avg_holdings = source["avg_holdings"];
+	        this.rebalance_freq = source["rebalance_freq"];
+	        this.validation_status = source["validation_status"];
+	        this.reason = source["reason"];
 	        this.updated_at = source["updated_at"];
+	        this.is_active = source["is_active"];
 	    }
 	}
-	export class StateTeamQuery {
-	    period: string;
-	    action: string;
-	    keyword: string;
-	    limit: number;
-
+	export class activePortfolioCandidateRecord {
+	    run_id: string;
+	    candidate_id: string;
+	    name: string;
+	    status: string;
+	    score: number;
+	    weights: Record<string, number>;
+	    validation_status: string;
+	    applied_at: string;
+	
 	    static createFrom(source: any = {}) {
-	        return new StateTeamQuery(source);
+	        return new activePortfolioCandidateRecord(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.period = source["period"];
-	        this.action = source["action"];
-	        this.keyword = source["keyword"];
-	        this.limit = source["limit"];
+	        this.run_id = source["run_id"];
+	        this.candidate_id = source["candidate_id"];
+	        this.name = source["name"];
+	        this.status = source["status"];
+	        this.score = source["score"];
+	        this.weights = source["weights"];
+	        this.validation_status = source["validation_status"];
+	        this.applied_at = source["applied_at"];
 	    }
+	}
+	export class SignalPortfolioContextDTO {
+	    active?: activePortfolioCandidateRecord;
+	    candidates: SignalPortfolioCandidateDTO[];
+	    can_generate: boolean;
+	    blocked_reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SignalPortfolioContextDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = this.convertValues(source["active"], activePortfolioCandidateRecord);
+	        this.candidates = this.convertValues(source["candidates"], SignalPortfolioCandidateDTO);
+	        this.can_generate = source["can_generate"];
+	        this.blocked_reason = source["blocked_reason"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class StrategyVersionActivateRequest {
 	    strategy: string;
 	    version: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StrategyVersionActivateRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.strategy = source["strategy"];
@@ -711,11 +945,11 @@ export namespace main {
 	    note: string;
 	    created_at: string;
 	    activated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StrategyVersionDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.strategy = source["strategy"];
@@ -735,11 +969,11 @@ export namespace main {
 	    strategy: string;
 	    version: number;
 	    status: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StrategyVersionStatusRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.strategy = source["strategy"];
@@ -761,11 +995,11 @@ export namespace main {
 	    recommendation: string;
 	    created_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ValidationReviewDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -787,18 +1021,18 @@ export namespace main {
 	    reviews: ValidationReviewDTO[];
 	    reports: ResearchReportDTO[];
 	    snapshots: DataSnapshotDTO[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ValidationEvidenceDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.reviews = this.convertValues(source["reviews"], ValidationReviewDTO);
 	        this.reports = this.convertValues(source["reports"], ResearchReportDTO);
 	        this.snapshots = this.convertValues(source["snapshots"], DataSnapshotDTO);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -822,11 +1056,11 @@ export namespace main {
 	    subject_id: string;
 	    source_run_id: string;
 	    limit: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ValidationEvidenceQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.subject_type = source["subject_type"];
@@ -835,12 +1069,13 @@ export namespace main {
 	        this.limit = source["limit"];
 	    }
 	}
-
+	
+	
 
 }
 
 export namespace market {
-
+	
 	export class BreakoutBar {
 	    trade_date: string;
 	    open: number;
@@ -849,11 +1084,11 @@ export namespace market {
 	    close: number;
 	    pct_chg: number;
 	    projected: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BreakoutBar(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.trade_date = source["trade_date"];
@@ -869,11 +1104,11 @@ export namespace market {
 	    limit: number;
 	    lookback: number;
 	    recent_days: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BreakoutQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.limit = source["limit"];
@@ -893,11 +1128,11 @@ export namespace market {
 	    pct_chg: number;
 	    vol: number;
 	    amount: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DailyBar(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -918,11 +1153,11 @@ export namespace market {
 	    start_date: string;
 	    end_date: string;
 	    limit: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DailyQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -940,11 +1175,11 @@ export namespace market {
 	    file_size: number;
 	    created_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DataFileDTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -957,36 +1192,6 @@ export namespace market {
 	        this.updated_at = source["updated_at"];
 	    }
 	}
-	export class DatasetPreview {
-	    dataset: string;
-	    columns: string[];
-	    rows: any[];
-
-	    static createFrom(source: any = {}) {
-	        return new DatasetPreview(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.dataset = source["dataset"];
-	        this.columns = source["columns"];
-	        this.rows = source["rows"];
-	    }
-	}
-	export class DatasetPreviewQuery {
-	    dataset: string;
-	    limit: number;
-
-	    static createFrom(source: any = {}) {
-	        return new DatasetPreviewQuery(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.dataset = source["dataset"];
-	        this.limit = source["limit"];
-	    }
-	}
 	export class FinancialIndicator {
 	    ts_code: string;
 	    ann_date: string;
@@ -996,11 +1201,11 @@ export namespace market {
 	    gross_margin: number;
 	    net_margin: number;
 	    debt_to_assets: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new FinancialIndicator(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -1016,11 +1221,11 @@ export namespace market {
 	export class FinancialQuery {
 	    ts_code: string;
 	    limit: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new FinancialQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -1050,11 +1255,11 @@ export namespace market {
 	    reasons: string[];
 	    bars: BreakoutBar[];
 	    projected_bars: BreakoutBar[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LimitBreakoutCandidate(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -1080,7 +1285,7 @@ export namespace market {
 	        this.bars = this.convertValues(source["bars"], BreakoutBar);
 	        this.projected_bars = this.convertValues(source["projected_bars"], BreakoutBar);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1115,11 +1320,11 @@ export namespace market {
 	    recommendation: string;
 	    parameter_hint: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LimitSignalEvaluationSummary(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.signal_type = source["signal_type"];
@@ -1172,11 +1377,11 @@ export namespace market {
 	    risks: string[];
 	    bars: BreakoutBar[];
 	    projected_bars: BreakoutBar[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LimitUpMomentumCandidate(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -1212,7 +1417,7 @@ export namespace market {
 	        this.bars = this.convertValues(source["bars"], BreakoutBar);
 	        this.projected_bars = this.convertValues(source["projected_bars"], BreakoutBar);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1235,11 +1440,11 @@ export namespace market {
 	    limit: number;
 	    lookback: number;
 	    history_days: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LimitUpMomentumQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.limit = source["limit"];
@@ -1256,11 +1461,11 @@ export namespace market {
 	    market: string;
 	    list_date: string;
 	    list_status: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StockBasic(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -1276,11 +1481,11 @@ export namespace market {
 	export class StockBasicQuery {
 	    keyword: string;
 	    limit: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StockBasicQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.keyword = source["keyword"];
@@ -1309,11 +1514,11 @@ export namespace market {
 	    verdict: string;
 	    reason: string;
 	    tags: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StockValuation(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -1341,11 +1546,11 @@ export namespace market {
 	}
 	export class ValuationQuery {
 	    ts_code: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ValuationQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -1355,32 +1560,36 @@ export namespace market {
 }
 
 export namespace position {
-
+	
 	export class GenerateSignalRequest {
 	    date: string;
 	    initial_cash: number;
 	    rebalance_freq: number;
-
+	    portfolio_run_id: string;
+	    portfolio_candidate_id: string;
+	
 	    static createFrom(source: any = {}) {
 	        return new GenerateSignalRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.date = source["date"];
 	        this.initial_cash = source["initial_cash"];
 	        this.rebalance_freq = source["rebalance_freq"];
+	        this.portfolio_run_id = source["portfolio_run_id"];
+	        this.portfolio_candidate_id = source["portfolio_candidate_id"];
 	    }
 	}
 	export class GenerateSignalResponse {
 	    date: string;
 	    output: string;
 	    success: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new GenerateSignalResponse(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.date = source["date"];
@@ -1398,11 +1607,11 @@ export namespace position {
 	    realized_pnl: number;
 	    cum_return: number;
 	    daily_return: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new HistoryPoint(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.date = source["date"];
@@ -1425,11 +1634,11 @@ export namespace position {
 	    realized_pnl: number;
 	    exit_reason: string;
 	    exit_pct: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TradeRecord(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.date = source["date"];
@@ -1445,11 +1654,11 @@ export namespace position {
 	export class Source {
 	    strategy: string;
 	    weight: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Source(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.strategy = source["strategy"];
@@ -1479,11 +1688,11 @@ export namespace position {
 	    today_pct: number;
 	    weight: number;
 	    hold_days: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Position(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -1509,7 +1718,7 @@ export namespace position {
 	        this.weight = source["weight"];
 	        this.hold_days = source["hold_days"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1541,11 +1750,11 @@ export namespace position {
 	    target_shares: number;
 	    target_amount: number;
 	    sources: Source[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RecommendationItem(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.action = source["action"];
@@ -1561,7 +1770,7 @@ export namespace position {
 	        this.target_amount = source["target_amount"];
 	        this.sources = this.convertValues(source["sources"], Source);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1586,11 +1795,11 @@ export namespace position {
 	    version: number;
 	    mode: string;
 	    weight: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RecommendationStrategyVersion(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.strategy = source["strategy"];
@@ -1611,11 +1820,11 @@ export namespace position {
 	    rebalance_trades: number;
 	    active_strategy_versions: RecommendationStrategyVersion[];
 	    rows: RecommendationItem[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Recommendation(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.date = source["date"];
@@ -1629,7 +1838,7 @@ export namespace position {
 	        this.active_strategy_versions = this.convertValues(source["active_strategy_versions"], RecommendationStrategyVersion);
 	        this.rows = this.convertValues(source["rows"], RecommendationItem);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1648,39 +1857,43 @@ export namespace position {
 		    return a;
 		}
 	}
-
-
+	
+	
 	export class RunStatus {
 	    task: string;
+	    task_type: string;
 	    state: string;
 	    idx: number;
 	    total: number;
 	    stage: string;
 	    name: string;
 	    message: string;
+	    worker_pid: number;
 	    started_at: string;
 	    updated_at: string;
 	    finished_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RunStatus(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.task = source["task"];
+	        this.task_type = source["task_type"];
 	        this.state = source["state"];
 	        this.idx = source["idx"];
 	        this.total = source["total"];
 	        this.stage = source["stage"];
 	        this.name = source["name"];
 	        this.message = source["message"];
+	        this.worker_pid = source["worker_pid"];
 	        this.started_at = source["started_at"];
 	        this.updated_at = source["updated_at"];
 	        this.finished_at = source["finished_at"];
 	    }
 	}
-
+	
 	export class Summary {
 	    initial_cash: number;
 	    cash: number;
@@ -1699,11 +1912,11 @@ export namespace position {
 	    n_closed: number;
 	    updated_at: string;
 	    positions: Position[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Summary(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.initial_cash = source["initial_cash"];
@@ -1724,7 +1937,7 @@ export namespace position {
 	        this.updated_at = source["updated_at"];
 	        this.positions = this.convertValues(source["positions"], Position);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1743,7 +1956,7 @@ export namespace position {
 		    return a;
 		}
 	}
-
+	
 	export class TradeRequest {
 	    ts_code: string;
 	    action: string;
@@ -1753,11 +1966,11 @@ export namespace position {
 	    exit_reason: string;
 	    exit_pct: number;
 	    sources: Source[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TradeRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ts_code = source["ts_code"];
@@ -1769,7 +1982,7 @@ export namespace position {
 	        this.exit_pct = source["exit_pct"];
 	        this.sources = this.convertValues(source["sources"], Source);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1792,7 +2005,7 @@ export namespace position {
 }
 
 export namespace result {
-
+	
 	export class PositionRow {
 	    date: string;
 	    ts_code: string;
@@ -1807,11 +2020,11 @@ export namespace result {
 	    today_pct: number;
 	    weight: number;
 	    hold_days: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new PositionRow(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.date = source["date"];
@@ -1838,11 +2051,11 @@ export namespace result {
 	    unrealized_pnl: number;
 	    realized_pnl: number;
 	    cum_return: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SnapshotRow(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.date = source["date"];
@@ -1868,11 +2081,11 @@ export namespace result {
 	    exit_reason: string;
 	    exec_date: string;
 	    is_new: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TradeRow(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.date = source["date"];
@@ -1895,11 +2108,11 @@ export namespace result {
 	    snapshots: SnapshotRow[];
 	    trades: TradeRow[];
 	    positions: PositionRow[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TimeMachineDetail(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.run_id = source["run_id"];
@@ -1908,7 +2121,7 @@ export namespace result {
 	        this.trades = this.convertValues(source["trades"], TradeRow);
 	        this.positions = this.convertValues(source["positions"], PositionRow);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1931,16 +2144,16 @@ export namespace result {
 }
 
 export namespace task {
-
+	
 	export class CreateRequest {
 	    name: string;
 	    task_type: string;
 	    params: Record<string, any>;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new CreateRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -1975,11 +2188,11 @@ export namespace task {
 	    started_at: string;
 	    finished_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DTO(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -2013,11 +2226,11 @@ export namespace task {
 	export class Query {
 	    status: string;
 	    limit: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Query(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];

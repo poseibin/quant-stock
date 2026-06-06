@@ -114,7 +114,7 @@ export function LimitSignalEvaluationPanel() {
           </button>
         ))}
       </div>
-      {(error || status?.message) && <div className={error || status?.state === 'error' ? 'errorText' : 'cardHint'}>{error || status?.message}</div>}
+      {(error || status?.message) && <div className={error || status?.state === 'error' ? 'errorBox' : 'cardHint'}>{error || status?.message}</div>}
       <RunStatusProgress status={status} />
       <div className="limitEvaluationGrid">
         {visibleItems.length === 0 ? (

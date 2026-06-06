@@ -14,6 +14,8 @@ export function AnalyzePortfolioTask(arg1:string):Promise<task.DTO>;
 
 export function ApplyPortfolioCandidate(arg1:main.ApplyPortfolioCandidateRequest):Promise<main.SettingsResponse>;
 
+export function CancelPositionSignal():Promise<position.RunStatus>;
+
 export function CancelTask(arg1:string):Promise<task.DTO>;
 
 export function ClearLimitBreakoutCandidates():Promise<void>;
@@ -33,6 +35,8 @@ export function GeneratePositionSignal(arg1:position.GenerateSignalRequest):Prom
 export function GetAppInfo():Promise<main.AppInfo>;
 
 export function GetDataUpdateStatus():Promise<datafetch.RunStatus>;
+
+export function GetFactorModelRun(arg1:string):Promise<main.FactorModelRun>;
 
 export function GetLatestPolicySupportSignal():Promise<main.PolicySupportSignalDTO>;
 
@@ -54,9 +58,9 @@ export function GetPositionSummary():Promise<position.Summary>;
 
 export function GetSettings():Promise<main.SettingsResponse>;
 
-export function GetSignalRunStatus():Promise<position.RunStatus>;
+export function GetSignalPortfolioContext():Promise<main.SignalPortfolioContextDTO>;
 
-export function GetStateTeamAnalysisStatus():Promise<position.RunStatus>;
+export function GetSignalRunStatus():Promise<position.RunStatus>;
 
 export function GetStockValuation(arg1:market.ValuationQuery):Promise<market.StockValuation>;
 
@@ -68,9 +72,17 @@ export function GetTimeMachineDetail(arg1:string):Promise<result.TimeMachineDeta
 
 export function ListDailyBars(arg1:market.DailyQuery):Promise<Array<market.DailyBar>>;
 
-export function ListDataFetchJobs():Promise<Array<main.DataFetchJob>>;
-
 export function ListDatasetUpdateStatus():Promise<Array<datafetch.DatasetStatus>>;
+
+export function ListFactorICResults(arg1:string,arg2:number):Promise<Array<main.FactorICResult>>;
+
+export function ListFactorCorrelationResults(arg1:string,arg2:number):Promise<Array<main.FactorCorrelationResult>>;
+
+export function ListFactorLatestPredictions(arg1:string,arg2:number):Promise<Array<main.FactorLatestPrediction>>;
+
+export function ListFactorResearchRuns(arg1:number):Promise<Array<main.FactorResearchRunSummary>>;
+
+export function ListFactorStressResults(arg1:string,arg2:number):Promise<Array<main.FactorStressResult>>;
 
 export function ListFinancialIndicators(arg1:market.FinancialQuery):Promise<Array<market.FinancialIndicator>>;
 
@@ -88,8 +100,6 @@ export function ListPolicySupportCandidates(arg1:number):Promise<Array<main.Poli
 
 export function ListRecommendationHindsight():Promise<Array<main.RecommendationHindsightDTO>>;
 
-export function ListStateTeamHolderChanges(arg1:main.StateTeamQuery):Promise<Array<main.StateTeamChangeDTO>>;
-
 export function ListStockBasic(arg1:market.StockBasicQuery):Promise<Array<market.StockBasic>>;
 
 export function ListStrategyVersions(arg1:string):Promise<Array<main.StrategyVersionDTO>>;
@@ -97,8 +107,6 @@ export function ListStrategyVersions(arg1:string):Promise<Array<main.StrategyVer
 export function ListTasks(arg1:task.Query):Promise<Array<task.DTO>>;
 
 export function ListValidationEvidence(arg1:main.ValidationEvidenceQuery):Promise<main.ValidationEvidenceDTO>;
-
-export function PreviewDataset(arg1:market.DatasetPreviewQuery):Promise<market.DatasetPreview>;
 
 export function RefreshGovernanceAudit():Promise<main.GovernanceDashboardDTO>;
 
@@ -110,6 +118,8 @@ export function RefreshRecommendationHindsight():Promise<Array<main.Recommendati
 
 export function RefreshTaskStatus(arg1:string):Promise<task.DTO>;
 
+export function RetryTask(arg1:string):Promise<task.DTO>;
+
 export function ReviewStrategyVersion(arg1:main.StrategyVersionActivateRequest):Promise<main.ValidationReviewDTO>;
 
 export function RunDataUpdate(arg1:datafetch.UpdateRequest):Promise<void>;
@@ -117,8 +127,6 @@ export function RunDataUpdate(arg1:datafetch.UpdateRequest):Promise<void>;
 export function RunLimitSignalEvaluation():Promise<void>;
 
 export function RunPolicySupportAnalysis():Promise<void>;
-
-export function RunStateTeamAnalysis():Promise<void>;
 
 export function SaveSettings(arg1:config.Settings):Promise<main.SettingsResponse>;
 

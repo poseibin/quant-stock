@@ -65,14 +65,14 @@ func ReadTimeMachineDetail(db *sql.DB, runID string) (TimeMachineDetail, error) 
 	}
 
 	var summaryJSON string
-	_ = db.QueryRow(`SELECT COALESCE(summary_json, '') FROM evaluation_tasks WHERE external_run_id = ?`, runID).Scan(&summaryJSON)
+	_ = db.QueryRow(`SELECT COALESCE(summary_json, '') FROM task_jobs WHERE external_run_id = ?`, runID).Scan(&summaryJSON)
 	if summaryJSON != "" {
 		_ = json.Unmarshal([]byte(summaryJSON), &detail.Summary)
 	}
 
 	snapRows, err := db.Query(`SELECT trade_date, cash, market_value, equity, n_holdings,
 		unrealized_pnl, realized_pnl, cum_return
-		FROM time_machine_snapshots WHERE run_id = ? ORDER BY trade_date`, runID)
+		FROM portfolio_tm_snapshots WHERE run_id = ? ORDER BY trade_date`, runID)
 	if err != nil {
 		return TimeMachineDetail{}, err
 	}
@@ -90,7 +90,7 @@ func ReadTimeMachineDetail(db *sql.DB, runID string) (TimeMachineDetail, error) 
 
 	tradeRows, err := db.Query(`SELECT trade_date, ts_code, name, action, shares, price, amount,
 		hold_days, realized_pnl, exit_reason, exec_date, COALESCE(is_new, 0)
-		FROM time_machine_trades WHERE run_id = ? ORDER BY trade_date, id`, runID)
+		FROM portfolio_tm_trades WHERE run_id = ? ORDER BY trade_date, id`, runID)
 	if err != nil {
 		return TimeMachineDetail{}, err
 	}
@@ -110,9 +110,9 @@ func ReadTimeMachineDetail(db *sql.DB, runID string) (TimeMachineDetail, error) 
 
 	positionRows, err := db.Query(`SELECT trade_date, ts_code, name, shares, avg_cost, price,
 		market_value, unrealized_pnl, unrealized_pct, today_pnl, today_pct, weight, hold_days
-		FROM time_machine_positions
+		FROM portfolio_tm_positions
 		WHERE run_id = ? AND trade_date = (
-			SELECT MAX(trade_date) FROM time_machine_positions WHERE run_id = ?
+			SELECT MAX(trade_date) FROM portfolio_tm_positions WHERE run_id = ?
 		)
 		ORDER BY market_value DESC`, runID, runID)
 	if err != nil {

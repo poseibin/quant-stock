@@ -14,6 +14,10 @@ export function ApplyPortfolioCandidate(arg1) {
   return window['go']['main']['App']['ApplyPortfolioCandidate'](arg1);
 }
 
+export function CancelPositionSignal() {
+  return window['go']['main']['App']['CancelPositionSignal']();
+}
+
 export function CancelTask(arg1) {
   return window['go']['main']['App']['CancelTask'](arg1);
 }
@@ -52,6 +56,10 @@ export function GetAppInfo() {
 
 export function GetDataUpdateStatus() {
   return window['go']['main']['App']['GetDataUpdateStatus']();
+}
+
+export function GetFactorModelRun(arg1) {
+  return window['go']['main']['App']['GetFactorModelRun'](arg1);
 }
 
 export function GetLatestPolicySupportSignal() {
@@ -94,12 +102,12 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
-export function GetSignalRunStatus() {
-  return window['go']['main']['App']['GetSignalRunStatus']();
+export function GetSignalPortfolioContext() {
+  return window['go']['main']['App']['GetSignalPortfolioContext']();
 }
 
-export function GetStateTeamAnalysisStatus() {
-  return window['go']['main']['App']['GetStateTeamAnalysisStatus']();
+export function GetSignalRunStatus() {
+  return window['go']['main']['App']['GetSignalRunStatus']();
 }
 
 export function GetStockValuation(arg1) {
@@ -122,12 +130,28 @@ export function ListDailyBars(arg1) {
   return window['go']['main']['App']['ListDailyBars'](arg1);
 }
 
-export function ListDataFetchJobs() {
-  return window['go']['main']['App']['ListDataFetchJobs']();
-}
-
 export function ListDatasetUpdateStatus() {
   return window['go']['main']['App']['ListDatasetUpdateStatus']();
+}
+
+export function ListFactorICResults(arg1, arg2) {
+  return window['go']['main']['App']['ListFactorICResults'](arg1, arg2);
+}
+
+export function ListFactorCorrelationResults(arg1, arg2) {
+  return window['go']['main']['App']['ListFactorCorrelationResults'](arg1, arg2);
+}
+
+export function ListFactorLatestPredictions(arg1, arg2) {
+  return window['go']['main']['App']['ListFactorLatestPredictions'](arg1, arg2);
+}
+
+export function ListFactorResearchRuns(arg1) {
+  return window['go']['main']['App']['ListFactorResearchRuns'](arg1);
+}
+
+export function ListFactorStressResults(arg1, arg2) {
+  return window['go']['main']['App']['ListFactorStressResults'](arg1, arg2);
 }
 
 export function ListFinancialIndicators(arg1) {
@@ -162,10 +186,6 @@ export function ListRecommendationHindsight() {
   return window['go']['main']['App']['ListRecommendationHindsight']();
 }
 
-export function ListStateTeamHolderChanges(arg1) {
-  return window['go']['main']['App']['ListStateTeamHolderChanges'](arg1);
-}
-
 export function ListStockBasic(arg1) {
   return window['go']['main']['App']['ListStockBasic'](arg1);
 }
@@ -180,10 +200,6 @@ export function ListTasks(arg1) {
 
 export function ListValidationEvidence(arg1) {
   return window['go']['main']['App']['ListValidationEvidence'](arg1);
-}
-
-export function PreviewDataset(arg1) {
-  return window['go']['main']['App']['PreviewDataset'](arg1);
 }
 
 export function RefreshGovernanceAudit() {
@@ -206,6 +222,10 @@ export function RefreshTaskStatus(arg1) {
   return window['go']['main']['App']['RefreshTaskStatus'](arg1);
 }
 
+export function RetryTask(arg1) {
+  return window['go']['main']['App']['RetryTask'](arg1);
+}
+
 export function ReviewStrategyVersion(arg1) {
   return window['go']['main']['App']['ReviewStrategyVersion'](arg1);
 }
@@ -220,10 +240,6 @@ export function RunLimitSignalEvaluation() {
 
 export function RunPolicySupportAnalysis() {
   return window['go']['main']['App']['RunPolicySupportAnalysis']();
-}
-
-export function RunStateTeamAnalysis() {
-  return window['go']['main']['App']['RunStateTeamAnalysis']();
 }
 
 export function SaveSettings(arg1) {

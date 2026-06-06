@@ -120,9 +120,12 @@ type RecommendationStrategyVersion struct {
 }
 
 type GenerateSignalRequest struct {
-	Date          string  `json:"date"`
-	InitialCash   float64 `json:"initial_cash"`
-	RebalanceFreq int     `json:"rebalance_freq"`
+	Date                  string  `json:"date"`
+	InitialCash           float64 `json:"initial_cash"`
+	RebalanceFreq         int     `json:"rebalance_freq"`
+	PortfolioRunID        string  `json:"portfolio_run_id"`
+	PortfolioCandidateID  string  `json:"portfolio_candidate_id"`
+	StrategyOverridesJSON string  `json:"-"`
 }
 
 type GenerateSignalResponse struct {
@@ -132,20 +135,23 @@ type GenerateSignalResponse struct {
 }
 
 type ProgressEvent struct {
-	Idx   int    `json:"idx"`
-	Total int    `json:"total"`
-	Stage string `json:"stage"`
-	Name  string `json:"name"`
+	Idx       int    `json:"idx"`
+	Total     int    `json:"total"`
+	Stage     string `json:"stage"`
+	Name      string `json:"name"`
+	WorkerPID int    `json:"worker_pid"`
 }
 
 type RunStatus struct {
 	Task       string `json:"task"`
+	TaskType   string `json:"task_type"`
 	State      string `json:"state"`
 	Idx        int    `json:"idx"`
 	Total      int    `json:"total"`
 	Stage      string `json:"stage"`
 	Name       string `json:"name"`
 	Message    string `json:"message"`
+	WorkerPID  int    `json:"worker_pid"`
 	StartedAt  string `json:"started_at"`
 	UpdatedAt  string `json:"updated_at"`
 	FinishedAt string `json:"finished_at"`

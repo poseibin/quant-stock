@@ -177,12 +177,12 @@ function PolicyProgress({ status }: { status: RunStatus | null }) {
   if (!status || (status.state !== 'running' && status.state !== 'error')) return null
   const pct = status.total > 0 ? Math.round((status.idx / status.total) * 100) : 0
   return (
-    <div className={`stateTeamProgress ${status.state === 'error' ? 'error' : ''}`}>
-      <div className="stateTeamProgressTop">
+    <div className={`runProgress ${status.state === 'error' ? 'error' : ''}`}>
+      <div className="runProgressTop">
         <span>{status.stage || '分析进度'}</span>
         <b>{status.state === 'running' ? `${pct}% · ${status.idx}/${status.total}` : '失败'}</b>
       </div>
-      <div className="stateTeamProgressBar"><i style={{ width: `${Math.max(4, pct)}%` }} /></div>
+      <div className="runProgressBar"><i style={{ width: `${Math.max(4, pct)}%` }} /></div>
       <p>{status.state === 'error' ? status.message : status.name || status.message || '正在分析政策资金托底信号'}</p>
     </div>
   )

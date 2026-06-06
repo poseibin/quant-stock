@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.infra import status as run_status
-from common.infra.db import write_transaction
+from common.infra.db import upsert_sql, write_transaction
 
 
 TASK_NAME = "policy_support_analysis"
@@ -300,7 +300,7 @@ def score_candidates(latest: pd.DataFrame, inst_map: dict[tuple[str, str], float
 
 def ensure_tables(conn) -> None:
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS policy_support_signals (
+        CREATE TABLE IF NOT EXISTS monitor_policy_support_signals (
             trade_date TEXT PRIMARY KEY,
             signal_level TEXT NOT NULL,
             total_score REAL NOT NULL DEFAULT 0,
@@ -315,7 +315,7 @@ def ensure_tables(conn) -> None:
         )
     """)
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS policy_support_candidates (
+        CREATE TABLE IF NOT EXISTS monitor_policy_support_candidates (
             trade_date TEXT NOT NULL,
             ts_code TEXT NOT NULL,
             name TEXT NOT NULL DEFAULT '',
@@ -331,32 +331,29 @@ def ensure_tables(conn) -> None:
             PRIMARY KEY(trade_date, ts_code)
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_support_candidates_score ON policy_support_candidates(trade_date, score DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_monitor_policy_support_candidates_score ON monitor_policy_support_candidates(trade_date, score DESC)")
 
 
 def write_results(db_path: Path, signal: Signal, candidates: list[Candidate]) -> None:
-    run_status.progress(TASK_NAME, 4, 5, "write", "写入 SQLite")
+    run_status.progress(TASK_NAME, 4, 5, "write", "写入数据库")
     updated_at = now()
     with write_transaction(db_path) as conn:
         ensure_tables(conn)
+        signal_columns = [
+            "trade_date", "signal_level", "total_score", "market_stress_score", "support_score",
+            "institution_score", "weight_support_score", "direction", "reason", "evidence_json", "updated_at",
+        ]
         conn.execute(
-            """
-            INSERT INTO policy_support_signals(
-                trade_date, signal_level, total_score, market_stress_score, support_score,
-                institution_score, weight_support_score, direction, reason, evidence_json, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(trade_date) DO UPDATE SET
-                signal_level=excluded.signal_level,
-                total_score=excluded.total_score,
-                market_stress_score=excluded.market_stress_score,
-                support_score=excluded.support_score,
-                institution_score=excluded.institution_score,
-                weight_support_score=excluded.weight_support_score,
-                direction=excluded.direction,
-                reason=excluded.reason,
-                evidence_json=excluded.evidence_json,
-                updated_at=excluded.updated_at
-            """,
+            upsert_sql(
+                "monitor_policy_support_signals",
+                signal_columns,
+                ["trade_date"],
+                [
+                    "signal_level", "total_score", "market_stress_score", "support_score",
+                    "institution_score", "weight_support_score", "direction", "reason",
+                    "evidence_json", "updated_at",
+                ],
+            ),
             (
                 signal.trade_date,
                 signal.signal_level,
@@ -371,11 +368,11 @@ def write_results(db_path: Path, signal: Signal, candidates: list[Candidate]) ->
                 updated_at,
             ),
         )
-        conn.execute("DELETE FROM policy_support_candidates WHERE trade_date = ?", (signal.trade_date,))
+        conn.execute("DELETE FROM monitor_policy_support_candidates WHERE trade_date = ?", (signal.trade_date,))
         for item in candidates:
             conn.execute(
                 """
-                INSERT INTO policy_support_candidates(
+                INSERT INTO monitor_policy_support_candidates(
                     trade_date, ts_code, name, industry, candidate_type, score, pct_chg,
                     amount_ratio, turnover_rate, institution_net_buy, reason, updated_at
                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)

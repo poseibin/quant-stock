@@ -7,6 +7,7 @@ tables more predictably than the Go parquet writer.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -23,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.infra.db import connect_db
+from common.infra.db import add_column, connect_db, table_columns, upsert_sql
 
 TASK = "data_update"
 DATA_START_DATE = "20100101"
@@ -201,109 +202,177 @@ class StatusStore:
         self.ensure_tables()
 
     def ensure_tables(self) -> None:
-        self.conn.execute(
-            """CREATE TABLE IF NOT EXISTS py_run_status (
-                task TEXT PRIMARY KEY, state TEXT NOT NULL, idx INTEGER NOT NULL DEFAULT 0,
-                total INTEGER NOT NULL DEFAULT 0, stage TEXT, name TEXT, message TEXT,
-                started_at TEXT, updated_at TEXT NOT NULL, finished_at TEXT
-            )"""
-        )
-        self.conn.execute(
-            """CREATE TABLE IF NOT EXISTS dataset_update_status (
-                dataset TEXT PRIMARY KEY, category TEXT NOT NULL, state TEXT NOT NULL,
-                progress_done INTEGER NOT NULL DEFAULT 0, progress_total INTEGER NOT NULL DEFAULT 0,
-                message TEXT NOT NULL DEFAULT '', rows_written INTEGER NOT NULL DEFAULT 0,
-                error_message TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT '',
-                finished_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
-            )"""
-        )
+        if self.conn.backend == "mysql":
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS task_run_status (
+                    task VARCHAR(255) PRIMARY KEY, task_type VARCHAR(255) NOT NULL DEFAULT '',
+                    state VARCHAR(255) NOT NULL, idx BIGINT NOT NULL DEFAULT 0,
+                    total BIGINT NOT NULL DEFAULT 0, stage VARCHAR(255), name VARCHAR(255), message LONGTEXT,
+                    worker_pid BIGINT, started_at VARCHAR(64), updated_at VARCHAR(64) NOT NULL, finished_at VARCHAR(64)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"""
+            )
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS task_jobs (
+                    id VARCHAR(255) PRIMARY KEY, name VARCHAR(255) NOT NULL, task_type VARCHAR(255) NOT NULL,
+                    status VARCHAR(255) NOT NULL, progress DOUBLE NOT NULL DEFAULT 0,
+                    params_json LONGTEXT NOT NULL, summary_json LONGTEXT, result_path VARCHAR(1024), log_path VARCHAR(1024),
+                    worker_type VARCHAR(255) NOT NULL DEFAULT '', worker_pid BIGINT, external_run_id VARCHAR(255),
+                    error_message LONGTEXT, parent_id VARCHAR(255), group_run_id VARCHAR(255), subtask_key VARCHAR(255),
+                    subtask_name VARCHAR(255), sequence BIGINT NOT NULL DEFAULT 0, total BIGINT NOT NULL DEFAULT 0,
+                    attempt BIGINT NOT NULL DEFAULT 0, max_attempts BIGINT NOT NULL DEFAULT 1,
+                    created_at VARCHAR(64) NOT NULL, queued_at VARCHAR(64), started_at VARCHAR(64),
+                    finished_at VARCHAR(64), updated_at VARCHAR(64) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"""
+            )
+        else:
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS task_run_status (
+                    task TEXT PRIMARY KEY, task_type TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL, idx INTEGER NOT NULL DEFAULT 0,
+                    total INTEGER NOT NULL DEFAULT 0, stage TEXT, name TEXT, message TEXT,
+                    worker_pid INTEGER, started_at TEXT, updated_at TEXT NOT NULL, finished_at TEXT
+                )"""
+            )
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS task_jobs (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, task_type TEXT NOT NULL, status TEXT NOT NULL,
+                    progress REAL NOT NULL DEFAULT 0, params_json TEXT NOT NULL, summary_json TEXT,
+                    result_path TEXT, log_path TEXT, worker_type TEXT NOT NULL DEFAULT '', worker_pid INTEGER,
+                    external_run_id TEXT, error_message TEXT, parent_id TEXT, group_run_id TEXT, subtask_key TEXT,
+                    subtask_name TEXT, sequence INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0,
+                    attempt INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL, queued_at TEXT, started_at TEXT, finished_at TEXT, updated_at TEXT NOT NULL
+                )"""
+            )
+        columns = table_columns(self.conn, "task_run_status")
+        if "task_type" not in columns:
+            add_column(self.conn, "task_run_status", "task_type", "TEXT NOT NULL DEFAULT ''")
+        if "worker_pid" not in columns:
+            add_column(self.conn, "task_run_status", "worker_pid", "INTEGER")
 
     def begin(self, total: int) -> None:
         ts = now()
+        columns = ["task", "task_type", "state", "idx", "total", "stage", "name", "message", "worker_pid", "started_at", "updated_at", "finished_at"]
         self.conn.execute(
-            """INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(task) DO UPDATE SET state='running', idx=0, total=excluded.total,
-               stage='', name='', message='', started_at=excluded.started_at,
-               updated_at=excluded.updated_at, finished_at=''""",
-            (TASK, "running", 0, total, "", "", "", ts, ts, ""),
+            upsert_sql("task_run_status", columns, ["task"], ["task_type", "state", "idx", "total", "stage", "name", "message", "worker_pid", "started_at", "updated_at", "finished_at"]),
+            (TASK, "data_update", "running", 0, total, "", "", "", os.getpid(), ts, ts, ""),
         )
 
     def progress(self, idx: int, total: int, stage: str, name: str, message: str) -> None:
         self.conn.execute(
-            "UPDATE py_run_status SET idx=?, total=?, stage=?, name=?, message=?, updated_at=? WHERE task=?",
-            (idx, total, stage, name, message, now(), TASK),
+            "UPDATE task_run_status SET task_type='data_update', idx=?, total=?, stage=?, name=?, message=?, worker_pid=?, updated_at=? WHERE task=?",
+            (idx, total, stage, name, message, os.getpid(), now(), TASK),
         )
 
     def done(self, message: str) -> None:
         ts = now()
         self.conn.execute(
-            "UPDATE py_run_status SET state='success', message=?, updated_at=?, finished_at=? WHERE task=?",
+            "UPDATE task_run_status SET state='success', message=?, worker_pid=NULL, updated_at=?, finished_at=? WHERE task=?",
             (message, ts, ts, TASK),
         )
 
     def error(self, message: str) -> None:
         ts = now()
+        columns = ["task", "task_type", "state", "idx", "total", "stage", "name", "message", "worker_pid", "started_at", "updated_at", "finished_at"]
         self.conn.execute(
-            """INSERT INTO py_run_status(task,state,idx,total,stage,name,message,started_at,updated_at,finished_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(task) DO UPDATE SET state='error', message=excluded.message,
-               updated_at=excluded.updated_at, finished_at=excluded.finished_at""",
-            (TASK, "error", 0, 0, "", "", message, ts, ts, ts),
+            upsert_sql("task_run_status", columns, ["task"], ["task_type", "state", "message", "worker_pid", "updated_at", "finished_at"]),
+            (TASK, "data_update", "error", 0, 0, "", "", message, None, ts, ts, ts),
         )
         self.conn.execute(
-            """UPDATE dataset_update_status SET state='failed', message=?, error_message=?,
-               finished_at=?, updated_at=? WHERE state IN ('running','pending')""",
-            (message, message, ts, ts),
+            """UPDATE task_jobs SET status='failed', error_message=?, finished_at=?, updated_at=?
+               WHERE task_type='data_update' AND status IN ('created','queued','running')""",
+            (message, ts, ts),
         )
 
     def mark_pending(self, names: list[str]) -> None:
         ts = now()
-        for name in names:
-            spec = DATASETS[name]
-            self.conn.execute(
-                """INSERT INTO dataset_update_status
-                   (dataset,category,state,progress_done,progress_total,message,rows_written,error_message,started_at,finished_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(dataset) DO UPDATE SET category=excluded.category, state='pending',
-                   progress_done=0, progress_total=0, message='', error_message='',
-                   started_at='', finished_at='', updated_at=excluded.updated_at""",
-                (name, spec.category, "pending", 0, 0, "", 0, "", "", "", ts),
-            )
+        total = len(names)
+        for idx, name in enumerate(names, start=1):
+            self._upsert_dataset_task(name, "queued", 0, 0, "", 0, "", "", "", ts, idx, total)
 
     def dataset_begin(self, name: str) -> None:
-        spec = DATASETS[name]
         ts = now()
-        self.conn.execute(
-            """INSERT INTO dataset_update_status
-               (dataset,category,state,progress_done,progress_total,message,rows_written,error_message,started_at,finished_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(dataset) DO UPDATE SET category=excluded.category, state='running',
-               progress_done=0, progress_total=0, message='', error_message='',
-               started_at=excluded.started_at, finished_at='', updated_at=excluded.updated_at""",
-            (name, spec.category, "running", 0, 0, "", 0, "", ts, "", ts),
-        )
+        self._upsert_dataset_task(name, "running", 0, 0, "", 0, "", ts, "", ts, 0, 0)
 
     def dataset_progress(self, name: str, done: int, total: int, message: str) -> None:
         self.conn.execute(
-            "UPDATE dataset_update_status SET progress_done=?, progress_total=?, message=?, updated_at=? WHERE dataset=?",
-            (done, total, message, now(), name),
+            "UPDATE task_jobs SET progress=?, summary_json=?, worker_pid=?, updated_at=? WHERE task_type='data_update' AND subtask_key=?",
+            (self._progress_ratio(done, total), self._summary_json(name, done, total, message, 0, ""), os.getpid(), now(), name),
         )
 
     def dataset_success(self, name: str, rows: int, message: str) -> None:
         ts = now()
         self.conn.execute(
-            """UPDATE dataset_update_status SET state='success', rows_written=?, message=?,
-               error_message='', finished_at=?, updated_at=? WHERE dataset=?""",
-            (rows, message, ts, ts, name),
+            """UPDATE task_jobs SET status='success', progress=1, summary_json=?, error_message='',
+               worker_pid=NULL, finished_at=?, updated_at=? WHERE task_type='data_update' AND subtask_key=?""",
+            (self._summary_json(name, 1, 1, message, rows, ""), ts, ts, name),
         )
 
     def dataset_failed(self, name: str, rows: int, message: str) -> None:
         ts = now()
         self.conn.execute(
-            """UPDATE dataset_update_status SET state='failed', rows_written=?, message=?,
-               error_message=?, finished_at=?, updated_at=? WHERE dataset=?""",
-            (rows, message, message, ts, ts, name),
+            """UPDATE task_jobs SET status='failed', summary_json=?, error_message=?,
+               worker_pid=NULL, finished_at=?, updated_at=? WHERE task_type='data_update' AND subtask_key=?""",
+            (self._summary_json(name, 0, 0, message, rows, message), message, ts, ts, name),
+        )
+
+    def _upsert_dataset_task(
+        self,
+        name: str,
+        status: str,
+        done: int,
+        total: int,
+        message: str,
+        rows: int,
+        error: str,
+        started_at: str,
+        finished_at: str,
+        updated_at: str,
+        sequence: int,
+        sequence_total: int,
+    ) -> None:
+        spec = DATASETS[name]
+        columns = [
+            "id", "name", "task_type", "status", "progress", "params_json", "summary_json",
+            "result_path", "log_path", "worker_type", "worker_pid", "external_run_id", "error_message",
+            "parent_id", "group_run_id", "subtask_key", "subtask_name", "sequence", "total",
+            "attempt", "max_attempts", "created_at", "queued_at", "started_at", "finished_at", "updated_at",
+        ]
+        self.conn.execute(
+            upsert_sql(
+                "task_jobs",
+                columns,
+                ["id"],
+                ["name", "status", "progress", "params_json", "summary_json", "worker_type", "worker_pid", "error_message", "subtask_key", "subtask_name", "sequence", "total", "queued_at", "started_at", "finished_at", "updated_at"],
+            ),
+            (
+                f"data_update:{name}", name, "data_update", status, self._progress_ratio(done, total),
+                json.dumps({"dataset": name, "category": spec.category}, ensure_ascii=False),
+                self._summary_json(name, done, total, message, rows, error),
+                "", "", "python", os.getpid(), "", error, TASK, TASK, name, name, sequence, sequence_total,
+                0, 1, updated_at, updated_at if status == "queued" else "", started_at, finished_at, updated_at,
+            ),
+        )
+
+    @staticmethod
+    def _progress_ratio(done: int, total: int) -> float:
+        if total <= 0:
+            return 0.0
+        return max(0.0, min(1.0, done / total))
+
+    def _summary_json(self, name: str, done: int, total: int, message: str, rows: int, error: str) -> str:
+        spec = DATASETS[name]
+        return json.dumps(
+            {
+                "dataset": name,
+                "category": spec.category,
+                "progress_done": done,
+                "progress_total": total,
+                "message": message,
+                "rows_written": rows,
+                "error_message": error,
+            },
+            ensure_ascii=False,
         )
 
 

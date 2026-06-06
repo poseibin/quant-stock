@@ -10,7 +10,7 @@ Runtime state does not live in this directory. The desktop app and Python worker
 - `../data_store/factor_cache/`
 - `../data_store/logs/`
 
-Strategy configuration is stored in SQLite `app_settings`, not in YAML files.
+Strategy configuration is stored in SQLite `cfg_app_settings`, not in YAML files.
 
 ## Strategy Plugins
 

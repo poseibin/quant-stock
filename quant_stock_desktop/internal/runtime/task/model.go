@@ -18,10 +18,11 @@ const (
 
 const (
 	TypeEvaluationTimeMachine Type = "evaluation_time_machine"
-	TypeStrategyEvaluation    Type = "strategy_evaluation"
+	TypeStrategyEvaluation    Type = "eval_strategy_admission"
 	TypePortfolioOptimization Type = "portfolio_optimization"
 	TypeWalkForwardEvaluation Type = "walk_forward_evaluation"
 	TypeParameterExperiment   Type = "parameter_experiment"
+	TypeFactorResearch        Type = "factor_research"
 	TypeDataUpdate            Type = "data_update"
 	TypeDailySignal           Type = "daily_signal"
 )

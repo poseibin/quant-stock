@@ -7,6 +7,7 @@ declare global {
           GetSettings: () => Promise<SettingsResponse>
           SaveSettings: (settings: Settings) => Promise<SettingsResponse>
           ApplyPortfolioCandidate: (request: ApplyPortfolioCandidateRequest) => Promise<SettingsResponse>
+          GetSignalPortfolioContext: () => Promise<SignalPortfolioContext>
           ListStrategyVersions: (strategy: string) => Promise<StrategyVersion[]>
           ActivateStrategyVersion: (request: StrategyVersionActivateRequest) => Promise<SettingsResponse>
           SetStrategyVersionStatus: (request: StrategyVersionStatusRequest) => Promise<StrategyVersion[]>
@@ -19,6 +20,7 @@ declare global {
           AnalyzePortfolioTask: (id: string) => Promise<TaskDTO>
           CreateTask: (request: CreateTaskRequest) => Promise<TaskDTO>
           StartTask: (id: string) => Promise<TaskDTO>
+          RetryTask: (id: string) => Promise<TaskDTO>
           CancelTask: (id: string) => Promise<TaskDTO>
           ListTasks: (query: TaskQuery) => Promise<TaskDTO[]>
           GetTask: (id: string) => Promise<TaskDTO>
@@ -36,9 +38,6 @@ declare global {
           ListPolicySupportCandidates: (limit: number) => Promise<PolicySupportCandidate[]>
           RunPolicySupportAnalysis: () => Promise<void>
           GetPolicySupportAnalysisStatus: () => Promise<RunStatus>
-          ListStateTeamHolderChanges: (query: StateTeamQuery) => Promise<StateTeamChange[]>
-          RunStateTeamAnalysis: () => Promise<void>
-          GetStateTeamAnalysisStatus: () => Promise<RunStatus>
           ListLimitBreakoutCandidates: (query: BreakoutQuery) => Promise<LimitBreakoutCandidate[]>
           RefreshLimitBreakoutCandidates: (query: BreakoutQuery) => Promise<LimitBreakoutCandidate[]>
           GetLimitBreakoutRunStatus: () => Promise<RunStatus>
@@ -50,19 +49,25 @@ declare global {
           RunLimitSignalEvaluation: () => Promise<void>
           GetLimitSignalEvaluationRunStatus: () => Promise<RunStatus>
           ListLimitSignalEvaluationSummary: () => Promise<LimitSignalEvaluationSummary[]>
+          ListFactorResearchRuns: (limit: number) => Promise<FactorResearchRunSummary[]>
+          ListFactorICResults: (runID: string, limit: number) => Promise<FactorICResult[]>
+          GetFactorModelRun: (runID: string) => Promise<FactorModelRun>
+          ListFactorModelPredictions: (runID: string, limit: number) => Promise<FactorModelPrediction[]>
+          ListFactorCorrelationResults: (runID: string, limit: number) => Promise<FactorCorrelationResult[]>
+          ListFactorStressResults: (runID: string, limit: number) => Promise<FactorStressResult[]>
+          ListFactorLatestPredictions: (runID: string, limit: number) => Promise<FactorLatestPrediction[]>
           GetPositionSummary: () => Promise<PositionSummary>
           GetPositionHistory: () => Promise<PositionHistoryPoint[]>
           GetPositionHoldings: () => Promise<PositionItem[]>
           GetPositionRecommendation: () => Promise<PositionRecommendation>
           GeneratePositionSignal: (req: GenerateSignalRequest) => Promise<GenerateSignalResponse>
+          CancelPositionSignal: () => Promise<RunStatus>
           GetSignalRunStatus: () => Promise<RunStatus>
           ConfirmPositionTrades: (trades: TradeRequest[]) => Promise<PositionSummary>
           ClearPositionPool: () => Promise<PositionSummary>
-          PreviewDataset: (query: DatasetPreviewQuery) => Promise<DatasetPreview>
           RunDataUpdate: (req: DataUpdateRequest) => Promise<void>
           GetDataUpdateStatus: () => Promise<RunStatus>
           ListDatasetUpdateStatus: () => Promise<DatasetUpdateStatus[]>
-          ListDataFetchJobs: () => Promise<DataFetchJob[]>
         }
       }
     }
@@ -76,6 +81,8 @@ export interface AppInfo {
 
 export interface Settings {
   data_path: string
+  database_backend: string
+  mysql_dsn: string
   default_initial_cash: number
   default_rebalance_freq: number
   task_concurrency: number
@@ -87,6 +94,8 @@ export interface Settings {
   exit_rules: Record<string, unknown>
   governance_rules: Record<string, unknown>
 }
+
+const fallbackSettingsKey = 'quant-stock.settings.preview'
 
 export interface StrategySettings {
   label: string
@@ -286,6 +295,47 @@ export interface ApplyPortfolioCandidateRequest {
   candidate_id: string
 }
 
+export interface ActivePortfolioCandidate {
+  run_id: string
+  candidate_id: string
+  name: string
+  status: string
+  score: number
+  weights: Record<string, number>
+  validation_status: string
+  applied_at: string
+}
+
+export interface SignalPortfolioCandidate {
+  run_id: string
+  candidate_id: string
+  rank: number
+  name: string
+  objective: string
+  status: string
+  score: number
+  strategies: string
+  weights: Record<string, number>
+  annual_return: number | null
+  max_drawdown: number | null
+  sharpe: number | null
+  calmar: number | null
+  avg_turnover: number | null
+  avg_holdings: number | null
+  rebalance_freq: number
+  validation_status: string
+  reason: string
+  updated_at: string
+  is_active: boolean
+}
+
+export interface SignalPortfolioContext {
+  active: ActivePortfolioCandidate | null
+  candidates: SignalPortfolioCandidate[]
+  can_generate: boolean
+  blocked_reason: string
+}
+
 export interface CreateTaskRequest {
   name: string
   task_type: string
@@ -324,6 +374,101 @@ export interface TaskDTO {
   started_at: string
   finished_at: string
   updated_at: string
+}
+
+export interface FactorResearchRunSummary {
+  run_id: string
+  start_date: string
+  end_date: string
+  freq: string
+  label: string
+  status: string
+  factor_count: number
+  sample_dates: number
+  sample_rows: number
+  panel_path: string
+  updated_at: string
+  model_status: string
+  rank_ic: number
+}
+
+export interface FactorICResult {
+  run_id: string
+  factor: string
+  family: string
+  variant: string
+  horizon: string
+  ic_mean: number
+  rank_ic_mean: number
+  ic_win_rate: number
+  icir: number
+  status: string
+  long_short_return: number
+  monotonic_score: number
+}
+
+export interface FactorModelRun {
+  run_id: string
+  model_type: string
+  label: string
+  feature_count: number
+  status: string
+  model_path: string
+  rank_ic: number
+  top_bottom_spread: number
+  summary_json: string
+  updated_at: string
+}
+
+export interface FactorModelPrediction {
+  run_id: string
+  trade_date: string
+  ts_code: string
+  pred_score: number
+  realized_return: number
+  pred_rank: number
+  test_year: number
+}
+
+export interface FactorCorrelationResult {
+  run_id: string
+  feature_a: string
+  feature_b: string
+  correlation: number
+  abs_correlation: number
+  family_a: string
+  family_b: string
+  keep_feature: string
+  drop_feature: string
+  reason: string
+}
+
+export interface FactorStressResult {
+  run_id: string
+  bucket_type: string
+  bucket_key: string
+  bucket_label: string
+  start_date: string
+  end_date: string
+  n_days: number
+  total_return: number
+  annual_return: number
+  max_drawdown: number
+  sharpe: number
+  win_rate: number
+  avg_daily_return: number
+  volatility: number
+  summary_json: string
+}
+
+export interface FactorLatestPrediction {
+  run_id: string
+  trade_date: string
+  ts_code: string
+  pred_score: number
+  pred_rank: number
+  is_top20: boolean
+  model_path: string
 }
 
 export interface TimeMachineSnapshot {
@@ -422,17 +567,6 @@ export interface DailyBar {
   pct_chg: number
   vol: number
   amount: number
-}
-
-export interface DatasetPreviewQuery {
-  dataset: string
-  limit?: number
-}
-
-export interface DatasetPreview {
-  dataset: string
-  columns: string[]
-  rows: Array<Record<string, string>>
 }
 
 export interface FinancialQuery {
@@ -595,28 +729,64 @@ export async function getSettings(): Promise<SettingsResponse> {
     return window.go.main.App.GetSettings()
   }
 
+  const settings = readFallbackSettings()
   return {
-    settings: {
-      data_path: '/Users/kitty/Library/Application Support/QuantStockDesktop/data_store',
-      default_initial_cash: 500000,
-      default_rebalance_freq: 5,
-      task_concurrency: 2,
-      tushare_token: '',
-      deepseek_token: '',
-      deepseek_model: 'deepseek-v4-pro',
-      strategies: defaultStrategies(),
-      portfolio_risk: {
-        max_industry_weight: 0.3,
-        max_single_weight: 0.05,
-        max_holdings: 50,
-        cash_buffer: 0,
-        blacklist: [],
-        market_regime: { enabled: false, trend_window: 60, breadth_window: 20, min_breadth: 0.45, normal_exposure: 1, weak_exposure: 0.5, bear_exposure: 0.3 }
-      },
-      exit_rules: { enabled: true, stop_loss: -0.12, trailing_stop: -0.08, trailing_exec: 'next_open', slippage: 0.003 },
-      governance_rules: defaultGovernanceRules()
-    },
+    settings,
     issues: []
+  }
+}
+
+function defaultSettings(): Settings {
+  return {
+    data_path: '/Users/kitty/Library/Application Support/QuantStockDesktop/data_store',
+    database_backend: 'mysql',
+    mysql_dsn: 'quant_stock:quant_stock@tcp(127.0.0.1:3306)/quant_stock?parseTime=true&charset=utf8mb4&loc=Local',
+    default_initial_cash: 500000,
+    default_rebalance_freq: 5,
+    task_concurrency: 2,
+    tushare_token: '',
+    deepseek_token: '',
+    deepseek_model: 'deepseek-v4-pro',
+    strategies: defaultStrategies(),
+    portfolio_risk: {
+      max_industry_weight: 0.3,
+      max_single_weight: 0.05,
+      max_holdings: 50,
+      cash_buffer: 0,
+      blacklist: [],
+      market_regime: { enabled: false, trend_window: 60, breadth_window: 20, min_breadth: 0.45, normal_exposure: 1, weak_exposure: 0.5, bear_exposure: 0.3 }
+    },
+    exit_rules: { enabled: true, stop_loss: -0.12, trailing_stop: -0.08, trailing_exec: 'next_open', slippage: 0.003 },
+    governance_rules: defaultGovernanceRules()
+  }
+}
+
+function readFallbackSettings(): Settings {
+  const defaults = defaultSettings()
+  try {
+    const stored = window.localStorage.getItem(fallbackSettingsKey)
+    if (!stored) {
+      return defaults
+    }
+    const saved = JSON.parse(stored) as Partial<Settings>
+    return {
+      ...defaults,
+      ...saved,
+      strategies: { ...defaults.strategies, ...(saved.strategies || {}) },
+      portfolio_risk: { ...defaults.portfolio_risk, ...(saved.portfolio_risk || {}) },
+      exit_rules: { ...defaults.exit_rules, ...(saved.exit_rules || {}) },
+      governance_rules: { ...defaults.governance_rules, ...(saved.governance_rules || {}) }
+    }
+  } catch {
+    return defaults
+  }
+}
+
+function writeFallbackSettings(settings: Settings) {
+  try {
+    window.localStorage.setItem(fallbackSettingsKey, JSON.stringify(settings))
+  } catch {
+    // Ignore browser storage failures in preview mode.
   }
 }
 
@@ -632,7 +802,7 @@ function defaultGovernanceRules(): Record<string, unknown> {
     max_turnover: 0.45,
     min_stability_rate: 0.45,
     min_walk_forward_pass_rate: 0.5,
-    min_walk_forward_windows: 1,
+    min_eval_walk_forward_windows: 1,
     min_parameter_stable_rate: 0.5,
     require_positive_return: true,
     allow_missing_parameter_tests: true
@@ -645,22 +815,18 @@ function defaultStrategies(): Record<string, StrategySettings> {
     multi_factor_composite: { label: '多因子综合', enabled: true, weight: 0.18, rebalance: 'monthly', selection: { component_weights: { small_cap_quality: 0.3, trend_pullback: 0.25, dividend_quality: 0.2, earnings_revision: 0.15, industry_prosperity: 0.1 } }, position: { n_holdings: 30, max_single_weight: 0.05 } },
     small_cap_quality: { label: '小盘质量', enabled: true, weight: 0.3, rebalance: 'monthly', filters: {}, universe: {}, position: {} },
     trend_pullback: { label: '趋势回撤', enabled: true, weight: 0.12, rebalance: 'weekly', filters: {}, universe: {}, position: {} },
+    turtle_breakout: { label: '海龟突破', enabled: true, weight: 0.08, rebalance: 'daily', filters: {}, universe: {}, position: {} },
     dividend_quality: { label: '红利质量', enabled: true, weight: 0.1, rebalance: 'monthly', filters: {}, universe: {}, position: {} },
     earnings_revision: { label: '盈利预期修正', enabled: true, weight: 0.1, rebalance: 'event', filters: {}, position: {} },
     industry_prosperity: { label: '行业景气', enabled: true, weight: 0.1, rebalance: 'monthly', selection: {}, universe: {}, position: {} },
     low_crowding_reversal: { label: '低拥挤反转', enabled: true, weight: 0.1, rebalance: 'quarterly', filters: {}, position: {} },
     event_enhanced: { label: '事件增强', enabled: false, weight: 0.06, rebalance: 'event', filters: {}, position: {} },
     beijing_satellite: { label: '北交所卫星', enabled: false, weight: 0.04, rebalance: 'monthly', filters: {}, universe: {}, position: {} },
-    reversal: { label: '业绩反转', enabled: true, weight: 0.25, rebalance: 'quarterly', filters: {}, position: {} },
     insider_buy: { label: '高管增持', enabled: true, weight: 0.2, rebalance: 'event', filters: {}, position: {} },
     lhb_follow: { label: '龙虎榜', enabled: true, weight: 0.1, rebalance: 'event', filters: {}, position: {} },
-    industry_rotation: { label: '行业轮动', enabled: true, weight: 0.15, rebalance: 'monthly', selection: {}, universe: {}, position: {} },
     trend_quality: { label: '趋势质量', enabled: false, weight: 0.12, rebalance: 'monthly', filters: {}, universe: {}, position: {} },
-    dividend_low_vol: { label: '低波红利', enabled: false, weight: 0.1, rebalance: 'monthly', filters: {}, universe: {}, position: {} },
-    forecast_revision: { label: '业绩预告', enabled: false, weight: 0.1, rebalance: 'event', filters: {}, position: {} },
     garp_quality: { label: '质量成长', enabled: false, weight: 0.12, rebalance: 'monthly', filters: {}, universe: {}, position: {} },
-    moneyflow_pullback: { label: '资金低吸', enabled: false, weight: 0.08, rebalance: 'event', filters: {}, position: {} },
-    beijing_se: { label: '北交所', enabled: false, weight: 0.15, rebalance: 'monthly', filters: {}, universe: {}, position: {} }
+    moneyflow_pullback: { label: '资金低吸', enabled: false, weight: 0.08, rebalance: 'event', filters: {}, position: {} }
   }
 }
 
@@ -669,6 +835,7 @@ export async function saveSettings(settings: Settings): Promise<SettingsResponse
     return window.go.main.App.SaveSettings(settings)
   }
 
+  writeFallbackSettings(settings)
   return {
     settings,
     issues: []
@@ -680,6 +847,13 @@ export async function applyPortfolioCandidate(request: ApplyPortfolioCandidateRe
     return window.go.main.App.ApplyPortfolioCandidate(request)
   }
   return getSettings()
+}
+
+export async function getSignalPortfolioContext(): Promise<SignalPortfolioContext> {
+  if (window.go?.main?.App?.GetSignalPortfolioContext) {
+    return window.go.main.App.GetSignalPortfolioContext()
+  }
+  return { active: null, candidates: [], can_generate: false, blocked_reason: '请先在评估中心完成组合评估并选择候选组合' }
 }
 
 export async function listStrategyVersions(strategy: string): Promise<StrategyVersion[]> {
@@ -786,6 +960,14 @@ export async function startTask(id: string): Promise<TaskDTO> {
   return { ...mockTask({ name: id, task_type: 'evaluation_time_machine', params: {} }), id, status: 'running', started_at: now, updated_at: now }
 }
 
+export async function retryTask(id: string): Promise<TaskDTO> {
+  if (window.go?.main?.App?.RetryTask) {
+    return window.go.main.App.RetryTask(id)
+  }
+  const now = new Date().toISOString()
+  return { ...mockTask({ name: id, task_type: 'eval_strategy_admission', params: {} }), id, status: 'running', started_at: now, updated_at: now }
+}
+
 export async function cancelTask(id: string): Promise<TaskDTO> {
   if (window.go?.main?.App?.CancelTask) {
     return window.go.main.App.CancelTask(id)
@@ -799,6 +981,56 @@ export async function listTasks(query: TaskQuery = {}): Promise<TaskDTO[]> {
     return window.go.main.App.ListTasks(query)
   }
 
+  return []
+}
+
+export async function listFactorResearchRuns(limit = 20): Promise<FactorResearchRunSummary[]> {
+  if (window.go?.main?.App?.ListFactorResearchRuns) {
+    return (await window.go.main.App.ListFactorResearchRuns(limit)) || []
+  }
+  return []
+}
+
+export async function listFactorICResults(runID = '', limit = 80): Promise<FactorICResult[]> {
+  if (window.go?.main?.App?.ListFactorICResults) {
+    return (await window.go.main.App.ListFactorICResults(runID, limit)) || []
+  }
+  return []
+}
+
+export async function getFactorModelRun(runID = ''): Promise<FactorModelRun | null> {
+  if (window.go?.main?.App?.GetFactorModelRun) {
+    const model = await window.go.main.App.GetFactorModelRun(runID)
+    return model?.run_id ? model : null
+  }
+  return null
+}
+
+export async function listFactorModelPredictions(runID = '', limit = 120): Promise<FactorModelPrediction[]> {
+  if (window.go?.main?.App?.ListFactorModelPredictions) {
+    return (await window.go.main.App.ListFactorModelPredictions(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listFactorCorrelationResults(runID = '', limit = 120): Promise<FactorCorrelationResult[]> {
+  if (window.go?.main?.App?.ListFactorCorrelationResults) {
+    return (await window.go.main.App.ListFactorCorrelationResults(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listFactorStressResults(runID = '', limit = 160): Promise<FactorStressResult[]> {
+  if (window.go?.main?.App?.ListFactorStressResults) {
+    return (await window.go.main.App.ListFactorStressResults(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listFactorLatestPredictions(runID = '', limit = 120): Promise<FactorLatestPrediction[]> {
+  if (window.go?.main?.App?.ListFactorLatestPredictions) {
+    return (await window.go.main.App.ListFactorLatestPredictions(runID, limit)) || []
+  }
   return []
 }
 
@@ -925,56 +1157,7 @@ export async function getPolicySupportAnalysisStatus(): Promise<RunStatus> {
   if (window.go?.main?.App?.GetPolicySupportAnalysisStatus) {
     return window.go.main.App.GetPolicySupportAnalysisStatus()
   }
-  return { task: 'policy_support_analysis', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
-}
-
-export interface StateTeamQuery {
-  period?: string
-  action?: string
-  keyword?: string
-  limit?: number
-}
-
-export interface StateTeamChange {
-  ts_code: string
-  name: string
-  industry: string
-  action: string
-  current_period: string
-  previous_period: string
-  current_holder_count: number
-  previous_holder_count: number
-  current_hold_amount: number
-  previous_hold_amount: number
-  current_hold_ratio: number
-  previous_hold_ratio: number
-  hold_ratio_delta: number
-  current_float_ratio: number
-  previous_float_ratio: number
-  current_holders: string
-  previous_holders: string
-  note: string
-  updated_at: string
-}
-
-export async function listStateTeamHolderChanges(query: StateTeamQuery = {}): Promise<StateTeamChange[]> {
-  if (window.go?.main?.App?.ListStateTeamHolderChanges) {
-    return (await window.go.main.App.ListStateTeamHolderChanges(query)) || []
-  }
-  return []
-}
-
-export async function runStateTeamAnalysis(): Promise<void> {
-  if (window.go?.main?.App?.RunStateTeamAnalysis) {
-    await window.go.main.App.RunStateTeamAnalysis()
-  }
-}
-
-export async function getStateTeamAnalysisStatus(): Promise<RunStatus> {
-  if (window.go?.main?.App?.GetStateTeamAnalysisStatus) {
-    return window.go.main.App.GetStateTeamAnalysisStatus()
-  }
-  return { task: 'state_team_analysis', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+  return emptyRunStatus('policy_support_analysis')
 }
 
 export async function listLimitBreakoutCandidates(query: BreakoutQuery = {}): Promise<LimitBreakoutCandidate[]> {
@@ -1105,6 +1288,8 @@ export interface GenerateSignalRequest {
   date?: string
   initial_cash?: number
   rebalance_freq?: number
+  portfolio_run_id?: string
+  portfolio_candidate_id?: string
 }
 
 export interface GenerateSignalResponse {
@@ -1115,15 +1300,30 @@ export interface GenerateSignalResponse {
 
 export interface RunStatus {
   task: string
+  task_type: string
   state: string
   idx: number
   total: number
   stage: string
   name: string
   message: string
+  worker_pid: number
   started_at: string
   updated_at: string
   finished_at: string
+}
+
+export function emptyRunStatus(task: string, patch: Partial<RunStatus> = {}): RunStatus {
+  return { task, task_type: inferRunStatusTaskType(task), state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', worker_pid: 0, started_at: '', updated_at: '', finished_at: '', ...patch }
+}
+
+function inferRunStatusTaskType(task: string): string {
+  if (task === 'data_update') return 'data_update'
+  if (task === 'daily_signal') return 'signal'
+  if (task === 'limit_signal_evaluation') return 'evaluation'
+  if (task === 'limit_breakout' || task === 'limit_up_momentum') return 'market_scan'
+  if (task === 'policy_support_analysis') return 'analysis'
+  return 'python'
 }
 
 export async function getPositionSummary(): Promise<PositionSummary> {
@@ -1193,18 +1393,25 @@ export async function generatePositionSignal(req: GenerateSignalRequest = {}): P
   return { date: '', output: '', success: false }
 }
 
+export async function cancelPositionSignal(): Promise<RunStatus> {
+  if (window.go?.main?.App?.CancelPositionSignal) {
+    return window.go.main.App.CancelPositionSignal()
+  }
+  return emptyRunStatus('daily_signal', { state: 'cancelled', stage: 'cancelled', message: '已取消当日信号生成' })
+}
+
 export async function getSignalRunStatus(): Promise<RunStatus> {
   if (window.go?.main?.App?.GetSignalRunStatus) {
     return window.go.main.App.GetSignalRunStatus()
   }
-  return { task: 'daily_signal', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+  return emptyRunStatus('daily_signal')
 }
 
 export async function getLimitBreakoutRunStatus(): Promise<RunStatus> {
   if (window.go?.main?.App?.GetLimitBreakoutRunStatus) {
     return window.go.main.App.GetLimitBreakoutRunStatus()
   }
-  return { task: 'limit_breakout', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+  return emptyRunStatus('limit_breakout')
 }
 
 export async function clearLimitBreakoutCandidates(): Promise<void> {
@@ -1217,7 +1424,7 @@ export async function getLimitUpMomentumRunStatus(): Promise<RunStatus> {
   if (window.go?.main?.App?.GetLimitUpMomentumRunStatus) {
     return window.go.main.App.GetLimitUpMomentumRunStatus()
   }
-  return { task: 'limit_up_momentum', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+  return emptyRunStatus('limit_up_momentum')
 }
 
 export async function clearLimitUpMomentumCandidates(): Promise<void> {
@@ -1236,7 +1443,7 @@ export async function getLimitSignalEvaluationRunStatus(): Promise<RunStatus> {
   if (window.go?.main?.App?.GetLimitSignalEvaluationRunStatus) {
     return window.go.main.App.GetLimitSignalEvaluationRunStatus()
   }
-  return { task: 'limit_signal_evaluation', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+  return emptyRunStatus('limit_signal_evaluation')
 }
 
 export async function listLimitSignalEvaluationSummary(): Promise<LimitSignalEvaluationSummary[]> {
@@ -1244,13 +1451,6 @@ export async function listLimitSignalEvaluationSummary(): Promise<LimitSignalEva
     return (await window.go.main.App.ListLimitSignalEvaluationSummary()) || []
   }
   return []
-}
-
-export async function previewDataset(query: DatasetPreviewQuery): Promise<DatasetPreview> {
-  if (window.go?.main?.App?.PreviewDataset) {
-    return window.go.main.App.PreviewDataset(query)
-  }
-  return { dataset: query.dataset, columns: [], rows: [] }
 }
 
 export interface DataUpdateRequest {
@@ -1269,7 +1469,7 @@ export async function getDataUpdateStatus(): Promise<RunStatus> {
   if (window.go?.main?.App?.GetDataUpdateStatus) {
     return window.go.main.App.GetDataUpdateStatus()
   }
-  return { task: 'data_update', state: 'idle', idx: 0, total: 0, stage: '', name: '', message: '', started_at: '', updated_at: '', finished_at: '' }
+  return emptyRunStatus('data_update')
 }
 
 export interface DatasetUpdateStatus {
@@ -1286,21 +1486,9 @@ export interface DatasetUpdateStatus {
   updated_at: string
 }
 
-export interface DataFetchJob {
-  name: string
-  category: string
-}
-
 export async function listDatasetUpdateStatus(): Promise<DatasetUpdateStatus[]> {
   if (window.go?.main?.App?.ListDatasetUpdateStatus) {
     return (await window.go.main.App.ListDatasetUpdateStatus()) || []
-  }
-  return []
-}
-
-export async function listDataFetchJobs(): Promise<DataFetchJob[]> {
-  if (window.go?.main?.App?.ListDataFetchJobs) {
-    return (await window.go.main.App.ListDataFetchJobs()) || []
   }
   return []
 }

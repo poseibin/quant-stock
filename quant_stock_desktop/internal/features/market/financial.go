@@ -1,24 +1,19 @@
 package market
 
 import (
-	"io"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
-
-	parquet "github.com/parquet-go/parquet-go"
 )
 
 type FinancialIndicator struct {
-	TSCode       string  `parquet:"ts_code" json:"ts_code"`
-	AnnDate      string  `parquet:"ann_date" json:"ann_date"`
-	EndDate      string  `parquet:"end_date" json:"end_date"`
-	EPS          float64 `parquet:"eps" json:"eps"`
-	ROE          float64 `parquet:"roe" json:"roe"`
-	GrossMargin  float64 `parquet:"grossprofit_margin" json:"gross_margin"`
-	NetMargin    float64 `parquet:"netprofit_margin" json:"net_margin"`
-	DebtToAssets float64 `parquet:"debt_to_assets" json:"debt_to_assets"`
+	TSCode       string  `json:"ts_code"`
+	AnnDate      string  `json:"ann_date"`
+	EndDate      string  `json:"end_date"`
+	EPS          float64 `json:"eps"`
+	ROE          float64 `json:"roe"`
+	GrossMargin  float64 `json:"gross_margin"`
+	NetMargin    float64 `json:"net_margin"`
+	DebtToAssets float64 `json:"debt_to_assets"`
 }
 
 type FinancialQuery struct {
@@ -27,6 +22,9 @@ type FinancialQuery struct {
 }
 
 func (service *Service) ListFinancialIndicators(dataPath string, query FinancialQuery) ([]FinancialIndicator, error) {
+	if service == nil || service.repo == nil || service.repo.db == nil {
+		return []FinancialIndicator{}, nil
+	}
 	tsCode := strings.TrimSpace(query.TSCode)
 	if tsCode == "" {
 		return []FinancialIndicator{}, nil
@@ -35,55 +33,26 @@ func (service *Service) ListFinancialIndicators(dataPath string, query Financial
 	if limit <= 0 || limit > 100 {
 		limit = 40
 	}
-	files, _ := filepath.Glob(filepath.Join(dataPath, "raw", "fina_indicator", "*.parquet"))
-	sort.Strings(files)
-
-	items := make([]FinancialIndicator, 0)
-	for _, filePath := range files {
-		part, err := readFinancialFile(filePath, tsCode, limit-len(items))
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, part...)
-		if len(items) >= limit {
-			break
-		}
-	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].EndDate < items[j].EndDate
-	})
-	return items, nil
-}
-
-func readFinancialFile(filePath string, tsCode string, limit int) ([]FinancialIndicator, error) {
-	if limit <= 0 {
+	rows, err := service.repo.db.Conn().Query(`SELECT ts_code, ann_date, end_date, eps, roe, grossprofit_margin, netprofit_margin, debt_to_assets
+		FROM data_fina_indicator WHERE ts_code = ? ORDER BY end_date DESC LIMIT ?`, tsCode, limit)
+	if isMissingDataTable(err) {
 		return []FinancialIndicator{}, nil
 	}
-	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-
-	reader := parquet.NewGenericReader[FinancialIndicator](file)
-	defer reader.Close()
-
-	items := make([]FinancialIndicator, 0)
-	buffer := make([]FinancialIndicator, 512)
-	for len(items) < limit {
-		count, err := reader.Read(buffer)
-		for index := 0; index < count && len(items) < limit; index++ {
-			item := buffer[index]
-			if item.TSCode == tsCode {
-				items = append(items, item)
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
+	defer rows.Close()
+	out := []FinancialIndicator{}
+	for rows.Next() {
+		var item FinancialIndicator
+		if err := rows.Scan(&item.TSCode, &item.AnnDate, &item.EndDate, &item.EPS, &item.ROE, &item.GrossMargin, &item.NetMargin, &item.DebtToAssets); err != nil {
 			return nil, err
 		}
+		out = append(out, item)
 	}
-	return items, nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].EndDate < out[j].EndDate })
+	return out, nil
 }

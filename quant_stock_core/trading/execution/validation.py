@@ -1,6 +1,6 @@
 """信号验证
 
-将 SQLite daily_recommendation 表中的历史信号与次日真实行情对比，
+将 rec_daily_recommendations 表中的历史信号与次日真实行情对比，
 计算组合收益、命中率、单股表现，用于策略效果回看。
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pandas as pd
 
-from common.infra.db import desktop_db_path, write_transaction
+from common.infra.db import desktop_db_path, upsert_sql, write_transaction
 from common.config import RAW_DIR
 from research.data.storage import duckdb_query as dq
 from trading.execution import signal as sig
@@ -196,7 +196,7 @@ def evaluate_history(horizon_days: int = 1) -> pd.DataFrame:
 
 
 def persist_history(db_path: str | None = None, horizon_days: int = 1) -> list[dict]:
-    """把推荐回看写回 SQLite recommendation_hindsight。"""
+    """把推荐回看写回 rec_hindsight。"""
     df = evaluate_history(horizon_days=horizon_days)
     if df.empty:
         return []
@@ -206,7 +206,7 @@ def persist_history(db_path: str | None = None, horizon_days: int = 1) -> list[d
     with write_transaction(path) as conn:
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS recommendation_hindsight (
+            CREATE TABLE IF NOT EXISTS rec_hindsight (
                 id TEXT PRIMARY KEY,
                 recommendation_date TEXT NOT NULL,
                 horizon_days INTEGER NOT NULL DEFAULT 1,
@@ -227,23 +227,20 @@ def persist_history(db_path: str | None = None, horizon_days: int = 1) -> list[d
             payload = {k: (None if pd.isna(v) else v) for k, v in item.to_dict().items()}
             rec_date = str(payload.get("date") or "")
             row_id = f"rh_{rec_date}_{horizon_days}"
+            columns = [
+                "id", "recommendation_date", "horizon_days", "next_date", "n_holdings", "n_eval",
+                "weighted_return", "equal_weight_return", "hit_rate", "payload_json", "created_at", "updated_at",
+            ]
             conn.execute(
-                """
-                INSERT INTO recommendation_hindsight(
-                    id, recommendation_date, horizon_days, next_date, n_holdings, n_eval,
-                    weighted_return, equal_weight_return, hit_rate, payload_json, created_at, updated_at
-                )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(recommendation_date, horizon_days) DO UPDATE SET
-                    next_date = excluded.next_date,
-                    n_holdings = excluded.n_holdings,
-                    n_eval = excluded.n_eval,
-                    weighted_return = excluded.weighted_return,
-                    equal_weight_return = excluded.equal_weight_return,
-                    hit_rate = excluded.hit_rate,
-                    payload_json = excluded.payload_json,
-                    updated_at = excluded.updated_at
-                """,
+                upsert_sql(
+                    "rec_hindsight",
+                    columns,
+                    ["recommendation_date", "horizon_days"],
+                    [
+                        "next_date", "n_holdings", "n_eval", "weighted_return",
+                        "equal_weight_return", "hit_rate", "payload_json", "updated_at",
+                    ],
+                ),
                 (
                     row_id,
                     rec_date,
@@ -292,9 +289,9 @@ def fetch_benchmark(start: str, end: str, code: str = "000300.SH") -> pd.DataFra
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="刷新 daily_recommendation 回看结果")
-    parser.add_argument("--persist", action="store_true", help="写入 SQLite recommendation_hindsight")
-    parser.add_argument("--db-path", default=None, help="SQLite meta.db 路径")
+    parser = argparse.ArgumentParser(description="刷新 rec_daily_recommendations 回看结果")
+    parser.add_argument("--persist", action="store_true", help="写入 rec_hindsight")
+    parser.add_argument("--db-path", default=None, help="meta.db 路径（SQLite 后端使用）")
     parser.add_argument("--horizon-days", type=int, default=1)
     parser.add_argument("--horizons", default="", help="逗号分隔多周期，例如 1,3,5,10,20")
     args = parser.parse_args()
