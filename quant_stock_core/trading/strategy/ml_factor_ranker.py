@@ -39,6 +39,7 @@ class MLFactorRankerStrategy(BaseStrategy):
         if not frames:
             return pd.DataFrame()
         base = pd.concat(frames).sort_index().fillna(0.0)
+        base = _apply_crash_rebalance_gate(base, self.cfg)
         if daily_overlay:
             return _apply_daily_exposure_overlay(base, start, end, self.cfg)
         return base
@@ -241,6 +242,87 @@ def _apply_stress_controls(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFram
     if bool(controls.get("use_adjusted_score", True)):
         out["pred_score"] = out["stress_adjusted_score"]
     return out
+
+
+def _apply_crash_rebalance_gate(weights: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
+    gate = (cfg.filters or {}).get("crash_gate") or {}
+    if weights.empty or not bool(gate.get("enabled", False)):
+        return weights
+
+    dates = sorted(str(date) for date in weights.index.astype(str).tolist())
+    states = _market_state_series(dates, int(gate.get("lookback_days", 10)))
+    if states.empty:
+        return weights
+
+    mode = str(gate.get("mode", "skip_rebalance"))
+    crash_states = {str(x) for x in gate.get("crash_states", ["crash"])}
+    recovery_states = {str(x) for x in gate.get("recovery_states", ["liquidity_squeeze", "post_crash_repair", "normal"])}
+    lookback_days = max(1, int(gate.get("lookback_days", 10)))
+    hold_previous = bool(gate.get("hold_previous", mode != "cash"))
+    cash_exposure = float(gate.get("cash_exposure", 0.0))
+    max_skip_periods = int(gate.get("max_skip_periods", 2))
+
+    out_rows: list[pd.Series] = []
+    out_index: list[str] = []
+    previous: pd.Series | None = None
+    in_cooldown = False
+    skipped_periods = 0
+
+    for date in dates:
+        target = weights.loc[date].astype(float).copy()
+        recent = states.loc[states.index <= date].tail(lookback_days)
+        latest_state = str(recent.iloc[-1]) if not recent.empty else "normal"
+        recent_crash = bool(recent.isin(crash_states).any()) if not recent.empty else False
+        recovered = latest_state in recovery_states and not recent_crash
+
+        if mode == "cash":
+            if recent_crash:
+                target = target * cash_exposure
+        elif mode == "recovery_confirm":
+            if recent_crash:
+                in_cooldown = True
+                skipped_periods = 0
+            if in_cooldown:
+                if recovered or (max_skip_periods > 0 and skipped_periods >= max_skip_periods):
+                    in_cooldown = False
+                else:
+                    target = previous.copy() if hold_previous and previous is not None else target * cash_exposure
+                    skipped_periods += 1
+        else:
+            if recent_crash:
+                target = previous.copy() if hold_previous and previous is not None else target * cash_exposure
+
+        out_rows.append(target)
+        out_index.append(date)
+        previous = target.copy()
+
+    return pd.DataFrame(out_rows, index=out_index).reindex(columns=weights.columns).fillna(0.0)
+
+
+def _market_state_series(dates: list[str], lookback_days: int) -> pd.Series:
+    if not dates:
+        return pd.Series(dtype="object")
+    pad_days = max(lookback_days * 4, 30)
+    start = (pd.to_datetime(min(dates), format="%Y%m%d") - pd.Timedelta(days=pad_days)).strftime("%Y%m%d")
+    end = max(dates)
+    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
+    try:
+        with connect_db(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT trade_date, state
+                FROM market_risk_state_daily
+                WHERE trade_date BETWEEN ? AND ?
+                ORDER BY trade_date
+                """,
+                (start, end),
+            ).fetchall()
+    except Exception:
+        return pd.Series(dtype="object")
+    if not rows:
+        return pd.Series(dtype="object")
+    series = pd.Series({str(date): str(state) for date, state in rows}, dtype="object")
+    return series.sort_index()
 
 
 def _weights_from_predictions(df: pd.DataFrame, date: str, cfg: StrategyConfig) -> pd.DataFrame:
