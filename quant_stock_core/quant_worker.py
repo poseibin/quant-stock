@@ -7,6 +7,7 @@ Usage (mirrors original python invocations):
   quant_worker scripts/limit_breakout_worker.py [args...]
   quant_worker scripts/limit_up_momentum_worker.py [args...]
   quant_worker scripts/evaluate_strategies.py [args...]
+  quant_worker scripts/crash_warning_model_worker.py [args...]
   quant_worker scripts/optimize_portfolio.py [args...]
   quant_worker scripts/run_portfolio_candidate.py [args...]
   quant_worker scripts/pool_confirm.py [args...]
@@ -42,6 +43,7 @@ def main() -> None:
         "scripts/limit_breakout_worker.py": "scripts.limit_breakout_worker",
         "scripts/limit_up_momentum_worker.py": "scripts.limit_up_momentum_worker",
         "scripts/evaluate_strategies.py": "scripts.evaluate_strategies",
+        "scripts/crash_warning_model_worker.py": "scripts.crash_warning_model_worker",
         "scripts/optimize_portfolio.py": "scripts.optimize_portfolio",
         "scripts/run_portfolio_candidate.py": "scripts.run_portfolio_candidate",
         "scripts/pool_confirm.py": "scripts.pool_confirm",

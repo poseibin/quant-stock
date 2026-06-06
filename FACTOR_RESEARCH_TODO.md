@@ -146,6 +146,14 @@
   - 收紧预警仍不如 `crash_exit`: `warning_tiny + crash_gate` 约年化 9.37%、最大回撤 -18.92%；当前最佳 `crash_exit` 为年化 9.57%、最大回撤 -18.70%。
   - 结论: 现有市场状态聚合阈值更适合作为压力诊断和事后减灾，不适合作为当前默认前置开关；后续若继续做前置预警，应训练一个明确预测“未来 1-3 日 crash/大跌风险”的分类模型，而不是继续手工调硬阈值。
 
+- 2026-06-06: 未来 1-3 日大跌/流动性冲击分类模型第一版完成。
+  - 新增 `scripts/crash_warning_model_worker.py`，输出 `market_crash_warning_runs/features/predictions`；标签为未来 3 个交易日内出现 crash/liquidity_squeeze、单日硬跌或跌停扩散。
+  - 训练 run: `cw_lgbm_h3_2014_2025_20260606`，2018-2025 walk-forward，无未来数据泄露。
+  - 模型层有效：OOS AUC 0.778、AP 0.331、Top10% precision 34.0%、Top10% capture 33.2%；2024 年 Top10% precision 62.5%。重要特征集中在 volatility20、trend60、limit_down_ratio5、amount_chg5、small_large_rel20、drawdown20、breadth20。
+  - `ml_factor_ranker` 新增实验开关 `filters.crash_warning_model`，可读取模型概率调低日级目标暴露，默认关闭。
+  - 组合层暂不纳入最佳版本：叠加当前最佳 `stress_controls + crash_gate + crash_exit` 后，回撤没有进一步改善，较好组合如 `threshold=0.55/0.75, exposure=0.90/0.75` 年化约 9.37%、最大回撤仍 -18.70%，低于不加模型的 9.49% 年化。
+  - 结论: 模型预测冲击本身有价值，但现阶段更适合作为前端诊断/研究信号；要转化为收益，需要改 overlay 目标函数，例如只在高概率且组合拥挤/弱流动时降仓，或让它参与个股候选剔除而不是统一压仓。
+
 ## 待做
 
 1. 完整 WF 准入复跑。
@@ -155,9 +163,9 @@
    - 写入现有准入表。
 
 2. 压力段组合构建改造。
-   - 已完成第一版 `stress_controls`、`crash_gate`、`crash_exit` 和 `crash_warning`。
-   - 当前最佳组合仍是 `stress_controls + crash_gate + crash_exit`，`crash_warning` 暂不纳入准入保存版本。
-   - 下一步不要再继续手工调市场状态阈值，改做“未来 1-3 日大跌/流动性冲击分类模型”或先转去完善前端模型版本对比。
+   - 已完成第一版 `stress_controls`、`crash_gate`、`crash_exit`、`crash_warning` 和 `crash_warning_model`。
+   - 当前最佳组合仍是 `stress_controls + crash_gate + crash_exit`，`crash_warning`/`crash_warning_model` 暂不纳入准入保存版本。
+   - 下一步不要再继续统一压仓，改做“模型概率 × 组合拥挤/弱流动”的条件减仓，或先转去完善前端模型版本对比。
    - 同时保留 liquidity_squeeze/post_crash_repair 修复收益，不再使用硬日级仓位 overlay。
 
 3. 因子相关性报告前端化。

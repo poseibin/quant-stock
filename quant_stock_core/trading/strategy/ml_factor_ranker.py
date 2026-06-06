@@ -41,6 +41,7 @@ class MLFactorRankerStrategy(BaseStrategy):
         base = pd.concat(frames).sort_index().fillna(0.0)
         base = _apply_crash_rebalance_gate(base, self.cfg)
         base = _apply_crash_warning_overlay(base, start, end, self.cfg)
+        base = _apply_crash_warning_model_overlay(base, start, end, self.cfg)
         base = _apply_intramonth_crash_exit(base, start, end, self.cfg)
         if daily_overlay:
             return _apply_daily_exposure_overlay(base, start, end, self.cfg)
@@ -444,6 +445,79 @@ def _apply_crash_warning_overlay(weights: pd.DataFrame, start: str, end: str, cf
             cooldown_left -= 1
 
     return daily.mul(exposure, axis=0).fillna(0.0)
+
+
+def _apply_crash_warning_model_overlay(weights: pd.DataFrame, start: str, end: str, cfg: StrategyConfig) -> pd.DataFrame:
+    model_cfg = (cfg.filters or {}).get("crash_warning_model") or {}
+    if weights.empty or not bool(model_cfg.get("enabled", False)):
+        return weights
+
+    dates = dq.get_trade_dates(start, end)
+    if not dates:
+        return weights
+    dates = [date for date in dates if date >= str(weights.index.min()) and date <= end]
+    if not dates:
+        return weights
+
+    run_id = str(model_cfg.get("run_id") or "").strip()
+    prob = _crash_warning_probability_series(dates, run_id)
+    if prob.empty:
+        return weights
+    prob = prob.reindex(dates, method="ffill").fillna(0.0).astype(float)
+
+    warning_threshold = float(model_cfg.get("warning_threshold", 0.45))
+    severe_threshold = float(model_cfg.get("severe_threshold", 0.65))
+    warning_exposure = float(model_cfg.get("warning_exposure", 0.80))
+    severe_exposure = float(model_cfg.get("severe_exposure", 0.55))
+    cooldown_days = max(0, int(model_cfg.get("cooldown_days", 1)))
+    severe_cooldown_days = max(cooldown_days, int(model_cfg.get("severe_cooldown_days", cooldown_days + 1)))
+
+    daily = weights.reindex(dates).ffill().fillna(0.0)
+    exposure = pd.Series(1.0, index=dates, dtype="float64")
+    cooldown_left = 0
+    cooldown_exposure = 1.0
+    for date in dates:
+        value = float(prob.get(date) or 0.0)
+        if value >= severe_threshold:
+            cooldown_left = severe_cooldown_days
+            cooldown_exposure = severe_exposure
+        elif value >= warning_threshold and cooldown_left <= 0:
+            cooldown_left = cooldown_days
+            cooldown_exposure = warning_exposure
+        if cooldown_left > 0:
+            exposure.loc[date] = min(exposure.loc[date], cooldown_exposure)
+            cooldown_left -= 1
+    return daily.mul(exposure, axis=0).fillna(0.0)
+
+
+def _crash_warning_probability_series(dates: list[str], run_id: str) -> pd.Series:
+    if not dates:
+        return pd.Series(dtype="float64")
+    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
+    try:
+        with connect_db(db_path) as conn:
+            if not run_id:
+                row = conn.execute(
+                    "SELECT run_id FROM market_crash_warning_runs WHERE status = ? ORDER BY updated_at DESC LIMIT 1",
+                    ("success",),
+                ).fetchone()
+                run_id = str(row[0]) if row else ""
+            if not run_id:
+                return pd.Series(dtype="float64")
+            rows = conn.execute(
+                """
+                SELECT trade_date, COALESCE(shock_prob, 0)
+                FROM market_crash_warning_predictions
+                WHERE run_id = ? AND trade_date BETWEEN ? AND ?
+                ORDER BY trade_date
+                """,
+                (run_id, min(dates), max(dates)),
+            ).fetchall()
+    except Exception:
+        return pd.Series(dtype="float64")
+    if not rows:
+        return pd.Series(dtype="float64")
+    return pd.Series({str(date): float(prob or 0.0) for date, prob in rows}, dtype="float64").sort_index()
 
 
 def _apply_intramonth_crash_exit(weights: pd.DataFrame, start: str, end: str, cfg: StrategyConfig) -> pd.DataFrame:
