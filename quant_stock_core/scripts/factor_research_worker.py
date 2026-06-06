@@ -720,7 +720,7 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
     rows = []
     qrows = []
     state_rows = []
-    max_workers = min(8, max(1, len(jobs)))
+    max_workers = min(_factor_research_workers(), max(1, len(jobs)))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
             executor.submit(_evaluate_factor_variant, panel, args.label, factor, family, high_good, variant, value_col): (factor, variant)
@@ -730,10 +730,10 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
             result = future.result()
             if result is None:
                 continue
-            row, qrow = result
+            row, qrow, variant_state_rows = result
             rows.append(row)
             qrows.append(qrow)
-            state_rows.extend(_factor_state_stats_rows(panel, args.label, row["factor"], row["family"], row["variant"], f'{row["factor"]}_{row["variant"]}'))
+            state_rows.extend(variant_state_rows)
     rows = sorted(rows, key=lambda row: float(row.get("rank_ic_mean") or -999), reverse=True)
     with write_transaction(args.db_path) as conn:
         ic_sql = replace_sql("factor_ic_results", ["run_id", "factor", "family", "variant", "horizon", "ic_mean", "rank_ic_mean", "ic_win_rate", "icir", "status", "summary_json", "created_at", "updated_at"], ["run_id", "factor", "variant", "horizon"])
@@ -781,7 +781,7 @@ def _evaluate_factor_variant(
     high_good: bool,
     variant: str,
     value_col: str,
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]] | None:
     stats = factor_stats(panel, value_col, label)
     if not stats:
         return None
@@ -813,7 +813,8 @@ def _evaluate_factor_variant(
         "long_short_return": stats["long_short_return"],
         "monotonic_score": stats["monotonic_score"],
     }
-    return row, qrow
+    state_rows = _factor_state_stats_rows(panel, label, factor, family, variant, value_col)
+    return row, qrow, state_rows
 
 
 def _factor_state_stats_rows(
@@ -891,8 +892,9 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(f"label column not found: {args.label}")
     meta_cols = ["mkt_state"] if "mkt_state" in panel.columns else []
     data = panel[["trade_date", "ts_code", args.label, *meta_cols, *feature_cols]].replace([np.inf, -np.inf], np.nan).dropna(subset=[args.label]).copy()
-    for col in feature_cols:
-        data[col] = data.groupby("trade_date")[col].transform(lambda s: s.fillna(s.median()))
+    feature_values = data[feature_cols].apply(pd.to_numeric, errors="coerce")
+    date_medians = feature_values.groupby(data["trade_date"], sort=False).transform("median")
+    data[feature_cols] = feature_values.fillna(date_medians)
     data = data.dropna(subset=feature_cols)
     data["year"] = data["trade_date"].astype(str).str.slice(0, 4).astype(int)
     years = sorted(data["year"].unique().tolist())
@@ -923,7 +925,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
             reg_alpha=0.05,
             reg_lambda=0.20,
             random_state=20260606,
-            n_jobs=4,
+            n_jobs=_lgbm_threads(),
             verbose=-1,
         )
         sample_weight = _stress_sample_weight(train) if stress_aware else None
@@ -2103,8 +2105,23 @@ def now_text() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _env_int(name: str, default: int, floor: int, cap: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(floor, min(cap, value))
+
+
+def _factor_research_workers() -> int:
+    return _env_int("FACTOR_RESEARCH_MAX_WORKERS", min(8, os.cpu_count() or 4), 1, 16)
+
+
+def _lgbm_threads() -> int:
+    return _env_int("FACTOR_RESEARCH_LGBM_THREADS", 4, 1, 8)
+
+
 def data_root() -> Path:
-    import os
     return Path(os.getenv("DATA_ROOT", str(ROOT.parent / "data_store"))).expanduser().resolve()
 
 
