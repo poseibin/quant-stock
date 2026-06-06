@@ -7072,7 +7072,15 @@ func (app *App) startFactorResearchChildTaskSync(t task.Task) (task.Task, error)
 		_ = logFile.Close()
 		return t, err
 	}
+	done := make(chan struct{})
+	progressStopped := make(chan struct{})
+	go func() {
+		defer close(progressStopped)
+		app.pollFactorResearchChildProgress(t, runID, stage, done)
+	}()
 	waitErr := cmd.Wait()
+	close(done)
+	<-progressStopped
 	_ = logFile.Close()
 	finishedAt := time.Now()
 	latest, latestErr := app.taskService.Repository().Get(t.ID)
@@ -7096,6 +7104,55 @@ func (app *App) startFactorResearchChildTaskSync(t task.Task) (task.Task, error)
 		_ = app.taskService.Repository().UpdateStatus(t)
 	}
 	return t, nil
+}
+
+func (app *App) pollFactorResearchChildProgress(t task.Task, runID string, stage string, done <-chan struct{}) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			progress, summary, ok := app.factorResearchStageProgress(runID, stage)
+			if !ok {
+				continue
+			}
+			if progress <= t.Progress {
+				progress = t.Progress
+			}
+			if progress >= 1 {
+				progress = 0.99
+			}
+			t.Progress = progress
+			t.SummaryJSON = summary
+			t.UpdatedAt = time.Now()
+			_ = app.taskService.Repository().UpdateStatus(t)
+		}
+	}
+}
+
+func (app *App) factorResearchStageProgress(runID string, stage string) (float64, string, bool) {
+	if app.database == nil || app.database.Conn() == nil {
+		return 0, "", false
+	}
+	row := app.database.Conn().QueryRow(`
+		SELECT COALESCE(summary_json, '')
+		FROM factor_research_stage_results
+		WHERE run_id = ? AND stage = ? AND status = 'running'`, runID, stage)
+	var summary string
+	if err := row.Scan(&summary); err != nil || strings.TrimSpace(summary) == "" {
+		return 0, "", false
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(summary), &payload); err != nil {
+		return 0, summary, false
+	}
+	progress := numberParam(payload, "progress", 0)
+	if progress <= 0 {
+		return 0, summary, false
+	}
+	return progress, summary, true
 }
 
 func (app *App) factorResearchSummaryForParent(parent task.Task, children []task.Task) string {

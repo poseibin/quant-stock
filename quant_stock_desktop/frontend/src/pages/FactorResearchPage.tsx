@@ -337,6 +337,7 @@ export function FactorResearchPage() {
               <th>任务</th>
               <th>状态</th>
               <th>进度</th>
+              <th>当前步骤</th>
               <th>样本</th>
               <th>因子</th>
               <th>更新时间</th>
@@ -344,10 +345,12 @@ export function FactorResearchPage() {
           </thead>
           <tbody>
             {tasks.length === 0 ? (
-              <tr><td colSpan={6} className="mutedText">暂无因子研究任务</td></tr>
+              <tr><td colSpan={7} className="mutedText">暂无因子研究任务</td></tr>
             ) : tasks.slice(0, 12).map((task) => {
               const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
               const panel = rows.find((row) => row.stage === 'build_factor_panel') || {}
+              const running = rows.find((row) => row.task_status === 'running') || {}
+              const message = String(task.summary.message || running.message || running.stage_name || running.stage || '-')
               return (
                 <tr key={task.id}>
                   <td>
@@ -356,6 +359,7 @@ export function FactorResearchPage() {
                   </td>
                   <td><span className={`badge ${task.status}`}>{statusLabel(task.status)}</span></td>
                   <td>{Math.round((task.progress || 0) * 100)}%</td>
+                  <td>{message}</td>
                   <td>{numberText(panel.sample_rows)} / {numberText(panel.sample_dates)}期</td>
                   <td>{numberText(panel.factor_count)}</td>
                   <td className="mono">{task.updated_at || task.created_at}</td>

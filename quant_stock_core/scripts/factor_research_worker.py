@@ -235,7 +235,7 @@ def main() -> None:
     args.stress_aware = bool(args.stress_aware or "stress" in args.run_id.lower())
 
     ensure_tables(args.db_path)
-    mark_stage(args.db_path, args.run_id, args.stage, "running", summary={"stage": args.stage})
+    mark_progress(args, 0.01, "阶段启动")
     try:
         if args.stage == "build_factor_panel":
             summary = build_factor_panel(args)
@@ -252,7 +252,7 @@ def main() -> None:
         else:
             summary = validate_research_run(args)
         mark_stage(args.db_path, args.run_id, args.stage, "success", summary=summary)
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        print(json.dumps(compact_console_summary(summary), ensure_ascii=False, indent=2))
     except Exception as exc:
         mark_stage(args.db_path, args.run_id, args.stage, "failed", summary={"stage": args.stage}, error=str(exc))
         raise
@@ -656,13 +656,16 @@ def ensure_tables(db_path: str | None) -> None:
 
 
 def build_factor_panel(args: argparse.Namespace) -> dict[str, Any]:
+    mark_progress(args, 0.05, "生成月频 point-in-time 因子面板")
     panel = build_monthly_factor_panel(args.start, args.end)
+    mark_progress(args, 0.70, "写入因子面板 parquet", {"sample_rows": int(len(panel))})
     panel_dir = data_root() / "factor_research" / args.run_id
     panel_dir.mkdir(parents=True, exist_ok=True)
     panel_path_abs = panel_dir / "monthly_factor_panel.parquet"
     panel.to_parquet(panel_path_abs, index=False, compression="zstd")
 
     coverage = data_coverage(args.start, args.end)
+    mark_progress(args, 0.85, "统计数据覆盖率")
     factor_count = len(FACTOR_DEFS)
     families = factor_family_summary()
     sample_dates = int(panel["trade_date"].nunique()) if not panel.empty else 0
@@ -693,6 +696,7 @@ def build_factor_panel(args: argparse.Namespace) -> dict[str, Any]:
             replace_sql("factor_panel_meta", ["run_id", "start_date", "end_date", "freq", "factor_count", "sample_dates", "sample_rows", "label", "panel_path", "summary_json", "created_at", "updated_at"], ["run_id"]),
             (args.run_id, args.start, args.end, args.freq, factor_count, sample_dates, sample_rows, args.label, panel_path, json.dumps(summary, ensure_ascii=False), now, now),
         )
+    mark_progress(args, 0.95, "因子面板元数据已落库", {"sample_rows": sample_rows, "sample_dates": sample_dates})
     return summary
 
 
@@ -708,6 +712,7 @@ def factor_family_summary() -> list[dict[str, Any]]:
 
 
 def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
+    mark_progress(args, 0.03, "读取因子面板")
     panel_path = panel_path_for(args.run_id)
     if not panel_path.exists():
         raise FileNotFoundError(f"factor panel not found: {panel_path}")
@@ -720,6 +725,7 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
         for variant, value_col in [("rank", f"{factor}_rank"), ("neutral", f"{factor}_neutral")]:
             if value_col in panel.columns:
                 jobs.append((factor, family, high_good, variant, value_col))
+    mark_progress(args, 0.08, "开始并发计算 IC", {"job_count": len(jobs)})
     rows = []
     qrows = []
     state_rows = []
@@ -729,7 +735,9 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
             executor.submit(_evaluate_factor_variant, panel, args.label, factor, family, high_good, variant, value_col): (factor, variant)
             for factor, family, high_good, variant, value_col in jobs
         }
+        completed = 0
         for future in as_completed(future_map):
+            completed += 1
             result = future.result()
             if result is None:
                 continue
@@ -737,7 +745,10 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
             rows.append(row)
             qrows.append(qrow)
             state_rows.extend(variant_state_rows)
+            if completed == len(jobs) or completed % 10 == 0:
+                mark_progress(args, 0.08 + 0.72 * completed / max(1, len(jobs)), "计算因子 IC", {"completed": completed, "total": len(jobs)})
     rows = sorted(rows, key=lambda row: float(row.get("rank_ic_mean") or -999), reverse=True)
+    mark_progress(args, 0.86, "写入 IC / 分层 / 状态 IC 结果", {"variant_count": len(rows), "state_ic_count": len(state_rows)})
     with write_transaction(args.db_path) as conn:
         ic_sql = replace_sql("factor_ic_results", ["run_id", "factor", "family", "variant", "horizon", "ic_mean", "rank_ic_mean", "ic_win_rate", "icir", "status", "summary_json", "created_at", "updated_at"], ["run_id", "factor", "variant", "horizon"])
         quantile_sql = replace_sql("factor_quantile_results", ["run_id", "factor", "variant", "horizon", "q1_return", "q5_return", "long_short_return", "monotonic_score", "summary_json", "created_at", "updated_at"], ["run_id", "factor", "variant", "horizon"])
@@ -762,6 +773,7 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
             conn.executemany(quantile_sql, quantile_params)
         if state_params:
             conn.executemany(state_sql, state_params)
+    mark_progress(args, 0.96, "因子检验完成", {"ready_count": sum(1 for row in rows if row["status"] == "ready")})
     return {
         "stage": args.stage,
         "factor_count": len(FACTOR_DEFS),
@@ -859,6 +871,7 @@ def _factor_state_stats_rows(
 
 def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     now = now_text()
+    mark_progress(args, 0.03, "读取训练面板")
     panel_path = panel_path_for(args.run_id)
     if not panel_path.exists():
         raise FileNotFoundError(f"factor panel not found: {panel_path}")
@@ -891,6 +904,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     feature_cols = selected_model_features(panel, args.db_path, args.run_id, args.label)
     if stress_aware:
         feature_cols = _with_market_state_features(feature_cols, panel)
+    mark_progress(args, 0.12, "准备训练样本", {"feature_count": len(feature_cols), "stress_aware": stress_aware})
     if args.label not in panel.columns:
         raise ValueError(f"label column not found: {args.label}")
     meta_cols = ["mkt_state"] if "mkt_state" in panel.columns else []
@@ -907,16 +921,19 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     if min_test_year > 0:
         first_oos_year = max(first_oos_year, min_test_year)
     test_years = [year for year in years if year >= first_oos_year]
+    mark_progress(args, 0.20, "开始 walk-forward 训练", {"test_years": test_years})
     predictions = []
     importances = pd.Series(0.0, index=feature_cols)
     model_dir = data_root() / "factor_research" / args.run_id / "models"
     model_dir.mkdir(parents=True, exist_ok=True)
     last_model_path = model_dir / "lightgbm_regressor.txt"
-    for test_year in test_years:
+    fold_total = len(test_years)
+    for fold_no, test_year in enumerate(test_years, start=1):
         train = data[data["year"] < test_year]
         test = data[data["year"] == test_year]
         if len(train) < 5000 or len(test) < 500:
             continue
+        mark_progress(args, 0.20 + 0.55 * (fold_no - 1) / max(1, fold_total), f"训练 OOS {test_year}", {"fold": fold_no, "fold_total": fold_total, "train_rows": int(len(train)), "test_rows": int(len(test))})
         model = lgb.LGBMRegressor(
             objective="regression",
             n_estimators=220,
@@ -944,6 +961,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
         importances = importances.add(pd.Series(model.feature_importances_, index=feature_cols), fill_value=0.0)
         if test_year == test_years[-1]:
             model.booster_.save_model(str(last_model_path))
+        mark_progress(args, 0.20 + 0.55 * fold_no / max(1, fold_total), f"OOS {test_year} 预测完成", {"fold": fold_no, "fold_total": fold_total})
     if not predictions:
         raise RuntimeError("no walk-forward folds generated")
     pred_df = pd.concat(predictions, ignore_index=True)
@@ -952,6 +970,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     prediction_path = data_root() / "factor_research" / args.run_id / "predictions.parquet"
     pred_df.to_parquet(prediction_path, index=False, compression="zstd")
     metrics = model_oos_metrics(pred_df, args.label)
+    mark_progress(args, 0.82, "计算 OOS 指标和特征重要度", {"prediction_rows": int(len(pred_df))})
     state_metrics = model_oos_state_metrics(pred_df, args.label)
     importance_df = (
         importances.sort_values(ascending=False)
@@ -1011,10 +1030,12 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
             replace_sql("factor_research_runs", ["run_id", "start_date", "end_date", "freq", "label", "status", "summary_json", "created_at", "updated_at"], ["run_id"]),
             (args.run_id, args.start, args.end, args.freq, args.label, "success", json.dumps(summary, ensure_ascii=False), now, now),
         )
+    mark_progress(args, 0.96, "模型训练结果已落库", {"feature_count": feature_count, "fold_count": int(len(predictions))})
     return summary
 
 
 def factor_correlation_report(args: argparse.Namespace) -> dict[str, Any]:
+    mark_progress(args, 0.05, "读取相关性候选特征")
     panel_path = panel_path_for(args.run_id)
     if not panel_path.exists():
         raise FileNotFoundError(f"factor panel not found: {panel_path}")
@@ -1036,6 +1057,7 @@ def factor_correlation_report(args: argparse.Namespace) -> dict[str, Any]:
             if col in candidate_cols
         ]
     selected = prune_correlated_features(panel, ordered, max_features=45, corr_limit=0.92, max_rows=20_000, stratified=False)
+    mark_progress(args, 0.45, "采样并计算 Spearman 相关性", {"candidate_count": len(candidate_cols), "selected_count": len(selected)})
     sample = correlation_sample(panel, candidate_cols, max_rows=20_000, stratified=False).replace([np.inf, -np.inf], np.nan)
     corr = sample.corr(method="spearman", min_periods=200)
     rows: list[dict[str, Any]] = []
@@ -1095,6 +1117,7 @@ def factor_correlation_report(args: argparse.Namespace) -> dict[str, Any]:
         ]
         if params:
             conn.executemany(sql, params)
+    mark_progress(args, 0.96, "相关性报告已落库", {"high_corr_pair_count": len(rows)})
     return {
         "stage": args.stage,
         "feature_count": len(candidate_cols),
@@ -1107,6 +1130,7 @@ def factor_correlation_report(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
+    mark_progress(args, 0.05, "加载最新模型和截面")
     lgb, import_error = import_lightgbm()
     if lgb is None:
         raise RuntimeError(import_error or "LightGBM package is not installed")
@@ -1150,6 +1174,7 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
     if latest.empty:
         raise RuntimeError(f"no valid latest inference rows for {latest_date}")
     latest["pred_score"] = booster.predict(latest[feature_cols])
+    mark_progress(args, 0.70, "最新截面预测完成", {"trade_date": latest_date, "rows": int(len(latest))})
     latest["pred_rank"] = latest["pred_score"].rank(pct=True)
     latest["is_top20"] = (latest["pred_rank"] >= 0.8).astype(int)
     out = latest[["trade_date", "ts_code", "pred_score", "pred_rank", "is_top20"]].sort_values("pred_score", ascending=False)
@@ -1180,6 +1205,7 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
         ]
         if params:
             conn.executemany(sql, params)
+    mark_progress(args, 0.96, "最新截面推理已落库", {"prediction_rows": int(len(out)), "top20_rows": int(out["is_top20"].sum())})
     return {
         "stage": args.stage,
         "trade_date": latest_date,
@@ -1193,6 +1219,7 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def stress_report(args: argparse.Namespace) -> dict[str, Any]:
+    mark_progress(args, 0.05, "生成模型持仓并回测")
     from common.config.desktop_settings import load_strategy_settings
     from trading.backtest import BacktestConfig, CostModel, run as bt_run
     from trading.backtest.metrics import summary as metric_summary
@@ -1246,6 +1273,7 @@ def stress_report(args: argparse.Namespace) -> dict[str, Any]:
     weights = result.weights.loc[active_start:active_end]
 
     rows: list[dict[str, Any]] = []
+    mark_progress(args, 0.55, "计算压力分段指标")
     rows.append(_stress_metric_row("full", "active", "有效持仓全周期", returns, weights, metric_summary))
     for year, group in returns.groupby(returns.index.astype(str).str.slice(0, 4), sort=True):
         rows.append(_stress_metric_row("year", str(year), f"{year}年", group, weights.loc[group.index], metric_summary))
@@ -1294,6 +1322,7 @@ def stress_report(args: argparse.Namespace) -> dict[str, Any]:
         ]
         if params:
             conn.executemany(sql, params)
+    mark_progress(args, 0.96, "压力测试报告已落库", {"row_count": len(rows)})
     return {
         "stage": args.stage,
         "effective_start": active_start,
@@ -1306,6 +1335,7 @@ def stress_report(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def validate_research_run(args: argparse.Namespace) -> dict[str, Any]:
+    mark_progress(args, 0.10, "检查研究产物完整性")
     checks = [
         _research_count_check(args.db_path, "factor_panel_meta", "factor_panel_meta", "run_id = ?", (args.run_id,), 1),
         _research_count_check(args.db_path, "factor_ic_results", "factor_ic_results", "run_id = ?", (args.run_id,), 20),
@@ -1338,7 +1368,18 @@ def validate_research_run(args: argparse.Namespace) -> dict[str, Any]:
     if missing:
         names = ", ".join(str(item.get("name")) for item in missing[:6])
         raise RuntimeError(f"factor research validation failed: {names}")
+    mark_progress(args, 0.96, "研究产物完整性检查通过", {"check_count": len(checks)})
     return summary
+
+
+def compact_console_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    out = dict(summary)
+    for key in ["rows", "quantiles", "state_top", "top_pairs", "top_candidates", "worst_drawdown", "market_state", "checks"]:
+        value = out.get(key)
+        if isinstance(value, list) and len(value) > 5:
+            out[f"{key}_count"] = len(value)
+            out[key] = value[:5]
+    return out
 
 
 def _research_count_check(
@@ -1687,6 +1728,18 @@ def mark_stage(db_path: str | None, run_id: str, stage: str, status: str, *, sum
             replace_sql("factor_research_stage_results", ["run_id", "stage", "sequence", "status", "summary_json", "error", "created_at", "updated_at"], ["run_id", "stage"]),
             (run_id, stage, sequence, status, json.dumps(summary, ensure_ascii=False), error, now, now),
         )
+
+
+def mark_progress(args: argparse.Namespace, progress: float, message: str, extra: dict[str, Any] | None = None) -> None:
+    payload: dict[str, Any] = {
+        "stage": args.stage,
+        "progress": round(max(0.0, min(0.99, float(progress))), 4),
+        "message": message,
+        "updated_at": now_text(),
+    }
+    if extra:
+        payload.update(extra)
+    mark_stage(args.db_path, args.run_id, args.stage, "running", summary=payload)
 
 
 def build_monthly_factor_panel(start: str, end: str) -> pd.DataFrame:
