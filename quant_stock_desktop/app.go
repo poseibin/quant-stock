@@ -3174,19 +3174,16 @@ func (app *App) initializeFactorResearch(parent task.Task) error {
 	if len(children) > 0 {
 		return nil
 	}
-	stages := []map[string]string{
-		{"key": "build_factor_panel", "name": "生成因子面板"},
-		{"key": "evaluate_factors", "name": "因子检验"},
-		{"key": "factor_correlation_report", "name": "因子相关性报告"},
-		{"key": "train_lgbm", "name": "训练 LightGBM"},
-		{"key": "latest_inference", "name": "最新截面推理"},
-		{"key": "stress_report", "name": "压力测试报告"},
-	}
+	profile := factorResearchProfile(params)
+	stages := factorResearchStages(profile)
 	now := time.Now()
 	runID := parent.ExternalRunID
 	if runID == "" {
-		runID = "fr_" + strings.ReplaceAll(parent.ID, "-", "")
+		runID = factorResearchRunID(profile, parent.ID)
 	}
+	minTrainYears := int(numberParam(params, "min_train_years", factorResearchDefaultMinTrainYears(profile)))
+	minTestYear := int(numberParam(params, "min_test_year", factorResearchDefaultMinTestYear(profile)))
+	stressAware := boolParam(params, "stress_aware", profile != "smoke")
 	parent.ExternalRunID = runID
 	parent.Total = len(stages)
 	parent.Progress = 0
@@ -3196,9 +3193,10 @@ func (app *App) initializeFactorResearch(parent task.Task) error {
 		"end":             endDate,
 		"freq":            stringParam(params, "freq", "monthly"),
 		"label":           stringParam(params, "label", "fwd20_excess_industry"),
-		"min_train_years": int(numberParam(params, "min_train_years", 4)),
-		"min_test_year":   int(numberParam(params, "min_test_year", 0)),
-		"stress_aware":    boolParam(params, "stress_aware", false),
+		"profile":         profile,
+		"min_train_years": minTrainYears,
+		"min_test_year":   minTestYear,
+		"stress_aware":    stressAware,
 		"planned_count":   len(stages),
 		"completed_count": 0,
 		"failed_count":    0,
@@ -3215,9 +3213,10 @@ func (app *App) initializeFactorResearch(parent task.Task) error {
 			"end_date":        endDate,
 			"freq":            stringParam(params, "freq", "monthly"),
 			"label":           stringParam(params, "label", "fwd20_excess_industry"),
-			"min_train_years": int(numberParam(params, "min_train_years", 4)),
-			"min_test_year":   int(numberParam(params, "min_test_year", 0)),
-			"stress_aware":    boolParam(params, "stress_aware", false),
+			"profile":         profile,
+			"min_train_years": minTrainYears,
+			"min_test_year":   minTestYear,
+			"stress_aware":    stressAware,
 			"stage":           stage["key"],
 		}
 		paramsData, err := json.Marshal(childParams)
@@ -3248,6 +3247,104 @@ func (app *App) initializeFactorResearch(parent task.Task) error {
 		}
 	}
 	return nil
+}
+
+func factorResearchProfile(params map[string]any) string {
+	profile := strings.ToLower(stringParam(params, "profile", "full"))
+	switch profile {
+	case "smoke", "full":
+		return profile
+	default:
+		return "full"
+	}
+}
+
+func factorResearchRunID(profile string, taskID string) string {
+	prefix := "fr_full_"
+	if profile == "smoke" {
+		prefix = "fr_smoke_"
+	}
+	return prefix + strings.ReplaceAll(taskID, "-", "")
+}
+
+func factorResearchDefaultMinTrainYears(profile string) float64 {
+	if profile == "smoke" {
+		return 2
+	}
+	return 4
+}
+
+func factorResearchDefaultMinTestYear(profile string) float64 {
+	if profile == "smoke" {
+		return 2020
+	}
+	return 0
+}
+
+func factorResearchStages(profile string) []map[string]string {
+	stages := []map[string]string{
+		{"key": "build_factor_panel", "name": "生成因子面板"},
+		{"key": "evaluate_factors", "name": "因子检验"},
+		{"key": "factor_correlation_report", "name": "因子相关性报告"},
+		{"key": "train_lgbm", "name": "训练 LightGBM"},
+		{"key": "latest_inference", "name": "最新截面推理"},
+		{"key": "stress_report", "name": "压力测试报告"},
+		{"key": "strategy_admission", "name": "策略准入评估"},
+		{"key": "validate_research_run", "name": "产物完整性检查"},
+	}
+	return stages
+}
+
+func factorResearchStageCommandArgs(runID string, stage string, startDate string, endDate string, params map[string]any, dbPath string) []string {
+	if stage == "strategy_admission" {
+		return []string{
+			"scripts/evaluate_strategies.py",
+			"--start", startDate,
+			"--end", endDate,
+			"--strategies", "ml_factor_ranker",
+			"--baseline", "small_cap_quality",
+			"--save", "eval_" + runID,
+			"--db-path", dbPath,
+			"--strategy-version-mode", "latest",
+			"--json",
+		}
+	}
+	args := []string{
+		"scripts/factor_research_worker.py",
+		"--run-id", runID,
+		"--stage", stage,
+		"--start", startDate,
+		"--end", endDate,
+		"--freq", stringParam(params, "freq", "monthly"),
+		"--label", stringParam(params, "label", "fwd20_excess_industry"),
+		"--db-path", dbPath,
+		"--min-train-years", strconv.Itoa(int(numberParam(params, "min_train_years", 4))),
+		"--min-test-year", strconv.Itoa(int(numberParam(params, "min_test_year", 0))),
+	}
+	if boolParam(params, "stress_aware", false) {
+		args = append(args, "--stress-aware")
+	}
+	return args
+}
+
+func factorResearchStageEnv(runID string, stage string, params map[string]any) []string {
+	if stage != "strategy_admission" {
+		return nil
+	}
+	override := map[string]any{
+		"ml_factor_ranker": map[string]any{
+			"selection": map[string]any{
+				"run_id":        runID,
+				"min_pred_rank": numberParam(params, "min_pred_rank", 0.96),
+			},
+		},
+	}
+	if boolParam(params, "stress_aware", false) {
+		override["ml_factor_ranker"].(map[string]any)["filters"] = map[string]any{
+			"stress_controls": map[string]any{"enabled": true},
+		}
+	}
+	return []string{"QUANT_STRATEGY_OVERRIDES_JSON=" + mustJSON(override)}
 }
 
 func (app *App) initializeStrategyEvaluation(parent task.Task) error {
@@ -6946,26 +7043,14 @@ func (app *App) startFactorResearchChildTaskSync(t task.Task) (task.Task, error)
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	args := []string{
-		"scripts/factor_research_worker.py",
-		"--run-id", runID,
-		"--stage", stage,
-		"--start", startDate,
-		"--end", endDate,
-		"--freq", stringParam(params, "freq", "monthly"),
-		"--label", stringParam(params, "label", "fwd20_excess_industry"),
-		"--db-path", filepath.Join(app.settings.DataPath, "meta.db"),
-		"--min-train-years", strconv.Itoa(int(numberParam(params, "min_train_years", 4))),
-		"--min-test-year", strconv.Itoa(int(numberParam(params, "min_test_year", 0))),
-	}
-	if boolParam(params, "stress_aware", false) {
-		args = append(args, "--stress-aware")
-	}
+	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
+	args := factorResearchStageCommandArgs(runID, stage, startDate, endDate, params, dbPath)
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv(filepath.Join(app.settings.DataPath, "meta.db"))...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(cmd.Env, factorResearchStageEnv(runID, stage, params)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return t, err

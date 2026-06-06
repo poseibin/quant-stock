@@ -220,6 +220,7 @@ def main() -> None:
             "factor_correlation_report",
             "latest_inference",
             "stress_report",
+            "validate_research_run",
         ],
     )
     parser.add_argument("--start", required=True)
@@ -246,8 +247,10 @@ def main() -> None:
             summary = factor_correlation_report(args)
         elif args.stage == "latest_inference":
             summary = latest_inference(args)
-        else:
+        elif args.stage == "stress_report":
             summary = stress_report(args)
+        else:
+            summary = validate_research_run(args)
         mark_stage(args.db_path, args.run_id, args.stage, "success", summary=summary)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     except Exception as exc:
@@ -1302,6 +1305,59 @@ def stress_report(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def validate_research_run(args: argparse.Namespace) -> dict[str, Any]:
+    checks = [
+        _research_count_check(args.db_path, "factor_panel_meta", "factor_panel_meta", "run_id = ?", (args.run_id,), 1),
+        _research_count_check(args.db_path, "factor_ic_results", "factor_ic_results", "run_id = ?", (args.run_id,), 20),
+        _research_count_check(args.db_path, "factor_state_ic_results", "factor_state_ic_results", "run_id = ?", (args.run_id,), 10),
+        _research_count_check(args.db_path, "factor_model_runs", "factor_model_runs", "run_id = ? AND status = 'success'", (args.run_id,), 1),
+        _research_count_check(args.db_path, "factor_model_features", "factor_model_features", "run_id = ?", (args.run_id,), 10),
+        _research_count_check(args.db_path, "factor_model_predictions", "factor_model_predictions", "run_id = ?", (args.run_id,), 100),
+        _research_count_check(args.db_path, "factor_latest_predictions", "factor_latest_predictions", "run_id = ?", (args.run_id,), 100),
+        _research_count_check(args.db_path, "factor_model_stress_results", "factor_model_stress_results", "run_id = ?", (args.run_id,), 4),
+        _research_count_check(args.db_path, "eval_strategy_admission", "eval_strategy_admission", "run_id = ? AND strategy = 'ml_factor_ranker'", ("eval_" + args.run_id,), 1),
+    ]
+    paths = [
+        ("monthly_factor_panel", panel_path_for(args.run_id)),
+        ("predictions", data_root() / "factor_research" / args.run_id / "predictions.parquet"),
+        ("latest_predictions", data_root() / "factor_research" / args.run_id / "latest_predictions.parquet"),
+        ("stress_report", data_root() / "factor_research" / args.run_id / "stress_report.parquet"),
+    ]
+    for name, path in paths:
+        checks.append({"name": name, "count": 1 if path.exists() else 0, "min_count": 1, "ok": path.exists(), "path": str(path)})
+    missing = [check for check in checks if not bool(check.get("ok"))]
+    summary = {
+        "stage": args.stage,
+        "run_id": args.run_id,
+        "profile": "smoke" if "smoke" in args.run_id.lower() else "full",
+        "ok": len(missing) == 0,
+        "checks": checks,
+        "missing": missing,
+        "checked_at": now_text(),
+    }
+    if missing:
+        names = ", ".join(str(item.get("name")) for item in missing[:6])
+        raise RuntimeError(f"factor research validation failed: {names}")
+    return summary
+
+
+def _research_count_check(
+    db_path: str | None,
+    name: str,
+    table: str,
+    where: str,
+    params: tuple[Any, ...],
+    min_count: int,
+) -> dict[str, Any]:
+    try:
+        with write_transaction(db_path) as conn:
+            count = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params).fetchone()[0]
+    except Exception as exc:
+        return {"name": name, "count": 0, "min_count": min_count, "ok": False, "error": str(exc)}
+    count = int(count or 0)
+    return {"name": name, "count": count, "min_count": min_count, "ok": count >= min_count}
+
+
 def _stress_metric_row(
     bucket_type: str,
     bucket_key: str,
@@ -1622,6 +1678,8 @@ def mark_stage(db_path: str | None, run_id: str, stage: str, status: str, *, sum
         "factor_correlation_report": 3,
         "train_lgbm": 4,
         "latest_inference": 5,
+        "stress_report": 6,
+        "validate_research_run": 8,
     }.get(stage, 0)
     now = now_text()
     with write_transaction(db_path) as conn:

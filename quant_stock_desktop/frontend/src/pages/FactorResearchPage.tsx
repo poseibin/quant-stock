@@ -92,8 +92,8 @@ export function FactorResearchPage() {
     .slice(0, 4), [stressRows])
   const totalFactors = factorFamilies.reduce((sum, item) => sum + item.count, 0)
   const readyFactors = factorFamilies.filter((item) => item.status === 'ready').reduce((sum, item) => sum + item.count, 0)
-  const endDate = useMemo(() => formatYYYYMMDD(new Date()), [])
-  const startDate = useMemo(() => formatYYYYMMDD(addYears(new Date(), -10)), [])
+  const endDate = useMemo(() => '20251231', [])
+  const startDate = useMemo(() => '20100101', [])
 
   const refresh = async () => {
     const items = (await listTasks({ limit: 300 })).filter((item) => item.task_type === 'factor_research')
@@ -130,24 +130,40 @@ export function FactorResearchPage() {
     refresh()
   }, [])
 
-  const createAndStart = async () => {
+  const createAndStart = async (profile: 'smoke' | 'full') => {
     setBusy(true)
     setError('')
     setNotice('')
     try {
+      const params = profile === 'smoke'
+        ? {
+            start_date: '20200101',
+            end_date: endDate,
+            freq: 'monthly',
+            label: 'fwd20_excess_industry',
+            profile,
+            min_train_years: 2,
+            min_test_year: 2023,
+            stress_aware: true
+          }
+        : {
+            start_date: startDate,
+            end_date: endDate,
+            freq: 'monthly',
+            label: 'fwd20_excess_industry',
+            profile,
+            min_train_years: 4,
+            min_test_year: 2015,
+            stress_aware: true
+          }
       const task = await createTask({
-        name: `因子研究-${startDate}-${endDate}`,
+        name: profile === 'smoke' ? `因子研究烟测-${params.start_date}-${params.end_date}` : `因子研究正式-${params.start_date}-${params.end_date}`,
         task_type: 'factor_research',
-        params: {
-          start_date: startDate,
-          end_date: endDate,
-          freq: 'monthly',
-          label: 'fwd20_excess_industry'
-        }
+        params
       })
       await startTask(task.id)
       await refresh()
-      setNotice('已启动因子研究任务')
+      setNotice(profile === 'smoke' ? '已启动因子研究烟测任务' : '已启动因子研究正式任务')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -168,13 +184,13 @@ export function FactorResearchPage() {
             <RefreshCw size={16} />
             刷新
           </button>
-          <button className="secondaryButton" onClick={createAndStart} disabled={busy} title="创建并启动三阶段因子研究任务">
+          <button className="secondaryButton" onClick={() => createAndStart('smoke')} disabled={busy} title="2020-2025 快速跑通完整链路">
             <DatabaseZap size={16} />
-            生成因子面板
+            烟测闭环
           </button>
-          <button className="primaryButton" onClick={createAndStart} disabled={busy} title="创建并启动三阶段因子研究任务">
+          <button className="primaryButton" onClick={() => createAndStart('full')} disabled={busy} title="2010-2025 正式全量研究闭环">
             <Play size={16} />
-            开始研究
+            正式全量
           </button>
         </div>
       </div>
@@ -774,16 +790,6 @@ function parseModelSummary(raw?: string) {
   } catch {
     return {}
   }
-}
-
-function addYears(date: Date, years: number) {
-  const next = new Date(date)
-  next.setFullYear(next.getFullYear() + years)
-  return next
-}
-
-function formatYYYYMMDD(date: Date) {
-  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`
 }
 
 function numberText(value: unknown) {
