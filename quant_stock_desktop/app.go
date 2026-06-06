@@ -173,6 +173,54 @@ type FactorLatestPrediction struct {
 	ModelPath string  `json:"model_path"`
 }
 
+type FactorAdmissionComparison struct {
+	RunID                    string  `json:"run_id"`
+	Strategy                 string  `json:"strategy"`
+	Admission                string  `json:"admission"`
+	AdmissionScore           float64 `json:"admission_score"`
+	Reason                   string  `json:"reason"`
+	AnnualReturn             float64 `json:"annual_return"`
+	TotalReturn              float64 `json:"total_return"`
+	MaxDrawdown              float64 `json:"max_drawdown"`
+	Sharpe                   float64 `json:"sharpe"`
+	AvgTurnover              float64 `json:"avg_turnover"`
+	EffectiveStart           string  `json:"effective_start"`
+	EffectiveEnd             string  `json:"effective_end"`
+	StressPenalty            float64 `json:"stress_penalty"`
+	StressBadEventCount      int     `json:"stress_bad_event_count"`
+	StressCrashStateFailed   bool    `json:"stress_crash_state_failed"`
+	StressWeakDrawdownFailed bool    `json:"stress_weak_drawdown_failed"`
+	GeneratedAt              string  `json:"generated_at"`
+}
+
+type CrashWarningRunSummary struct {
+	RunID          string  `json:"run_id"`
+	ModelType      string  `json:"model_type"`
+	StartDate      string  `json:"start_date"`
+	EndDate        string  `json:"end_date"`
+	Horizon        int     `json:"horizon"`
+	FeatureCount   int     `json:"feature_count"`
+	Status         string  `json:"status"`
+	ModelPath      string  `json:"model_path"`
+	Rows           int     `json:"rows"`
+	PositiveRate   float64 `json:"positive_rate"`
+	RocAUC         float64 `json:"roc_auc"`
+	AvgPrecision   float64 `json:"avg_precision"`
+	Top10Precision float64 `json:"top10_precision"`
+	Top10Capture   float64 `json:"top10_capture"`
+	P90Precision   float64 `json:"p90_precision"`
+	P90Recall      float64 `json:"p90_recall"`
+	SummaryJSON    string  `json:"summary_json"`
+	UpdatedAt      string  `json:"updated_at"`
+}
+
+type CrashWarningFeature struct {
+	RunID      string  `json:"run_id"`
+	Feature    string  `json:"feature"`
+	Importance float64 `json:"importance"`
+	RankNo     int     `json:"rank_no"`
+}
+
 type SettingsResponse struct {
 	Settings config.Settings          `json:"settings"`
 	Issues   []config.ValidationIssue `json:"issues"`
@@ -1569,6 +1617,128 @@ func (app *App) ListFactorLatestPredictions(runID string, limit int) ([]FactorLa
 			return out, err
 		}
 		item.IsTop20 = isTop20 != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListFactorAdmissionComparisons(limit int) ([]FactorAdmissionComparison, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorAdmissionComparison{}, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, strategy, admission, COALESCE(admission_score, 0), COALESCE(reason, ''),
+		       COALESCE(annual_return, 0), COALESCE(total_return, 0), COALESCE(max_drawdown, 0),
+		       COALESCE(sharpe, 0), COALESCE(avg_turnover, 0),
+		       COALESCE(effective_start, ''), COALESCE(effective_end, ''),
+		       COALESCE(JSON_EXTRACT(payload_json, '$.stress_penalty') + 0, 0),
+		       COALESCE(JSON_EXTRACT(payload_json, '$.stress_bad_event_count') + 0, 0),
+		       COALESCE(JSON_EXTRACT(payload_json, '$.stress_crash_state_failed') + 0, 0),
+		       COALESCE(JSON_EXTRACT(payload_json, '$.stress_weak_drawdown_failed') + 0, 0),
+		       generated_at
+		FROM eval_strategy_admission
+		WHERE strategy = 'ml_factor_ranker'
+		ORDER BY generated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return []FactorAdmissionComparison{}, nil
+	}
+	defer rows.Close()
+	out := []FactorAdmissionComparison{}
+	for rows.Next() {
+		var item FactorAdmissionComparison
+		var crashFailed, weakFailed int
+		if err := rows.Scan(
+			&item.RunID, &item.Strategy, &item.Admission, &item.AdmissionScore, &item.Reason,
+			&item.AnnualReturn, &item.TotalReturn, &item.MaxDrawdown, &item.Sharpe, &item.AvgTurnover,
+			&item.EffectiveStart, &item.EffectiveEnd, &item.StressPenalty, &item.StressBadEventCount,
+			&crashFailed, &weakFailed, &item.GeneratedAt,
+		); err != nil {
+			return out, err
+		}
+		item.StressCrashStateFailed = crashFailed != 0
+		item.StressWeakDrawdownFailed = weakFailed != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListCrashWarningRuns(limit int) ([]CrashWarningRunSummary, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []CrashWarningRunSummary{}, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, model_type, start_date, end_date, COALESCE(horizon, 0),
+		       COALESCE(feature_count, 0), status, COALESCE(model_path, ''),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.rows') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.positive_rate') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.roc_auc') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.avg_precision') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top10_precision') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top10_capture') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.p90_precision') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.p90_recall') + 0, 0),
+		       COALESCE(summary_json, ''), updated_at
+		FROM market_crash_warning_runs
+		ORDER BY updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return []CrashWarningRunSummary{}, nil
+	}
+	defer rows.Close()
+	out := []CrashWarningRunSummary{}
+	for rows.Next() {
+		var item CrashWarningRunSummary
+		if err := rows.Scan(
+			&item.RunID, &item.ModelType, &item.StartDate, &item.EndDate, &item.Horizon,
+			&item.FeatureCount, &item.Status, &item.ModelPath, &item.Rows, &item.PositiveRate,
+			&item.RocAUC, &item.AvgPrecision, &item.Top10Precision, &item.Top10Capture,
+			&item.P90Precision, &item.P90Recall, &item.SummaryJSON, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListCrashWarningFeatures(runID string, limit int) ([]CrashWarningFeature, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []CrashWarningFeature{}, err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		row := app.database.Conn().QueryRow(`SELECT run_id FROM market_crash_warning_runs WHERE status = 'success' ORDER BY updated_at DESC LIMIT 1`)
+		_ = row.Scan(&runID)
+	}
+	if runID == "" {
+		return []CrashWarningFeature{}, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, feature, COALESCE(importance, 0), COALESCE(rank_no, 0)
+		FROM market_crash_warning_features
+		WHERE run_id = ?
+		ORDER BY rank_no ASC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []CrashWarningFeature{}, nil
+	}
+	defer rows.Close()
+	out := []CrashWarningFeature{}
+	for rows.Next() {
+		var item CrashWarningFeature
+		if err := rows.Scan(&item.RunID, &item.Feature, &item.Importance, &item.RankNo); err != nil {
+			return out, err
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()

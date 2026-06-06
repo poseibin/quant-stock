@@ -56,6 +56,9 @@ declare global {
           ListFactorCorrelationResults: (runID: string, limit: number) => Promise<FactorCorrelationResult[]>
           ListFactorStressResults: (runID: string, limit: number) => Promise<FactorStressResult[]>
           ListFactorLatestPredictions: (runID: string, limit: number) => Promise<FactorLatestPrediction[]>
+          ListFactorAdmissionComparisons: (limit: number) => Promise<FactorAdmissionComparison[]>
+          ListCrashWarningRuns: (limit: number) => Promise<CrashWarningRunSummary[]>
+          ListCrashWarningFeatures: (runID: string, limit: number) => Promise<CrashWarningFeature[]>
           GetPositionSummary: () => Promise<PositionSummary>
           GetPositionHistory: () => Promise<PositionHistoryPoint[]>
           GetPositionHoldings: () => Promise<PositionItem[]>
@@ -469,6 +472,54 @@ export interface FactorLatestPrediction {
   pred_rank: number
   is_top20: boolean
   model_path: string
+}
+
+export interface FactorAdmissionComparison {
+  run_id: string
+  strategy: string
+  admission: string
+  admission_score: number
+  reason: string
+  annual_return: number
+  total_return: number
+  max_drawdown: number
+  sharpe: number
+  avg_turnover: number
+  effective_start: string
+  effective_end: string
+  stress_penalty: number
+  stress_bad_event_count: number
+  stress_crash_state_failed: boolean
+  stress_weak_drawdown_failed: boolean
+  generated_at: string
+}
+
+export interface CrashWarningRunSummary {
+  run_id: string
+  model_type: string
+  start_date: string
+  end_date: string
+  horizon: number
+  feature_count: number
+  status: string
+  model_path: string
+  rows: number
+  positive_rate: number
+  roc_auc: number
+  avg_precision: number
+  top10_precision: number
+  top10_capture: number
+  p90_precision: number
+  p90_recall: number
+  summary_json: string
+  updated_at: string
+}
+
+export interface CrashWarningFeature {
+  run_id: string
+  feature: string
+  importance: number
+  rank_no: number
 }
 
 export interface TimeMachineSnapshot {
@@ -1030,6 +1081,27 @@ export async function listFactorStressResults(runID = '', limit = 160): Promise<
 export async function listFactorLatestPredictions(runID = '', limit = 120): Promise<FactorLatestPrediction[]> {
   if (window.go?.main?.App?.ListFactorLatestPredictions) {
     return (await window.go.main.App.ListFactorLatestPredictions(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listFactorAdmissionComparisons(limit = 30): Promise<FactorAdmissionComparison[]> {
+  if (window.go?.main?.App?.ListFactorAdmissionComparisons) {
+    return (await window.go.main.App.ListFactorAdmissionComparisons(limit)) || []
+  }
+  return []
+}
+
+export async function listCrashWarningRuns(limit = 20): Promise<CrashWarningRunSummary[]> {
+  if (window.go?.main?.App?.ListCrashWarningRuns) {
+    return (await window.go.main.App.ListCrashWarningRuns(limit)) || []
+  }
+  return []
+}
+
+export async function listCrashWarningFeatures(runID = '', limit = 20): Promise<CrashWarningFeature[]> {
+  if (window.go?.main?.App?.ListCrashWarningFeatures) {
+    return (await window.go.main.App.ListCrashWarningFeatures(runID, limit)) || []
   }
   return []
 }

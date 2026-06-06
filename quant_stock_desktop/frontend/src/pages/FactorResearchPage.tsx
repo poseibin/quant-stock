@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, LineChart, Play, RefreshCw, ShieldCheck } from 'lucide-react'
-import { createTask, getFactorModelRun, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelPredictions, listFactorResearchRuns, listFactorStressResults, listTasks, startTask, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelPrediction, type FactorModelRun, type FactorResearchRunSummary, type FactorStressResult, type TaskDTO } from '../services/app'
+import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelPredictions, listFactorResearchRuns, listFactorStressResults, listTasks, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelPrediction, type FactorModelRun, type FactorResearchRunSummary, type FactorStressResult, type TaskDTO } from '../services/app'
 
 type FactorFamily = {
   name: string
@@ -74,10 +74,20 @@ export function FactorResearchPage() {
   const [latestPredictions, setLatestPredictions] = useState<FactorLatestPrediction[]>([])
   const [correlations, setCorrelations] = useState<FactorCorrelationResult[]>([])
   const [stressRows, setStressRows] = useState<FactorStressResult[]>([])
+  const [admissionRows, setAdmissionRows] = useState<FactorAdmissionComparison[]>([])
+  const [warningRuns, setWarningRuns] = useState<CrashWarningRunSummary[]>([])
+  const [warningFeatures, setWarningFeatures] = useState<CrashWarningFeature[]>([])
   const modelSummary = useMemo(() => parseModelSummary(model?.summary_json), [model])
   const stressEvents = useMemo(() => stressRows.filter((row) => row.bucket_type === 'full' || row.bucket_type === 'event'), [stressRows])
   const stressYears = useMemo(() => stressRows.filter((row) => row.bucket_type === 'year'), [stressRows])
   const stressStates = useMemo(() => stressRows.filter((row) => row.bucket_type === 'market_state'), [stressRows])
+  const latestAdmission = admissionRows[0]
+  const bestAdmission = useMemo(() => [...admissionRows].sort((a, b) => b.admission_score - a.admission_score)[0], [admissionRows])
+  const latestWarningRun = warningRuns[0]
+  const weakestStressRows = useMemo(() => [...stressRows]
+    .filter((row) => row.bucket_type !== 'full')
+    .sort((a, b) => a.annual_return - b.annual_return)
+    .slice(0, 4), [stressRows])
   const totalFactors = factorFamilies.reduce((sum, item) => sum + item.count, 0)
   const readyFactors = factorFamilies.filter((item) => item.status === 'ready').reduce((sum, item) => sum + item.count, 0)
   const endDate = useMemo(() => formatYYYYMMDD(new Date()), [])
@@ -88,6 +98,10 @@ export function FactorResearchPage() {
     setTasks(items)
     const runItems = await listFactorResearchRuns(20)
     setRuns(runItems)
+    setAdmissionRows(await listFactorAdmissionComparisons(30))
+    const crashRuns = await listCrashWarningRuns(10)
+    setWarningRuns(crashRuns)
+    setWarningFeatures(await listCrashWarningFeatures(crashRuns[0]?.run_id || '', 12))
     const latestRun = runItems[0]?.run_id || ''
     if (latestRun) {
       setIcRows(await listFactorICResults(latestRun, 80))
@@ -398,11 +412,102 @@ export function FactorResearchPage() {
       <section className="detailCard">
         <div className="tableHeader">
           <div>
+            <div className="sectionLabel">ADMISSION COMPARE</div>
+            <h3>模型版本准入对比</h3>
+          </div>
+          <span>{bestAdmission ? `当前最高分 ${bestAdmission.run_id}` : '等待准入评估'}</span>
+        </div>
+        <div className="metricStrip">
+          <div className="metricCard"><span>最新版本</span><b>{latestAdmission?.admission || '-'}</b><em>{latestAdmission?.run_id || '暂无'}</em></div>
+          <div className="metricCard good"><span>最高准入分</span><b>{decimalText(bestAdmission?.admission_score, 2)}</b><em>{bestAdmission?.generated_at || '-'}</em></div>
+          <div className="metricCard"><span>最新年化</span><b>{percentText(latestAdmission?.annual_return)}</b><em>有效期 {dateRangeText(latestAdmission?.effective_start, latestAdmission?.effective_end)}</em></div>
+          <div className="metricCard bad"><span>压力失败</span><b>{numberText(latestAdmission?.stress_bad_event_count)}</b><em>{latestAdmission ? admissionRiskText(latestAdmission) : '-'}</em></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>版本</th>
+              <th>准入</th>
+              <th>分数</th>
+              <th>年化</th>
+              <th>最大回撤</th>
+              <th>Sharpe</th>
+              <th>压力惩罚</th>
+              <th>失败点</th>
+              <th>生成时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {admissionRows.length === 0 ? (
+              <tr><td colSpan={9} className="mutedText">暂无模型准入记录</td></tr>
+            ) : admissionRows.slice(0, 10).map((row) => (
+              <tr key={`${row.run_id}-${row.generated_at}`}>
+                <td><b>{shortRunID(row.run_id)}</b><div className="mono">{dateRangeText(row.effective_start, row.effective_end)}</div></td>
+                <td><span className={`badge ${admissionBadge(row.admission)}`}>{row.admission}</span></td>
+                <td>{decimalText(row.admission_score, 2)}</td>
+                <td className={row.annual_return >= 0 ? 'positive' : 'negative'}>{percentText(row.annual_return)}</td>
+                <td className={row.max_drawdown >= -0.2 ? 'positive' : 'negative'}>{percentText(row.max_drawdown)}</td>
+                <td>{decimalText(row.sharpe, 2)}</td>
+                <td className={row.stress_penalty <= 0 ? 'positive' : 'negative'}>{decimalText(row.stress_penalty, 2)}</td>
+                <td>{admissionRiskText(row)}</td>
+                <td className="mono">{row.generated_at}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {latestAdmission?.reason ? <div className="saveHint">{latestAdmission.reason}</div> : null}
+      </section>
+
+      <section className="detailCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">CRASH WARNING</div>
+            <h3>股灾预警模型</h3>
+          </div>
+          <span>{latestWarningRun?.run_id || '暂无预警模型'}</span>
+        </div>
+        <div className="metricStrip">
+          <div className="metricCard good"><span>AUC</span><b>{decimalText(latestWarningRun?.roc_auc, 4)}</b><em>{latestWarningRun?.model_type || '-'}</em></div>
+          <div className="metricCard"><span>AP</span><b>{decimalText(latestWarningRun?.avg_precision, 4)}</b><em>正样本 {percentText(latestWarningRun?.positive_rate)}</em></div>
+          <div className="metricCard"><span>Top10 命中</span><b>{percentText(latestWarningRun?.top10_precision)}</b><em>捕获 {percentText(latestWarningRun?.top10_capture)}</em></div>
+          <div className="metricCard"><span>样本</span><b>{numberText(latestWarningRun?.rows)}</b><em>{dateRangeText(latestWarningRun?.start_date, latestWarningRun?.end_date)}</em></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>特征</th>
+              <th>重要度</th>
+            </tr>
+          </thead>
+          <tbody>
+            {warningFeatures.length === 0 ? (
+              <tr><td colSpan={3} className="mutedText">暂无预警特征重要度</td></tr>
+            ) : warningFeatures.map((row) => (
+              <tr key={`${row.run_id}-${row.feature}`}>
+                <td>{row.rank_no}</td>
+                <td><b>{factorLabel(baseFactor(row.feature))}</b><div className="mono">{row.feature}</div></td>
+                <td>{decimalText(row.importance, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="detailCard">
+        <div className="tableHeader">
+          <div>
             <div className="sectionLabel">STRESS REPORT</div>
             <h3>模型压力分段</h3>
           </div>
           <span>按事件、年份、市场状态检查失效区间</span>
         </div>
+        {weakestStressRows.length > 0 ? (
+          <>
+            <div className="subTableTitle">最弱压力区间</div>
+            <StressTable rows={weakestStressRows} emptyText="暂无最弱压力区间" compact />
+          </>
+        ) : null}
         <StressTable rows={stressEvents} emptyText="暂无事件压力测试，跑完 stress_report 后生成" />
         {stressStates.length > 0 ? (
           <>
@@ -634,6 +739,29 @@ function variantLabel(variant: string) {
 
 function baseFactor(feature: string) {
   return feature.replace(/_neutral$/, '').replace(/_rank$/, '')
+}
+
+function shortRunID(runID: string) {
+  return runID.replace(/^eval_/, '').replace(/^ml_factor_/, '')
+}
+
+function dateRangeText(start?: string, end?: string) {
+  if (!start && !end) return '-'
+  return `${start || '-'} - ${end || '-'}`
+}
+
+function admissionBadge(admission: string) {
+  if (admission === '通过' || admission === '可准入') return 'success'
+  if (admission === '继续观察') return 'running'
+  return 'failed'
+}
+
+function admissionRiskText(row: FactorAdmissionComparison) {
+  const risks = []
+  if (row.stress_crash_state_failed) risks.push('股灾状态')
+  if (row.stress_weak_drawdown_failed) risks.push('弱市回撤')
+  if (row.stress_bad_event_count > 0) risks.push(`${row.stress_bad_event_count}个事件`)
+  return risks.length > 0 ? risks.join(' / ') : '无硬失败'
 }
 
 function statusLabel(status: string) {
