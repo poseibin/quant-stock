@@ -20,7 +20,9 @@ class MLFactorRankerStrategy(BaseStrategy):
         if preds.empty:
             return pd.DataFrame()
         preds = _enrich_stock_info(preds)
+        preds = _attach_market_risk_state(preds)
         preds = _apply_universe(preds, self.cfg)
+        preds = _apply_stress_controls(preds, self.cfg)
         if preds.empty:
             return pd.DataFrame()
 
@@ -71,28 +73,95 @@ def _enrich_stock_info(preds: pd.DataFrame) -> pd.DataFrame:
     keys = preds[["trade_date", "ts_code"]].drop_duplicates().copy()
     keys["trade_date"] = keys["trade_date"].astype(str)
     keys["ts_code"] = keys["ts_code"].astype(str)
+    start = (pd.to_datetime(keys["trade_date"].min(), format="%Y%m%d") - pd.Timedelta(days=220)).strftime("%Y%m%d")
+    end = str(keys["trade_date"].max())
     with duckdb.connect() as conn:
         conn.register("pred_keys", keys)
         info = conn.execute(
             f"""
+            WITH daily_metrics AS (
+              SELECT d.trade_date, d.ts_code,
+                     d.amount * 1000 AS amount,
+                     d.pct_chg / 100.0 AS pct_chg,
+                     d.close / NULLIF(lag(d.close, 20) OVER w, 0) - 1 AS ret20,
+                     stddev_pop(d.pct_chg / 100.0) OVER (
+                       PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                     ) * sqrt(244.0) AS vol20,
+                     d.amount / NULLIF(avg(d.amount) OVER (
+                       PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                     ), 0) - 1 AS amount_chg20,
+                     d.close / NULLIF(max(d.close) OVER (
+                       PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
+                     ), 0) - 1 AS dist_high60
+              FROM read_parquet('{dq.RAW_DIR / "daily" / "*.parquet"}') d
+              WHERE d.trade_date BETWEEN '{start}' AND '{end}'
+              WINDOW w AS (PARTITION BY d.ts_code ORDER BY d.trade_date)
+            )
             SELECT k.trade_date, k.ts_code,
                    sb.name, sb.industry,
                    db.total_mv * 10000 AS total_mv,
                    db.circ_mv * 10000 AS circ_mv,
                    db.turnover_rate,
-                   d.amount * 1000 AS amount,
-                   d.pct_chg / 100.0 AS pct_chg
+                   dm.amount,
+                   dm.pct_chg,
+                   dm.ret20,
+                   dm.vol20,
+                   dm.amount_chg20,
+                   dm.dist_high60
             FROM pred_keys k
             LEFT JOIN read_parquet('{dq.RAW_DIR / "stock_basic" / "data.parquet"}') sb
               ON k.ts_code = sb.ts_code
             LEFT JOIN read_parquet('{dq.RAW_DIR / "daily_basic" / "*.parquet"}') db
               ON k.trade_date = db.trade_date AND k.ts_code = db.ts_code
-            LEFT JOIN read_parquet('{dq.RAW_DIR / "daily" / "*.parquet"}') d
-              ON k.trade_date = d.trade_date AND k.ts_code = d.ts_code
+            LEFT JOIN daily_metrics dm
+              ON k.trade_date = dm.trade_date AND k.ts_code = dm.ts_code
             """
         ).fetchdf()
     out = preds.merge(info, on=["trade_date", "ts_code"], how="left")
     return out.replace([np.inf, -np.inf], np.nan)
+
+
+def _attach_market_risk_state(preds: pd.DataFrame) -> pd.DataFrame:
+    if preds.empty:
+        return preds
+    dates = sorted(preds["trade_date"].astype(str).unique().tolist())
+    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
+    try:
+        with connect_db(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT trade_date, state, COALESCE(risk_score, 0), COALESCE(limit_down_ratio5, 0),
+                       COALESCE(small_large_rel20, 0), COALESCE(drawdown60, 0), COALESCE(volatility20, 0)
+                FROM market_risk_state_daily
+                WHERE trade_date BETWEEN ? AND ?
+                ORDER BY trade_date
+                """,
+                (min(dates), max(dates)),
+            ).fetchall()
+    except Exception:
+        rows = []
+    if not rows:
+        out = preds.copy()
+        out["market_state"] = "normal"
+        out["market_risk_score"] = 0.0
+        out["market_limit_down_ratio5"] = 0.0
+        out["market_small_large_rel20"] = 0.0
+        out["market_drawdown60"] = 0.0
+        out["market_volatility20"] = 0.0
+        return out
+    states = pd.DataFrame(
+        rows,
+        columns=[
+            "trade_date", "market_state", "market_risk_score", "market_limit_down_ratio5",
+            "market_small_large_rel20", "market_drawdown60", "market_volatility20",
+        ],
+    )
+    states["trade_date"] = states["trade_date"].astype(str)
+    out = preds.merge(states, on="trade_date", how="left")
+    out["market_state"] = out["market_state"].fillna("normal")
+    for col in ["market_risk_score", "market_limit_down_ratio5", "market_small_large_rel20", "market_drawdown60", "market_volatility20"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+    return out
 
 
 def _apply_universe(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
@@ -113,6 +182,64 @@ def _apply_universe(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
         out = out[pd.to_numeric(out["pct_chg"], errors="coerce").fillna(0) <= float(f["max_day_return"])]
     min_rank = float((cfg.selection or {}).get("min_pred_rank", 0.95))
     out = out[pd.to_numeric(out["pred_rank"], errors="coerce").fillna(0) >= min_rank]
+    return out
+
+
+def _apply_stress_controls(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
+    controls = (cfg.filters or {}).get("stress_controls") or {}
+    if df.empty or not bool(controls.get("enabled", False)):
+        return df
+    out = df.copy()
+    state = out["market_state"].fillna("normal").astype(str) if "market_state" in out.columns else pd.Series("normal", index=out.index)
+    stress_mask = state.isin([str(x) for x in controls.get("states", ["weak", "crash"])])
+    if not stress_mask.any():
+        return out
+
+    crash_mask = state.eq("crash")
+    weak_mask = state.eq("weak")
+    min_amount_mult = float(controls.get("stress_min_amount_mult", 1.5))
+    min_amount = float((cfg.universe or {}).get("min_amount") or 0.0) * min_amount_mult
+    max_ret20 = float(controls.get("max_ret20", 0.25))
+    max_vol20 = float(controls.get("max_vol20", 0.75))
+    max_amount_chg20 = float(controls.get("max_amount_chg20", 3.0))
+    max_turnover = float(controls.get("max_turnover_rate", 18.0))
+    if min_amount > 0:
+        out = out[~stress_mask | (pd.to_numeric(out["amount"], errors="coerce").fillna(0.0) >= min_amount)]
+        stress_mask = out["market_state"].fillna("normal").astype(str).isin([str(x) for x in controls.get("states", ["weak", "crash"])])
+        crash_mask = out["market_state"].fillna("normal").astype(str).eq("crash")
+        weak_mask = out["market_state"].fillna("normal").astype(str).eq("weak")
+    for col, limit in [
+        ("ret20", max_ret20),
+        ("vol20", max_vol20),
+        ("amount_chg20", max_amount_chg20),
+        ("turnover_rate", max_turnover),
+    ]:
+        if col in out.columns:
+            values = pd.to_numeric(out[col], errors="coerce")
+            out = out[~stress_mask | values.isna() | (values <= limit)]
+            stress_mask = out["market_state"].fillna("normal").astype(str).isin([str(x) for x in controls.get("states", ["weak", "crash"])])
+            crash_mask = out["market_state"].fillna("normal").astype(str).eq("crash")
+            weak_mask = out["market_state"].fillna("normal").astype(str).eq("weak")
+    if out.empty:
+        return out
+
+    penalty = pd.Series(0.0, index=out.index, dtype="float64")
+    ret20 = pd.to_numeric(out.get("ret20", 0.0), errors="coerce").fillna(0.0)
+    vol20 = pd.to_numeric(out.get("vol20", 0.0), errors="coerce").fillna(0.0)
+    amount_chg20 = pd.to_numeric(out.get("amount_chg20", 0.0), errors="coerce").fillna(0.0)
+    turnover = pd.to_numeric(out.get("turnover_rate", 0.0), errors="coerce").fillna(0.0)
+    dist_high60 = pd.to_numeric(out.get("dist_high60", 0.0), errors="coerce").fillna(0.0)
+    penalty += stress_mask.astype(float) * (
+        ret20.clip(lower=0.0) * float(controls.get("ret20_penalty", 0.20))
+        + vol20.clip(lower=0.0) * float(controls.get("vol20_penalty", 0.08))
+        + amount_chg20.clip(lower=0.0) * float(controls.get("amount_chg20_penalty", 0.015))
+        + (turnover / 100.0).clip(lower=0.0) * float(controls.get("turnover_penalty", 0.08))
+    )
+    penalty += crash_mask.astype(float) * dist_high60.clip(upper=0.0).abs() * float(controls.get("crash_drawdown_penalty", 0.10))
+    penalty += weak_mask.astype(float) * float(controls.get("weak_base_penalty", 0.0))
+    out["stress_adjusted_score"] = pd.to_numeric(out["pred_score"], errors="coerce") - penalty
+    if bool(controls.get("use_adjusted_score", True)):
+        out["pred_score"] = out["stress_adjusted_score"]
     return out
 
 
