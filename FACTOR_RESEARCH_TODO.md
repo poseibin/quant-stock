@@ -162,6 +162,12 @@
   - 相比 `crash_exit`: 年化从 9.57% 提到 9.93%，Sharpe 从 0.83 提到 0.87，最大回撤持平；2024 修复后年化从约 -8.49% 改到 -6.48%，2024 年全年从约 -9.86% 改到 -8.09%。
   - 仍未解决: crash 条件日 win rate 仍约 8.57%，准入仍因 2015 股灾、2024 年初流动性冲击和急跌状态显著失效停留在“继续观察”。
 
+- 2026-06-06: crash 概率用于个股候选剔除/惩罚实验完成，但暂不纳入最佳组合。
+  - `ml_factor_ranker` 新增实验开关 `filters.crash_warning_candidates`，默认关闭；高 crash 概率调仓日可对高短期涨幅、高波动、量能异常、高换手、低流动性候选做过滤或分数惩罚。
+  - 轻/严硬过滤能改善 2022 和 2024 修复后，但全周期收益损失过大：`light` 年化约 8.61%、`strict` 年化约 8.46%，低于当前最佳 9.86%。
+  - 只做分数惩罚也未超过当前最佳：`penalty_hi` 年化约 9.60%、最大回撤仍 -18.70%。
+  - 结论: 这条路暂时不作为准入版本；当前候选池本身已经经过 `stress_controls`，再叠高概率候选过滤会错过修复段收益。若后续继续做，应改成行业/风格替换而不是简单剔除。
+
 ## 待做
 
 1. 完整 WF 准入复跑。
@@ -171,9 +177,9 @@
    - 写入现有准入表。
 
 2. 压力段组合构建改造。
-   - 已完成第一版 `stress_controls`、`crash_gate`、`crash_exit`、`crash_warning` 和 `crash_warning_model`。
+   - 已完成第一版 `stress_controls`、`crash_gate`、`crash_exit`、`crash_warning`、`crash_warning_model` 和 `crash_warning_candidates`。
    - 当前最佳组合更新为 `stress_controls + crash_gate + crash_exit + conditional crash_warning_model`，但准入仍是“继续观察”。
-   - 下一步不再继续加压仓层，优先做前端模型版本对比/压力诊断可视化，或将模型概率用于个股候选剔除而不是组合暴露。
+   - 下一步不再继续加压仓/简单剔除层，优先做前端模型版本对比/压力诊断可视化。
    - 同时保留 liquidity_squeeze/post_crash_repair 修复收益，不再使用硬日级仓位 overlay。
 
 3. 因子相关性报告前端化。

@@ -23,6 +23,7 @@ class MLFactorRankerStrategy(BaseStrategy):
         preds = _attach_market_risk_state(preds)
         preds = _apply_universe(preds, self.cfg)
         preds = _apply_stress_controls(preds, self.cfg)
+        preds = _apply_crash_warning_candidate_controls(preds, self.cfg)
         if preds.empty:
             return pd.DataFrame()
 
@@ -244,6 +245,78 @@ def _apply_stress_controls(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFram
     out["stress_adjusted_score"] = pd.to_numeric(out["pred_score"], errors="coerce") - penalty
     if bool(controls.get("use_adjusted_score", True)):
         out["pred_score"] = out["stress_adjusted_score"]
+    return out
+
+
+def _apply_crash_warning_candidate_controls(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
+    controls = (cfg.filters or {}).get("crash_warning_candidates") or {}
+    if df.empty or not bool(controls.get("enabled", False)):
+        return df
+
+    dates = sorted(df["trade_date"].astype(str).unique().tolist())
+    prob = _crash_warning_probability_series(dates, str(controls.get("run_id") or "").strip())
+    if prob.empty:
+        return df
+    prob = prob.reindex(dates, method="ffill").fillna(0.0).astype(float)
+
+    out = df.copy()
+    out["crash_warning_prob"] = out["trade_date"].astype(str).map(prob).fillna(0.0).astype(float)
+    threshold = float(controls.get("threshold", 0.45))
+    severe_threshold = float(controls.get("severe_threshold", 0.65))
+    warning_mask = out["crash_warning_prob"] >= threshold
+    if not warning_mask.any():
+        return out
+
+    severe_mask = out["crash_warning_prob"] >= severe_threshold
+    min_amount_mult = float(controls.get("min_amount_mult", 1.0))
+    severe_min_amount_mult = float(controls.get("severe_min_amount_mult", min_amount_mult))
+    base_min_amount = float((cfg.universe or {}).get("min_amount") or 0.0)
+    if base_min_amount > 0 and min_amount_mult > 0:
+        amount = pd.to_numeric(out.get("amount", 0.0), errors="coerce").fillna(0.0)
+        min_amount = base_min_amount * min_amount_mult
+        severe_min_amount = base_min_amount * severe_min_amount_mult
+        keep = ~warning_mask | (amount >= min_amount)
+        keep &= ~severe_mask | (amount >= severe_min_amount)
+        out = out[keep]
+        if out.empty:
+            return out
+        warning_mask = out["crash_warning_prob"] >= threshold
+        severe_mask = out["crash_warning_prob"] >= severe_threshold
+
+    for col, cfg_key, severe_key in [
+        ("ret20", "max_ret20", "severe_max_ret20"),
+        ("vol20", "max_vol20", "severe_max_vol20"),
+        ("amount_chg20", "max_amount_chg20", "severe_max_amount_chg20"),
+        ("turnover_rate", "max_turnover_rate", "severe_max_turnover_rate"),
+    ]:
+        if col not in out.columns or controls.get(cfg_key) is None:
+            continue
+        values = pd.to_numeric(out[col], errors="coerce")
+        limit = float(controls[cfg_key])
+        severe_limit = float(controls.get(severe_key, limit))
+        keep = ~warning_mask | values.isna() | (values <= limit)
+        keep &= ~severe_mask | values.isna() | (values <= severe_limit)
+        out = out[keep]
+        if out.empty:
+            return out
+        warning_mask = out["crash_warning_prob"] >= threshold
+        severe_mask = out["crash_warning_prob"] >= severe_threshold
+
+    penalty = pd.Series(0.0, index=out.index, dtype="float64")
+    ret20 = pd.to_numeric(out.get("ret20", 0.0), errors="coerce").fillna(0.0)
+    vol20 = pd.to_numeric(out.get("vol20", 0.0), errors="coerce").fillna(0.0)
+    amount_chg20 = pd.to_numeric(out.get("amount_chg20", 0.0), errors="coerce").fillna(0.0)
+    turnover = pd.to_numeric(out.get("turnover_rate", 0.0), errors="coerce").fillna(0.0)
+    warning_strength = ((out["crash_warning_prob"] - threshold) / max(1e-6, 1.0 - threshold)).clip(0.0, 1.0)
+    penalty += warning_mask.astype(float) * warning_strength * (
+        ret20.clip(lower=0.0) * float(controls.get("ret20_penalty", 0.08))
+        + vol20.clip(lower=0.0) * float(controls.get("vol20_penalty", 0.04))
+        + amount_chg20.clip(lower=0.0) * float(controls.get("amount_chg20_penalty", 0.015))
+        + (turnover / 100.0).clip(lower=0.0) * float(controls.get("turnover_penalty", 0.04))
+    )
+    out["crash_warning_adjusted_score"] = pd.to_numeric(out["pred_score"], errors="coerce") - penalty
+    if bool(controls.get("use_adjusted_score", True)):
+        out["pred_score"] = out["crash_warning_adjusted_score"]
     return out
 
 
