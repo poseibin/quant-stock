@@ -51,6 +51,7 @@ declare global {
           ListLimitSignalEvaluationSummary: () => Promise<LimitSignalEvaluationSummary[]>
           ListFactorResearchRuns: (limit: number) => Promise<FactorResearchRunSummary[]>
           ListFactorICResults: (runID: string, limit: number) => Promise<FactorICResult[]>
+          ListFactorStateICResults: (runID: string, limit: number) => Promise<FactorStateICResult[]>
           GetFactorModelRun: (runID: string) => Promise<FactorModelRun>
           ListFactorModelPredictions: (runID: string, limit: number) => Promise<FactorModelPrediction[]>
           ListFactorCorrelationResults: (runID: string, limit: number) => Promise<FactorCorrelationResult[]>
@@ -408,6 +409,22 @@ export interface FactorICResult {
   status: string
   long_short_return: number
   monotonic_score: number
+}
+
+export interface FactorStateICResult {
+  run_id: string
+  factor: string
+  family: string
+  variant: string
+  horizon: string
+  market_state: string
+  rank_ic_mean: number
+  ic_win_rate: number
+  icir: number
+  n_periods: number
+  n_obs: number
+  status: string
+  summary_json: string
 }
 
 export interface FactorModelRun {
@@ -1045,6 +1062,13 @@ export async function listFactorResearchRuns(limit = 20): Promise<FactorResearch
 export async function listFactorICResults(runID = '', limit = 80): Promise<FactorICResult[]> {
   if (window.go?.main?.App?.ListFactorICResults) {
     return (await window.go.main.App.ListFactorICResults(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listFactorStateICResults(runID = '', limit = 120): Promise<FactorStateICResult[]> {
+  if (window.go?.main?.App?.ListFactorStateICResults) {
+    return (await window.go.main.App.ListFactorStateICResults(runID, limit)) || []
   }
   return []
 }

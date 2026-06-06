@@ -109,6 +109,22 @@ type FactorICResult struct {
 	MonotonicScore  float64 `json:"monotonic_score"`
 }
 
+type FactorStateICResult struct {
+	RunID       string  `json:"run_id"`
+	Factor      string  `json:"factor"`
+	Family      string  `json:"family"`
+	Variant     string  `json:"variant"`
+	Horizon     string  `json:"horizon"`
+	MarketState string  `json:"market_state"`
+	RankICMean  float64 `json:"rank_ic_mean"`
+	ICWinRate   float64 `json:"ic_win_rate"`
+	ICIR        float64 `json:"icir"`
+	NPeriods    int     `json:"n_periods"`
+	NObs        int     `json:"n_obs"`
+	Status      string  `json:"status"`
+	SummaryJSON string  `json:"summary_json"`
+}
+
 type FactorModelRun struct {
 	RunID        string  `json:"run_id"`
 	ModelType    string  `json:"model_type"`
@@ -1416,6 +1432,59 @@ func (app *App) ListFactorICResults(runID string, limit int) ([]FactorICResult, 
 	for rows.Next() {
 		var item FactorICResult
 		if err := rows.Scan(&item.RunID, &item.Factor, &item.Family, &item.Variant, &item.Horizon, &item.ICMean, &item.RankICMean, &item.ICWinRate, &item.ICIR, &item.Status, &item.LongShortReturn, &item.MonotonicScore); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListFactorStateICResults(runID string, limit int) ([]FactorStateICResult, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorStateICResult{}, err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		latest, err := app.latestFactorRunID()
+		if err != nil {
+			return []FactorStateICResult{}, err
+		}
+		runID = latest
+	}
+	if runID == "" {
+		return []FactorStateICResult{}, nil
+	}
+	if limit <= 0 || limit > 300 {
+		limit = 120
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, factor, family, variant, horizon, market_state,
+		       COALESCE(rank_ic_mean, 0), COALESCE(ic_win_rate, 0), COALESCE(icir, 0),
+		       COALESCE(n_periods, 0), COALESCE(n_obs, 0), status, COALESCE(summary_json, '')
+		FROM factor_state_ic_results
+		WHERE run_id = ?
+		ORDER BY
+		  CASE market_state
+		    WHEN 'crash' THEN 0
+		    WHEN 'weak' THEN 1
+		    WHEN 'liquidity_squeeze' THEN 2
+		    WHEN 'post_crash_repair' THEN 3
+		    WHEN 'normal' THEN 4
+		    ELSE 9
+		  END,
+		  rank_ic_mean DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []FactorStateICResult{}, nil
+	}
+	defer rows.Close()
+	out := []FactorStateICResult{}
+	for rows.Next() {
+		var item FactorStateICResult
+		if err := rows.Scan(
+			&item.RunID, &item.Factor, &item.Family, &item.Variant, &item.Horizon, &item.MarketState,
+			&item.RankICMean, &item.ICWinRate, &item.ICIR, &item.NPeriods, &item.NObs, &item.Status, &item.SummaryJSON,
+		); err != nil {
 			return out, err
 		}
 		out = append(out, item)

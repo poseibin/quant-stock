@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, LineChart, Play, RefreshCw, ShieldCheck } from 'lucide-react'
-import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelPredictions, listFactorResearchRuns, listFactorStressResults, listTasks, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelPrediction, type FactorModelRun, type FactorResearchRunSummary, type FactorStressResult, type TaskDTO } from '../services/app'
+import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelPredictions, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelPrediction, type FactorModelRun, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
 
 type FactorFamily = {
   name: string
@@ -69,6 +69,7 @@ export function FactorResearchPage() {
   const [error, setError] = useState('')
   const [runs, setRuns] = useState<FactorResearchRunSummary[]>([])
   const [icRows, setIcRows] = useState<FactorICResult[]>([])
+  const [stateIcRows, setStateIcRows] = useState<FactorStateICResult[]>([])
   const [model, setModel] = useState<FactorModelRun | null>(null)
   const [predictions, setPredictions] = useState<FactorModelPrediction[]>([])
   const [latestPredictions, setLatestPredictions] = useState<FactorLatestPrediction[]>([])
@@ -105,6 +106,7 @@ export function FactorResearchPage() {
     const latestRun = runItems[0]?.run_id || ''
     if (latestRun) {
       setIcRows(await listFactorICResults(latestRun, 80))
+      setStateIcRows(await listFactorStateICResults(latestRun, 120))
       setModel(await getFactorModelRun(latestRun))
       setPredictions(await listFactorModelPredictions(latestRun, 80))
       setLatestPredictions(await listFactorLatestPredictions(latestRun, 80))
@@ -112,6 +114,7 @@ export function FactorResearchPage() {
       setStressRows(await listFactorStressResults(latestRun, 160))
     } else {
       setIcRows([])
+      setStateIcRows([])
       setModel(null)
       setPredictions([])
       setLatestPredictions([])
@@ -379,6 +382,50 @@ export function FactorResearchPage() {
                 <td>{decimalText(row.icir, 2)}</td>
                 <td className={row.long_short_return >= 0 ? 'positive' : 'negative'}>{percentText(row.long_short_return)}</td>
                 <td>{percentText(row.monotonic_score, 0)}</td>
+                <td><span className={`badge ${row.status === 'ready' ? 'success' : row.status === 'watch' ? 'running' : 'failed'}`}>{factorStatusLabel(row.status)}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="detailCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">STATE IC</div>
+            <h3>市场状态因子强弱</h3>
+          </div>
+          <span>优先看急跌、弱势和流动性挤压状态下仍有 Rank IC 的因子</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>市场状态</th>
+              <th>因子</th>
+              <th>版本</th>
+              <th>类别</th>
+              <th>Rank IC</th>
+              <th>胜率</th>
+              <th>ICIR</th>
+              <th>期数</th>
+              <th>样本</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stateIcRows.length === 0 ? (
+              <tr><td colSpan={10} className="mutedText">暂无市场状态 IC，跑完因子检验后生成</td></tr>
+            ) : stateIcRows.slice(0, 36).map((row) => (
+              <tr key={`${row.run_id}-${row.market_state}-${row.factor}-${row.variant}`}>
+                <td><span className={`badge ${marketStateBadge(row.market_state)}`}>{marketStateLabel(row.market_state)}</span></td>
+                <td><b>{factorLabel(row.factor)}</b><div className="mono">{row.factor}</div></td>
+                <td>{variantLabel(row.variant)}</td>
+                <td>{row.family}</td>
+                <td className={row.rank_ic_mean >= 0 ? 'positive' : 'negative'}>{decimalText(row.rank_ic_mean, 4)}</td>
+                <td>{percentText(row.ic_win_rate)}</td>
+                <td>{decimalText(row.icir, 2)}</td>
+                <td>{numberText(row.n_periods)}</td>
+                <td>{numberText(row.n_obs)}</td>
                 <td><span className={`badge ${row.status === 'ready' ? 'success' : row.status === 'watch' ? 'running' : 'failed'}`}>{factorStatusLabel(row.status)}</span></td>
               </tr>
             ))}
@@ -674,6 +721,23 @@ function stressBucketType(type: string) {
     year: '年度',
     market_state: '市场状态'
   }[type] || type
+}
+
+function marketStateLabel(state: string) {
+  return {
+    normal: '常态',
+    weak: '弱势',
+    crash: '急跌',
+    liquidity_squeeze: '流动性挤压',
+    post_crash_repair: '急跌后修复'
+  }[state] || state
+}
+
+function marketStateBadge(state: string) {
+  if (state === 'crash' || state === 'liquidity_squeeze') return 'failed'
+  if (state === 'weak') return 'running'
+  if (state === 'post_crash_repair') return 'created'
+  return 'success'
 }
 
 function parseModelSummary(raw?: string) {
