@@ -154,6 +154,14 @@
   - 组合层暂不纳入最佳版本：叠加当前最佳 `stress_controls + crash_gate + crash_exit` 后，回撤没有进一步改善，较好组合如 `threshold=0.55/0.75, exposure=0.90/0.75` 年化约 9.37%、最大回撤仍 -18.70%，低于不加模型的 9.49% 年化。
   - 结论: 模型预测冲击本身有价值，但现阶段更适合作为前端诊断/研究信号；要转化为收益，需要改 overlay 目标函数，例如只在高概率且组合拥挤/弱流动时降仓，或让它参与个股候选剔除而不是统一压仓。
 
+- 2026-06-06: 条件式 crash warning model 减仓实验完成。
+  - `filters.crash_warning_model.condition` 支持组合层触发条件：按日级目标持仓加权计算 `ret20/vol20/amount_chg20/turnover_rate/amount`，只有模型概率高且当前组合满足拥挤/高波动/量能异常等条件时才降暴露。
+  - 最优折中参数暂定 `conditional_crowd2_045`: `warning_threshold=0.45`、`severe_threshold=0.65`、`warning_exposure=0.90`、`severe_exposure=0.75`；条件为组合层至少 2 项触发，`ret20>=12%`、`vol20>=38%`、`amount_chg20>=25%`、`turnover_rate>=6%`。
+  - 正式准入保存为 `eval_ml_factor_conditional_warning_model_20260606`。
+  - 2014-2025: 年化 9.93%、总收益 207.90%、最大回撤 -18.70%、Sharpe 0.87、平均换手 2.01%，准入仍为“继续观察”，分数 47.50。
+  - 相比 `crash_exit`: 年化从 9.57% 提到 9.93%，Sharpe 从 0.83 提到 0.87，最大回撤持平；2024 修复后年化从约 -8.49% 改到 -6.48%，2024 年全年从约 -9.86% 改到 -8.09%。
+  - 仍未解决: crash 条件日 win rate 仍约 8.57%，准入仍因 2015 股灾、2024 年初流动性冲击和急跌状态显著失效停留在“继续观察”。
+
 ## 待做
 
 1. 完整 WF 准入复跑。
@@ -164,8 +172,8 @@
 
 2. 压力段组合构建改造。
    - 已完成第一版 `stress_controls`、`crash_gate`、`crash_exit`、`crash_warning` 和 `crash_warning_model`。
-   - 当前最佳组合仍是 `stress_controls + crash_gate + crash_exit`，`crash_warning`/`crash_warning_model` 暂不纳入准入保存版本。
-   - 下一步不要再继续统一压仓，改做“模型概率 × 组合拥挤/弱流动”的条件减仓，或先转去完善前端模型版本对比。
+   - 当前最佳组合更新为 `stress_controls + crash_gate + crash_exit + conditional crash_warning_model`，但准入仍是“继续观察”。
+   - 下一步不再继续加压仓层，优先做前端模型版本对比/压力诊断可视化，或将模型概率用于个股候选剔除而不是组合暴露。
    - 同时保留 liquidity_squeeze/post_crash_repair 修复收益，不再使用硬日级仓位 overlay。
 
 3. 因子相关性报告前端化。

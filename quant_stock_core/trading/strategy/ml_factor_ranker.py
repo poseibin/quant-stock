@@ -464,6 +464,7 @@ def _apply_crash_warning_model_overlay(weights: pd.DataFrame, start: str, end: s
     if prob.empty:
         return weights
     prob = prob.reindex(dates, method="ffill").fillna(0.0).astype(float)
+    condition = _crash_warning_condition_mask(dates, weights, start, end, model_cfg)
 
     warning_threshold = float(model_cfg.get("warning_threshold", 0.45))
     severe_threshold = float(model_cfg.get("severe_threshold", 0.65))
@@ -478,10 +479,11 @@ def _apply_crash_warning_model_overlay(weights: pd.DataFrame, start: str, end: s
     cooldown_exposure = 1.0
     for date in dates:
         value = float(prob.get(date) or 0.0)
-        if value >= severe_threshold:
+        allowed = bool(condition.get(date, True))
+        if allowed and value >= severe_threshold:
             cooldown_left = severe_cooldown_days
             cooldown_exposure = severe_exposure
-        elif value >= warning_threshold and cooldown_left <= 0:
+        elif allowed and value >= warning_threshold and cooldown_left <= 0:
             cooldown_left = cooldown_days
             cooldown_exposure = warning_exposure
         if cooldown_left > 0:
@@ -518,6 +520,99 @@ def _crash_warning_probability_series(dates: list[str], run_id: str) -> pd.Serie
     if not rows:
         return pd.Series(dtype="float64")
     return pd.Series({str(date): float(prob or 0.0) for date, prob in rows}, dtype="float64").sort_index()
+
+
+def _crash_warning_condition_mask(
+    dates: list[str],
+    weights: pd.DataFrame,
+    start: str,
+    end: str,
+    model_cfg: dict,
+) -> pd.Series:
+    condition_cfg = model_cfg.get("condition") or {}
+    if not bool(condition_cfg.get("enabled", False)):
+        return pd.Series(True, index=dates, dtype=bool)
+
+    daily = weights.reindex(dates).ffill().fillna(0.0)
+    metrics = _portfolio_stress_metrics(daily, start, end)
+    if metrics.empty:
+        return pd.Series(True, index=dates, dtype=bool)
+    metrics = metrics.reindex(dates).fillna(0.0)
+
+    mask = pd.Series(False, index=dates, dtype=bool)
+    min_triggers = max(1, int(condition_cfg.get("min_triggers", 1)))
+    trigger_count = pd.Series(0, index=dates, dtype=int)
+    checks = [
+        ("max_ret20", "ret20", ">="),
+        ("max_vol20", "vol20", ">="),
+        ("max_amount_chg20", "amount_chg20", ">="),
+        ("max_turnover_rate", "turnover_rate", ">="),
+        ("min_amount", "amount", "<="),
+    ]
+    for cfg_key, metric_col, op in checks:
+        if condition_cfg.get(cfg_key) is None or metric_col not in metrics.columns:
+            continue
+        threshold = float(condition_cfg[cfg_key])
+        if op == ">=":
+            trigger = pd.to_numeric(metrics[metric_col], errors="coerce").fillna(0.0) >= threshold
+        else:
+            trigger = pd.to_numeric(metrics[metric_col], errors="coerce").fillna(0.0) <= threshold
+        trigger_count += trigger.astype(int)
+    mask |= trigger_count >= min_triggers
+
+    states = {str(x) for x in condition_cfg.get("states", [])}
+    if states:
+        state_series = _market_state_series(dates, 5).reindex(dates, method="ffill").fillna("normal").astype(str)
+        mask |= state_series.isin(states)
+    return mask.astype(bool)
+
+
+def _portfolio_stress_metrics(weights: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+    if weights.empty:
+        return pd.DataFrame()
+    active_codes = [str(c) for c in weights.columns if float(weights[c].abs().sum()) > 0]
+    if not active_codes:
+        return pd.DataFrame()
+    start_warmup = (pd.to_datetime(start, format="%Y%m%d") - pd.Timedelta(days=220)).strftime("%Y%m%d")
+    keys = pd.DataFrame({"ts_code": active_codes})
+    with duckdb.connect() as conn:
+        conn.register("target_codes", keys)
+        metrics = conn.execute(
+            f"""
+            WITH daily_metrics AS (
+              SELECT d.trade_date, d.ts_code,
+                     d.amount * 1000 AS amount,
+                     d.close / NULLIF(lag(d.close, 20) OVER w, 0) - 1 AS ret20,
+                     stddev_pop(d.pct_chg / 100.0) OVER (
+                       PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                     ) * sqrt(244.0) AS vol20,
+                     d.amount / NULLIF(avg(d.amount) OVER (
+                       PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                     ), 0) - 1 AS amount_chg20
+              FROM read_parquet('{dq.RAW_DIR / "daily" / "*.parquet"}') d
+              JOIN target_codes c ON d.ts_code = c.ts_code
+              WHERE d.trade_date BETWEEN '{start_warmup}' AND '{end}'
+              WINDOW w AS (PARTITION BY d.ts_code ORDER BY d.trade_date)
+            )
+            SELECT dm.trade_date, dm.ts_code, dm.amount, dm.ret20, dm.vol20, dm.amount_chg20,
+                   db.turnover_rate
+            FROM daily_metrics dm
+            LEFT JOIN read_parquet('{dq.RAW_DIR / "daily_basic" / "*.parquet"}') db
+              ON dm.trade_date = db.trade_date AND dm.ts_code = db.ts_code
+            WHERE dm.trade_date BETWEEN '{start}' AND '{end}'
+            """
+        ).fetchdf()
+    if metrics.empty:
+        return pd.DataFrame()
+    metrics["trade_date"] = metrics["trade_date"].astype(str)
+    metrics["ts_code"] = metrics["ts_code"].astype(str)
+    out = pd.DataFrame(index=weights.index.astype(str), columns=["ret20", "vol20", "amount_chg20", "turnover_rate", "amount"], dtype="float64")
+    for col in out.columns:
+        pivot = metrics.pivot(index="trade_date", columns="ts_code", values=col).reindex(index=out.index, columns=weights.columns).fillna(0.0)
+        numerator = (weights * pivot).sum(axis=1)
+        denom = weights.where(pivot.notna(), 0.0).sum(axis=1).replace(0.0, np.nan)
+        out[col] = (numerator / denom).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return out
 
 
 def _apply_intramonth_crash_exit(weights: pd.DataFrame, start: str, end: str, cfg: StrategyConfig) -> pd.DataFrame:
