@@ -125,6 +125,10 @@ def evaluate(
         }
         try:
             strategy = registry.build(name)
+            if name == "ml_factor_ranker":
+                model_run_id = str((getattr(strategy, "cfg", None).selection or {}).get("run_id") or "")
+                row["factor_model_run_id"] = model_run_id
+                row.update(_factor_model_stress_context(model_run_id))
             weights = strategy.generate_target_weights(start, end)
             if weights.empty:
                 row["status"] = "empty"
@@ -354,6 +358,10 @@ def _admission_decision(row: dict[str, Any], *, is_baseline: bool) -> dict[str, 
         "independence_score": 0.12,
     }
     score = sum(components[key] * weight for key, weight in weights.items())
+    stress_penalty = float(row.get("stress_penalty") or 0.0)
+    if row.get("stress_report_available"):
+        components["stress_score"] = max(0.0, 100.0 - stress_penalty * 5.0)
+        score = max(0.0, score - stress_penalty)
 
     caution_reasons: list[str] = []
     reject_reasons: list[str] = []
@@ -367,6 +375,11 @@ def _admission_decision(row: dict[str, Any], *, is_baseline: bool) -> dict[str, 
         caution_reasons.append("裸策略回撤超过实盘线")
     if sharpe < 0:
         reject_reasons.append("夏普为负")
+    if row.get("stress_report_available"):
+        if int(row.get("stress_bad_event_count") or 0) > 0:
+            caution_reasons.append(str(row.get("stress_reason") or "压力分段存在失效区间"))
+        if bool(row.get("stress_crash_state_failed")):
+            caution_reasons.append("急跌状态收益显著失效")
 
     if annual_return <= 0 and sharpe < 0:
         admission = "暂不启用"
@@ -418,8 +431,62 @@ def _score_label(key: str) -> str:
         "capacity_score": "容量",
         "stability_score": "稳定性",
         "independence_score": "组合独立性",
+        "stress_score": "压力分段",
     }
     return labels.get(key, key)
+
+
+def _factor_model_stress_context(model_run_id: str) -> dict[str, Any]:
+    model_run_id = str(model_run_id or "").strip()
+    if not model_run_id:
+        return {}
+    try:
+        with write_transaction(_resolve_db_path(None)) as conn:
+            if not table_exists(conn, "factor_model_stress_results"):
+                return {}
+            rows = conn.execute(
+                """
+                SELECT bucket_type, bucket_key, bucket_label,
+                       COALESCE(annual_return, 0), COALESCE(max_drawdown, 0), COALESCE(win_rate, 0)
+                FROM factor_model_stress_results
+                WHERE run_id = ?
+                  AND bucket_type IN ('event', 'market_state')
+                """,
+                (model_run_id,),
+            ).fetchall()
+    except Exception:
+        return {}
+    if not rows:
+        return {}
+
+    bad_events: list[str] = []
+    crash_failed = False
+    weak_drawdown_failed = False
+    for bucket_type, bucket_key, bucket_label, annual_return, max_drawdown, win_rate in rows:
+        annual = float(annual_return or 0.0)
+        drawdown = float(max_drawdown or 0.0)
+        win = float(win_rate or 0.0)
+        if bucket_type == "event" and (annual <= -0.10 or drawdown <= -0.15):
+            bad_events.append(str(bucket_label or bucket_key))
+        if bucket_type == "market_state" and bucket_key == "crash" and win < 0.20:
+            crash_failed = True
+        if bucket_type == "market_state" and bucket_key == "weak" and drawdown <= -0.25:
+            weak_drawdown_failed = True
+
+    penalty = min(20.0, len(bad_events) * 4.0 + (5.0 if crash_failed else 0.0) + (3.0 if weak_drawdown_failed else 0.0))
+    reason = ""
+    if bad_events:
+        reason = "压力段失效：" + "、".join(bad_events[:4])
+        if len(bad_events) > 4:
+            reason += f"等{len(bad_events)}段"
+    return {
+        "stress_report_available": True,
+        "stress_bad_event_count": len(bad_events),
+        "stress_crash_state_failed": crash_failed,
+        "stress_weak_drawdown_failed": weak_drawdown_failed,
+        "stress_penalty": penalty,
+        "stress_reason": reason,
+    }
 
 
 def _linear_score(value: float, floor: float, cap: float) -> float:
