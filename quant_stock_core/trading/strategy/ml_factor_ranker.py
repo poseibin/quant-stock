@@ -40,6 +40,7 @@ class MLFactorRankerStrategy(BaseStrategy):
             return pd.DataFrame()
         base = pd.concat(frames).sort_index().fillna(0.0)
         base = _apply_crash_rebalance_gate(base, self.cfg)
+        base = _apply_crash_warning_overlay(base, start, end, self.cfg)
         base = _apply_intramonth_crash_exit(base, start, end, self.cfg)
         if daily_overlay:
             return _apply_daily_exposure_overlay(base, start, end, self.cfg)
@@ -324,6 +325,125 @@ def _market_state_series(dates: list[str], lookback_days: int) -> pd.Series:
         return pd.Series(dtype="object")
     series = pd.Series({str(date): str(state) for date, state in rows}, dtype="object")
     return series.sort_index()
+
+
+def _market_risk_frame(dates: list[str], lookback_days: int) -> pd.DataFrame:
+    if not dates:
+        return pd.DataFrame()
+    pad_days = max(lookback_days * 4, 30)
+    start = (pd.to_datetime(min(dates), format="%Y%m%d") - pd.Timedelta(days=pad_days)).strftime("%Y%m%d")
+    end = max(dates)
+    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
+    try:
+        with connect_db(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT trade_date, state, COALESCE(risk_score, 0), COALESCE(market_return, 0),
+                       COALESCE(up_ratio, 0), COALESCE(breadth20, 0),
+                       COALESCE(limit_down_ratio, 0), COALESCE(limit_down_ratio5, 0),
+                       COALESCE(amount_chg20, 0), COALESCE(small_large_rel20, 0),
+                       COALESCE(drawdown20, 0), COALESCE(drawdown60, 0),
+                       COALESCE(volatility20, 0)
+                FROM market_risk_state_daily
+                WHERE trade_date BETWEEN ? AND ?
+                ORDER BY trade_date
+                """,
+                (start, end),
+            ).fetchall()
+    except Exception:
+        return pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(
+        rows,
+        columns=[
+            "trade_date", "state", "risk_score", "market_return", "up_ratio", "breadth20",
+            "limit_down_ratio", "limit_down_ratio5", "amount_chg20", "small_large_rel20",
+            "drawdown20", "drawdown60", "volatility20",
+        ],
+    )
+    frame["trade_date"] = frame["trade_date"].astype(str)
+    for col in frame.columns:
+        if col not in {"trade_date", "state"}:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce").fillna(0.0)
+    return frame.set_index("trade_date").sort_index()
+
+
+def _apply_crash_warning_overlay(weights: pd.DataFrame, start: str, end: str, cfg: StrategyConfig) -> pd.DataFrame:
+    warning = (cfg.filters or {}).get("crash_warning") or {}
+    if weights.empty or not bool(warning.get("enabled", False)):
+        return weights
+
+    dates = dq.get_trade_dates(start, end)
+    if not dates:
+        return weights
+    dates = [date for date in dates if date >= str(weights.index.min()) and date <= end]
+    if not dates:
+        return weights
+
+    risk = _market_risk_frame(dates, int(warning.get("lookback_days", 5)))
+    if risk.empty:
+        return weights
+    risk = risk.reindex(dates, method="ffill")
+
+    normal_exposure = float(warning.get("normal_exposure", 1.0))
+    warning_exposure = float(warning.get("warning_exposure", 0.65))
+    severe_exposure = float(warning.get("severe_exposure", 0.35))
+    min_risk_score = float(warning.get("min_risk_score", 38.0))
+    severe_risk_score = float(warning.get("severe_risk_score", 55.0))
+    max_market_return = float(warning.get("max_market_return", -0.035))
+    severe_market_return = float(warning.get("severe_market_return", -0.05))
+    max_up_ratio = float(warning.get("max_up_ratio", 0.22))
+    max_breadth20 = float(warning.get("max_breadth20", 0.40))
+    min_limit_down_ratio = float(warning.get("min_limit_down_ratio", 0.012))
+    min_limit_down_ratio5 = float(warning.get("min_limit_down_ratio5", 0.010))
+    max_drawdown20 = float(warning.get("max_drawdown20", -0.08))
+    max_small_large_rel20 = float(warning.get("max_small_large_rel20", -0.10))
+    cooldown_days = max(0, int(warning.get("cooldown_days", 1)))
+    severe_cooldown_days = max(cooldown_days, int(warning.get("severe_cooldown_days", cooldown_days + 1)))
+
+    daily = weights.reindex(dates).ffill().fillna(0.0)
+    exposure = pd.Series(normal_exposure, index=dates, dtype="float64")
+    cooldown_left = 0
+    cooldown_exposure = normal_exposure
+
+    for date in dates:
+        row = risk.loc[date]
+        score = float(row.get("risk_score") or 0.0)
+        market_return = float(row.get("market_return") or 0.0)
+        up_ratio = float(row.get("up_ratio") or 0.0)
+        breadth20 = float(row.get("breadth20") or 0.0)
+        limit_down = float(row.get("limit_down_ratio") or 0.0)
+        limit_down5 = float(row.get("limit_down_ratio5") or 0.0)
+        drawdown20 = float(row.get("drawdown20") or 0.0)
+        rel20 = float(row.get("small_large_rel20") or 0.0)
+
+        warning_hit = (
+            score >= min_risk_score
+            or market_return <= max_market_return
+            or (limit_down5 >= min_limit_down_ratio5 and breadth20 <= max_breadth20)
+            or (limit_down >= min_limit_down_ratio and up_ratio <= max_up_ratio)
+            or (drawdown20 <= max_drawdown20 and breadth20 <= max_breadth20)
+            or (rel20 <= max_small_large_rel20 and breadth20 <= max_breadth20)
+        )
+        severe_hit = (
+            score >= severe_risk_score
+            or market_return <= severe_market_return
+            or limit_down >= min_limit_down_ratio * 2.0
+        )
+
+        if severe_hit:
+            cooldown_left = severe_cooldown_days
+            cooldown_exposure = severe_exposure
+        elif warning_hit and cooldown_left <= 0:
+            cooldown_left = cooldown_days
+            cooldown_exposure = warning_exposure
+
+        if cooldown_left > 0:
+            exposure.loc[date] = min(exposure.loc[date], cooldown_exposure)
+            cooldown_left -= 1
+
+    return daily.mul(exposure, axis=0).fillna(0.0)
 
 
 def _apply_intramonth_crash_exit(weights: pd.DataFrame, start: str, end: str, cfg: StrategyConfig) -> pd.DataFrame:
