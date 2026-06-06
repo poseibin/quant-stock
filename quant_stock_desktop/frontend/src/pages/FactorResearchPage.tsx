@@ -18,6 +18,16 @@ type PipelineStep = {
   status: '已规划' | '开发中' | '待接入'
 }
 
+type ResearchTab = 'overview' | 'runs' | 'factors' | 'model' | 'risk'
+
+const researchTabs: Array<{ key: ResearchTab; label: string }> = [
+  { key: 'overview', label: '任务流水线' },
+  { key: 'runs', label: '运行监控' },
+  { key: 'factors', label: '因子检验' },
+  { key: 'model', label: '模型训练' },
+  { key: 'risk', label: '压力准入' }
+]
+
 const factorFamilies: FactorFamily[] = [
   { name: '估值', count: 13, examples: 'EP、BP、SP、PE/PB/PS、股息率、行业内估值分位', role: '提供长期均值回归和估值保护', status: 'ready' },
   { name: '质量', count: 27, examples: 'ROE、ROA、ROIC、毛利率、现金流质量、负债和营运效率', role: '过滤利润质量和资产负债表风险', status: 'ready' },
@@ -63,6 +73,7 @@ function statusText(status: FactorFamily['status']) {
 }
 
 export function FactorResearchPage() {
+  const [activeTab, setActiveTab] = useState<ResearchTab>('runs')
   const [tasks, setTasks] = useState<TaskDTO[]>([])
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -204,6 +215,16 @@ export function FactorResearchPage() {
         <div className="metricCard"><span>模型状态</span><b>{model?.status || '-'}</b><em>{model?.model_type || '等待训练'}</em></div>
       </div>
 
+      <div className="inlineTabs" role="tablist" aria-label="因子研究页签">
+        {researchTabs.map((tab) => (
+          <button key={tab.key} className={activeTab === tab.key ? 'active' : ''} onClick={() => setActiveTab(tab.key)}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'overview' ? (
+        <>
       <div className="factorLayout">
         <section className="detailCard">
           <div className="tableHeader">
@@ -306,7 +327,11 @@ export function FactorResearchPage() {
           </tbody>
         </table>
       </section>
+        </>
+      ) : null}
 
+      {activeTab === 'runs' ? (
+        <>
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -369,7 +394,11 @@ export function FactorResearchPage() {
           </tbody>
         </table>
       </section>
+        </>
+      ) : null}
 
+      {activeTab === 'factors' ? (
+        <>
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -455,7 +484,11 @@ export function FactorResearchPage() {
           </tbody>
         </table>
       </section>
+        </>
+      ) : null}
 
+      {activeTab === 'model' ? (
+        <>
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -504,6 +537,11 @@ export function FactorResearchPage() {
         </table>
       </section>
 
+        </>
+      ) : null}
+
+      {activeTab === 'risk' ? (
+        <>
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -617,7 +655,11 @@ export function FactorResearchPage() {
           </>
         ) : null}
       </section>
+        </>
+      ) : null}
 
+      {activeTab === 'model' ? (
+        <>
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -687,6 +729,11 @@ export function FactorResearchPage() {
           </tbody>
         </table>
       </section>
+        </>
+      ) : null}
+
+      {activeTab === 'factors' ? (
+        <>
 
       <section className="detailCard">
         <div className="tableHeader">
@@ -723,6 +770,8 @@ export function FactorResearchPage() {
           </tbody>
         </table>
       </section>
+        </>
+      ) : null}
     </div>
   )
 }
