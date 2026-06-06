@@ -138,6 +138,14 @@ type FactorModelRun struct {
 	UpdatedAt    string  `json:"updated_at"`
 }
 
+type FactorModelFeature struct {
+	RunID       string  `json:"run_id"`
+	Feature     string  `json:"feature"`
+	Importance  float64 `json:"importance"`
+	RankNo      int     `json:"rank_no"`
+	SummaryJSON string  `json:"summary_json"`
+}
+
 type FactorModelPrediction struct {
 	RunID          string  `json:"run_id"`
 	TradeDate      string  `json:"trade_date"`
@@ -1518,6 +1526,42 @@ func (app *App) GetFactorModelRun(runID string) (FactorModelRun, error) {
 		return FactorModelRun{}, nil
 	}
 	return item, nil
+}
+
+func (app *App) ListFactorModelFeatures(runID string, limit int) ([]FactorModelFeature, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorModelFeature{}, err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		row := app.database.Conn().QueryRow(`SELECT run_id FROM factor_model_runs WHERE status = 'success' ORDER BY updated_at DESC LIMIT 1`)
+		_ = row.Scan(&runID)
+	}
+	if runID == "" {
+		return []FactorModelFeature{}, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 80
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, feature, COALESCE(importance, 0), COALESCE(rank_no, 0), COALESCE(summary_json, '')
+		FROM factor_model_features
+		WHERE run_id = ?
+		ORDER BY rank_no ASC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []FactorModelFeature{}, nil
+	}
+	defer rows.Close()
+	out := []FactorModelFeature{}
+	for rows.Next() {
+		var item FactorModelFeature
+		if err := rows.Scan(&item.RunID, &item.Feature, &item.Importance, &item.RankNo, &item.SummaryJSON); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (app *App) ListFactorModelPredictions(runID string, limit int) ([]FactorModelPrediction, error) {

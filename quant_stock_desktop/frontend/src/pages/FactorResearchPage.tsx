@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, LineChart, Play, RefreshCw, ShieldCheck } from 'lucide-react'
-import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelPredictions, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelPrediction, type FactorModelRun, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
+import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
 
 type FactorFamily = {
   name: string
@@ -71,6 +71,7 @@ export function FactorResearchPage() {
   const [icRows, setIcRows] = useState<FactorICResult[]>([])
   const [stateIcRows, setStateIcRows] = useState<FactorStateICResult[]>([])
   const [model, setModel] = useState<FactorModelRun | null>(null)
+  const [modelFeatures, setModelFeatures] = useState<FactorModelFeature[]>([])
   const [predictions, setPredictions] = useState<FactorModelPrediction[]>([])
   const [latestPredictions, setLatestPredictions] = useState<FactorLatestPrediction[]>([])
   const [correlations, setCorrelations] = useState<FactorCorrelationResult[]>([])
@@ -108,6 +109,7 @@ export function FactorResearchPage() {
       setIcRows(await listFactorICResults(latestRun, 80))
       setStateIcRows(await listFactorStateICResults(latestRun, 120))
       setModel(await getFactorModelRun(latestRun))
+      setModelFeatures(await listFactorModelFeatures(latestRun, 24))
       setPredictions(await listFactorModelPredictions(latestRun, 80))
       setLatestPredictions(await listFactorLatestPredictions(latestRun, 80))
       setCorrelations(await listFactorCorrelationResults(latestRun, 80))
@@ -116,6 +118,7 @@ export function FactorResearchPage() {
       setIcRows([])
       setStateIcRows([])
       setModel(null)
+      setModelFeatures([])
       setPredictions([])
       setLatestPredictions([])
       setCorrelations([])
@@ -454,6 +457,31 @@ export function FactorResearchPage() {
         ) : (
           <div className="mutedText">暂无模型训练记录</div>
         )}
+        <div className="subTableTitle">模型特征重要度</div>
+        <table>
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>特征</th>
+              <th>基础因子</th>
+              <th>版本</th>
+              <th>重要度</th>
+            </tr>
+          </thead>
+          <tbody>
+            {modelFeatures.length === 0 ? (
+              <tr><td colSpan={5} className="mutedText">暂无模型特征重要度</td></tr>
+            ) : modelFeatures.slice(0, 16).map((row) => (
+              <tr key={`${row.run_id}-${row.feature}`}>
+                <td>{row.rank_no}</td>
+                <td><b>{featureDisplayName(row.feature)}</b><div className="mono">{row.feature}</div></td>
+                <td>{factorLabel(baseFactor(row.feature))}</td>
+                <td>{featureVariantLabel(row.feature)}</td>
+                <td>{decimalText(row.importance, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
 
       <section className="detailCard">
@@ -775,6 +803,22 @@ function percentText(value: unknown, digits = 2) {
 
 function factorLabel(factor: string) {
   return {
+    mkt_risk_score: '市场风险分',
+    mkt_breadth20: '市场宽度',
+    mkt_limit_down_ratio: '跌停占比',
+    mkt_limit_down_ratio5: '5日跌停占比',
+    mkt_amount_chg20: '市场成交变化',
+    mkt_small_large_rel20: '小盘相对大盘',
+    mkt_drawdown20: '市场20日回撤',
+    mkt_drawdown60: '市场60日回撤',
+    mkt_drawdown120: '市场120日回撤',
+    mkt_trend60: '市场60日趋势',
+    mkt_volatility20: '市场20日波动',
+    mkt_state_normal: '常态哑变量',
+    mkt_state_weak: '弱势哑变量',
+    mkt_state_crash: '急跌哑变量',
+    mkt_state_liquidity_squeeze: '流动性挤压哑变量',
+    mkt_state_post_crash_repair: '急跌修复哑变量',
     turnover_rate: '低换手',
     vol20: '低波动',
     bp: 'BP',
@@ -791,6 +835,17 @@ function factorLabel(factor: string) {
     netprofit_yoy: '利润同比',
     log_circ_mv: '小市值'
   }[factor] || factor
+}
+
+function featureDisplayName(feature: string) {
+  return factorLabel(baseFactor(feature))
+}
+
+function featureVariantLabel(feature: string) {
+  if (feature.endsWith('_neutral')) return '中性化'
+  if (feature.endsWith('_rank')) return '方向Rank'
+  if (feature.startsWith('mkt_')) return '市场状态'
+  return '原始'
 }
 
 function factorStatusLabel(status: string) {

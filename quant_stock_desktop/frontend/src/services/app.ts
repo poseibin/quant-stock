@@ -53,6 +53,7 @@ declare global {
           ListFactorICResults: (runID: string, limit: number) => Promise<FactorICResult[]>
           ListFactorStateICResults: (runID: string, limit: number) => Promise<FactorStateICResult[]>
           GetFactorModelRun: (runID: string) => Promise<FactorModelRun>
+          ListFactorModelFeatures: (runID: string, limit: number) => Promise<FactorModelFeature[]>
           ListFactorModelPredictions: (runID: string, limit: number) => Promise<FactorModelPrediction[]>
           ListFactorCorrelationResults: (runID: string, limit: number) => Promise<FactorCorrelationResult[]>
           ListFactorStressResults: (runID: string, limit: number) => Promise<FactorStressResult[]>
@@ -438,6 +439,14 @@ export interface FactorModelRun {
   top_bottom_spread: number
   summary_json: string
   updated_at: string
+}
+
+export interface FactorModelFeature {
+  run_id: string
+  feature: string
+  importance: number
+  rank_no: number
+  summary_json: string
 }
 
 export interface FactorModelPrediction {
@@ -1079,6 +1088,13 @@ export async function getFactorModelRun(runID = ''): Promise<FactorModelRun | nu
     return model?.run_id ? model : null
   }
   return null
+}
+
+export async function listFactorModelFeatures(runID = '', limit = 80): Promise<FactorModelFeature[]> {
+  if (window.go?.main?.App?.ListFactorModelFeatures) {
+    return (await window.go.main.App.ListFactorModelFeatures(runID, limit)) || []
+  }
+  return []
 }
 
 export async function listFactorModelPredictions(runID = '', limit = 120): Promise<FactorModelPrediction[]> {
