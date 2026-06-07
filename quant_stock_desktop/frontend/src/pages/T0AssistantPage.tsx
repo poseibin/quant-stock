@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, LineChart, RefreshCw, ShieldCheck, Target } from 'lucide-react'
+import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { getT0DailyResearchStatus, getT0TimeMachineStatus, listT0DailyBacktests, listT0DataPullCandidates, listT0Recommendations, listT0TimeMachineResults, runT0DailyResearch, runT0TimeMachine, type RunStatus, type T0DailyBacktest, type T0DataPullCandidate, type T0Recommendation, type T0TimeMachineResult } from '../services/app'
 
 function money(value: number) {
@@ -14,20 +14,9 @@ function percent(value: number, signed = false) {
   return `${sign}${pct.toFixed(2)}%`
 }
 
-function numberText(value: number) {
-  if (!Number.isFinite(value) || value === 0) return '—'
-  return value.toLocaleString('zh-CN')
-}
-
 function amountYi(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '—'
   return `${(value / 100000).toFixed(2)}亿`
-}
-
-function actionBadge(action: string) {
-  if (action === '适合做T') return 'success'
-  if (action === '观察') return 'running'
-  return 'failed'
 }
 
 function signedClass(value: number) {
@@ -559,79 +548,6 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
         </div>
       </section>
 
-      <section className="detailCard">
-        <div className="tableHeader">
-          <div>
-            <div className="sectionLabel">CANDIDATES</div>
-            <h2>当前持仓做T建议</h2>
-          </div>
-        </div>
-        <div className="tableWrap">
-          <table>
-            <thead>
-              <tr>
-                <th>股票</th>
-                <th>建议</th>
-                <th>评分</th>
-                <th>状态</th>
-                <th>持仓 / 可T</th>
-                <th>区间价</th>
-                <th>近况</th>
-                <th>依据</th>
-                <th>风险</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.ts_code}>
-                  <td>
-                    <button className="tableActionButton" onClick={() => onOpenResearch?.(row.ts_code)}>
-                      {row.name || row.ts_code}
-                    </button>
-                    <div className="mono">{row.ts_code}</div>
-                    <div className="recommendationMeta">{row.industry || '—'} · {formatDate(row.trade_date)}</div>
-                  </td>
-                  <td>
-                    <span className={`badge ${actionBadge(row.action)}`}>{row.action}</span>
-                    <div className="recommendationMeta">{row.recommendation || '—'}</div>
-                  </td>
-                  <td><strong>{row.score.toFixed(1)}</strong></td>
-                  <td>{row.state || '—'}</td>
-                  <td>
-                    <div>{numberText(row.shares)} / {numberText(row.max_t0_shares)}</div>
-                    <div className="recommendationMeta">仓位 {percent(row.position_weight)}</div>
-                  </td>
-                  <td>
-                    <div><Target size={14} /> 减 {money(row.reduce_price)}</div>
-                    <div><LineChart size={14} /> 接 {money(row.buy_back_price)}</div>
-                    <div><ShieldCheck size={14} /> 止 {money(row.stop_price)}</div>
-                  </td>
-                  <td>
-                    <div>现价 {money(row.price)}</div>
-                    <div className={signedClass(row.today_pct)}>今日 {percent(row.today_pct, true)}</div>
-                    <div className={signedClass(row.return_20d)}>20日 {percent(row.return_20d, true)}</div>
-                    <div>振幅 {percent(row.avg_range_20d)}</div>
-                  </td>
-                  <td>
-                    <ul className="compactList">
-                      {row.reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}
-                      {row.reasons.length === 0 ? <li>暂无正向依据</li> : null}
-                    </ul>
-                  </td>
-                  <td>
-                    <ul className="compactList">
-                      {row.risks.slice(0, 3).map((risk) => <li key={risk}><AlertTriangle size={13} /> {risk}</li>)}
-                      {row.risks.length === 0 ? <li>暂无显著风险</li> : null}
-                    </ul>
-                  </td>
-                </tr>
-              ))}
-              {!loading && rows.length === 0 ? <tr><td colSpan={9} className="emptyCell">暂无持仓或行情不足</td></tr> : null}
-              {loading ? <tr><td colSpan={9} className="emptyCell">加载中...</td></tr> : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   )
 }
