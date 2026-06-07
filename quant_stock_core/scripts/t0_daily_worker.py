@@ -297,6 +297,8 @@ def add_metrics(df: pd.DataFrame) -> pd.DataFrame:
 def score_row(row: pd.Series, run_id: str) -> Candidate:
     avg_range = safe_float(row.get("avg_range_20d"))
     avg_amount = safe_float(row.get("avg_amount_20d"))
+    amount = safe_float(row.get("amount"))
+    amount_ratio = amount / avg_amount if avg_amount > 0 else 0.0
     today_pct = safe_float(row.get("pct_chg")) / 100
     return_20 = safe_float(row.get("return_20d"))
     drawdown_20 = safe_float(row.get("drawdown_20d"))
@@ -313,6 +315,16 @@ def score_row(row: pd.Series, run_id: str) -> Candidate:
         risks.append(f"20日平均振幅 {avg_range * 100:.2f}%，日内空间一般")
     if avg_amount > 0:
         reasons.append(f"20日平均成交额 {avg_amount:.0f}，流动性满足粗筛")
+    if amount_ratio >= 2.0 and today_pct <= -0.025:
+        risks.append(f"当日成交额为20日均量 {amount_ratio:.1f} 倍且下跌，疑似放量砸盘")
+        score -= 8
+    elif amount_ratio >= 1.6 and today_pct < 0:
+        risks.append(f"放量下跌，成交额为20日均量 {amount_ratio:.1f} 倍")
+        score -= 4
+    elif amount_ratio >= 1.6 and today_pct > 0:
+        reasons.append(f"放量上涨，成交额为20日均量 {amount_ratio:.1f} 倍")
+    elif 0 < amount_ratio < 0.55:
+        risks.append(f"成交额仅为20日均量 {amount_ratio:.1f} 倍，缩量时计划价可能难触发")
     state = "普通震荡"
     close = safe_float(row.get("close"))
     ma5 = safe_float(row.get("ma5"))
@@ -399,10 +411,12 @@ def backtest_candidates(history: pd.DataFrame, run_id: str) -> list[dict[str, ob
                 "edge": raw_edge if two_sided else 0.0,
                 "next_range": (safe_float(nxt["high"]) - safe_float(nxt["low"])) / max(safe_float(nxt["close"]), 0.01),
                 "score": candidate.score,
+                "trade_date": str(nxt.get("trade_date") or ""),
             })
         if not rows:
             continue
         frame = pd.DataFrame(rows)
+        recent = frame.tail(40)
         latest = group.iloc[-1]
         n = len(frame)
         two_sided_rate = safe_float(frame["two_sided"].mean())
@@ -410,6 +424,12 @@ def backtest_candidates(history: pd.DataFrame, run_id: str) -> list[dict[str, ob
         avg_edge = safe_float(frame["edge"].mean())
         total_edge = safe_float(frame["edge"].sum())
         avg_next_range = safe_float(frame["next_range"].mean())
+        recent_n = int(len(recent))
+        recent_two_sided_rate = safe_float(recent["two_sided"].mean()) if recent_n else 0.0
+        recent_one_sided_rate = safe_float(recent["one_sided"].mean()) if recent_n else 0.0
+        recent_avg_edge = safe_float(recent["edge"].mean()) if recent_n else 0.0
+        recent_total_edge = safe_float(recent["edge"].sum()) if recent_n else 0.0
+        recent_avg_next_range = safe_float(recent["next_range"].mean()) if recent_n else 0.0
         score = round(clamp(two_sided_rate * 55 + avg_edge * 900 + avg_next_range * 120 - one_sided_rate * 10, 0, 100), 2)
         out.append({
             "run_id": run_id,
@@ -427,6 +447,16 @@ def backtest_candidates(history: pd.DataFrame, run_id: str) -> list[dict[str, ob
             "summary_json": json.dumps({
                 "note": "日线近似回测：只有次日 high/low 同时触达高抛和低吸区间才计为完成；不知道日内顺序，结果偏保守但仍可能高估成交。",
                 "cost_rate": COST_RATE,
+                "recent_2m": {
+                    "n_candidates": recent_n,
+                    "start_date": str(recent["trade_date"].iloc[0]) if recent_n else "",
+                    "end_date": str(recent["trade_date"].iloc[-1]) if recent_n else "",
+                    "two_sided_rate": recent_two_sided_rate,
+                    "one_sided_rate": recent_one_sided_rate,
+                    "avg_edge": recent_avg_edge,
+                    "total_edge": recent_total_edge,
+                    "avg_next_range": recent_avg_next_range,
+                },
             }, ensure_ascii=False),
             "updated_at": now(),
         })

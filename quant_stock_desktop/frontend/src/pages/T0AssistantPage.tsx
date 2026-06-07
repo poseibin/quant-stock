@@ -19,6 +19,11 @@ function numberText(value: number) {
   return value.toLocaleString('zh-CN')
 }
 
+function amountYi(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '—'
+  return `${(value / 100000).toFixed(2)}亿`
+}
+
 function actionBadge(action: string) {
   if (action === '适合做T') return 'success'
   if (action === '观察') return 'running'
@@ -46,6 +51,53 @@ function planBand(row: T0DataPullCandidate) {
     stop: row.price * (1 - stopBand),
     tRatio: row.score >= 85 ? '30%' : row.score >= 72 ? '20%' : '10%',
   }
+}
+
+type RecentT0Stats = {
+  n_candidates: number
+  start_date: string
+  end_date: string
+  two_sided_rate: number
+  one_sided_rate: number
+  avg_edge: number
+  total_edge: number
+  avg_next_range: number
+}
+
+function parseRecentT0Stats(backtest?: T0DailyBacktest): RecentT0Stats | null {
+  if (!backtest?.summary_json) return null
+  try {
+    const payload = JSON.parse(backtest.summary_json) as { recent_2m?: Partial<RecentT0Stats> }
+    const recent = payload.recent_2m
+    if (!recent) return null
+    return {
+      n_candidates: Number(recent.n_candidates || 0),
+      start_date: String(recent.start_date || ''),
+      end_date: String(recent.end_date || ''),
+      two_sided_rate: Number(recent.two_sided_rate || 0),
+      one_sided_rate: Number(recent.one_sided_rate || 0),
+      avg_edge: Number(recent.avg_edge || 0),
+      total_edge: Number(recent.total_edge || 0),
+      avg_next_range: Number(recent.avg_next_range || 0),
+    }
+  } catch {
+    return null
+  }
+}
+
+function amountRatio(row: T0DataPullCandidate) {
+  if (!Number.isFinite(row.amount) || !Number.isFinite(row.avg_amount_20d) || row.avg_amount_20d <= 0) return Number.NaN
+  return row.amount / row.avg_amount_20d
+}
+
+function flowSignal(row: T0DataPullCandidate) {
+  const ratio = amountRatio(row)
+  if (!Number.isFinite(ratio)) return { label: '无量能数据', badge: 'created', detail: '无法判断砸盘' }
+  if (ratio >= 2 && row.today_pct <= -0.025) return { label: '疑似砸盘', badge: 'failed', detail: `放量 ${ratio.toFixed(1)}x 下跌` }
+  if (ratio >= 1.6 && row.today_pct < 0) return { label: '放量下跌', badge: 'failed', detail: `成交额 ${ratio.toFixed(1)}x` }
+  if (ratio >= 1.6 && row.today_pct > 0) return { label: '放量承接', badge: 'success', detail: `成交额 ${ratio.toFixed(1)}x` }
+  if (ratio < 0.55) return { label: '缩量', badge: 'created', detail: `成交额 ${ratio.toFixed(1)}x` }
+  return { label: '量能正常', badge: 'running', detail: `成交额 ${ratio.toFixed(1)}x` }
 }
 
 export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
@@ -143,6 +195,11 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
   }, [timeMachineStatus?.state])
 
   const operationTop10 = useMemo(() => pullCandidates.slice(0, 10), [pullCandidates])
+  const backtestByCode = useMemo(() => {
+    const map = new Map<string, T0DailyBacktest>()
+    backtests.forEach((row) => map.set(row.ts_code, row))
+    return map
+  }, [backtests])
   const timeMachineSummary = useMemo(() => {
     if (timeMachineRows.length === 0) {
       return {
@@ -258,17 +315,20 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 <th>排名</th>
                 <th>股票</th>
                 <th>评分 / 状态</th>
+                <th>近2月做T收益</th>
+                <th>资金 / 砸盘</th>
                 <th>高抛价</th>
                 <th>低吸价</th>
                 <th>止损观察</th>
                 <th>T仓建议</th>
-                <th>依据</th>
                 <th>风险</th>
               </tr>
             </thead>
             <tbody>
               {operationTop10.map((row, index) => {
                 const plan = planBand(row)
+                const recent = parseRecentT0Stats(backtestByCode.get(row.ts_code))
+                const flow = flowSignal(row)
                 return (
                   <tr key={row.ts_code}>
                     <td><strong>{index + 1}</strong></td>
@@ -282,6 +342,18 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                     <td>
                       <strong>{row.score.toFixed(1)}</strong>
                       <div><span className={`badge ${pullBadge(row.action)}`}>{row.action}</span></div>
+                    </td>
+                    <td>
+                      <strong className={signedClass(recent?.total_edge ?? Number.NaN)}>{recent ? percent(recent.total_edge, true) : '—'}</strong>
+                      <div className="recommendationMeta">
+                        {recent ? `${recent.n_candidates}次 · 两边 ${percent(recent.two_sided_rate)}` : '需重跑日线评估'}
+                      </div>
+                      {recent?.start_date ? <div className="recommendationMeta">{formatDate(recent.start_date)} - {formatDate(recent.end_date)}</div> : null}
+                    </td>
+                    <td>
+                      <span className={`badge ${flow.badge}`}>{flow.label}</span>
+                      <div className={signedClass(row.today_pct)}>今日 {percent(row.today_pct, true)}</div>
+                      <div className="recommendationMeta">成交额 {amountYi(row.amount)} / {flow.detail}</div>
                     </td>
                     <td>
                       <strong>{money(plan.reduce)}</strong>
@@ -301,12 +373,6 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                     </td>
                     <td>
                       <ul className="compactList">
-                        {row.reasons.slice(0, 2).map((reason) => <li key={reason}>{reason}</li>)}
-                        {row.reasons.length === 0 ? <li>暂无正向依据</li> : null}
-                      </ul>
-                    </td>
-                    <td>
-                      <ul className="compactList">
                         {row.risks.slice(0, 2).map((risk) => <li key={risk}><AlertTriangle size={13} /> {risk}</li>)}
                         {row.risks.length === 0 ? <li>暂无显著风险</li> : null}
                       </ul>
@@ -314,8 +380,8 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                   </tr>
                 )
               })}
-              {!loading && operationTop10.length === 0 ? <tr><td colSpan={9} className="emptyCell">暂无 Top10，请先运行日线评估</td></tr> : null}
-              {loading ? <tr><td colSpan={9} className="emptyCell">加载中...</td></tr> : null}
+              {!loading && operationTop10.length === 0 ? <tr><td colSpan={10} className="emptyCell">暂无 Top10，请先运行日线评估</td></tr> : null}
+              {loading ? <tr><td colSpan={10} className="emptyCell">加载中...</td></tr> : null}
             </tbody>
           </table>
         </div>
