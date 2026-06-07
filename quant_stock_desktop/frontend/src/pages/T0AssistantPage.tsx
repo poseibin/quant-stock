@@ -64,6 +64,27 @@ type RecentT0Stats = {
   avg_next_range: number
 }
 
+type TimeMachineGridSummary = {
+  best?: {
+    lookback?: number
+    eval_days?: number
+    avg_combined_return?: number
+    mean_avg_combined_return?: number
+    worst_avg_combined_return?: number
+    positive_anchor_rate?: number
+    anchor_count?: number
+    avg_t0_edge?: number
+    mean_avg_t0_edge?: number
+    win_rate?: number
+    mean_win_rate?: number
+    stability_score?: number
+  }
+  positive_window_rate?: number
+  worst_avg_combined_return?: number
+  mean_avg_combined_return?: number
+  window_count?: number
+}
+
 function parseRecentT0Stats(backtest?: T0DailyBacktest): RecentT0Stats | null {
   if (!backtest?.summary_json) return null
   try {
@@ -98,6 +119,17 @@ function flowSignal(row: T0DataPullCandidate) {
   if (ratio >= 1.6 && row.today_pct > 0) return { label: '放量承接', badge: 'success', detail: `成交额 ${ratio.toFixed(1)}x` }
   if (ratio < 0.55) return { label: '缩量', badge: 'created', detail: `成交额 ${ratio.toFixed(1)}x` }
   return { label: '量能正常', badge: 'running', detail: `成交额 ${ratio.toFixed(1)}x` }
+}
+
+function parseTimeMachineGrid(rows: T0TimeMachineResult[]): TimeMachineGridSummary | null {
+  const source = rows.find((row) => row.summary_json)?.summary_json
+  if (!source) return null
+  try {
+    const payload = JSON.parse(source) as { grid?: TimeMachineGridSummary }
+    return payload.grid || null
+  } catch {
+    return null
+  }
 }
 
 export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
@@ -201,6 +233,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
     return map
   }, [backtests])
   const timeMachineSummary = useMemo(() => {
+    const grid = parseTimeMachineGrid(timeMachineRows)
     if (timeMachineRows.length === 0) {
       return {
         verdict: '未验证',
@@ -211,6 +244,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
         evalStart: '',
         evalEnd: '',
         count: 0,
+        grid,
       }
     }
     const count = timeMachineRows.length
@@ -222,8 +256,11 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
     const evalStart = timeMachineRows.map((row) => row.eval_start_date).filter(Boolean).sort()[0] || ''
     const evalEnds = timeMachineRows.map((row) => row.eval_end_date).filter(Boolean).sort()
     const evalEnd = evalEnds.length ? evalEnds[evalEnds.length - 1] : ''
-    const verdict = avgCombined > 0.03 && avgT0Edge > 0.03 ? '可小仓试运行' : avgCombined > 0 ? '仅观察' : '暂不自动化'
-    return { verdict, avgT0Edge, avgUnderlying, avgCombined, winRate, evalStart, evalEnd, count }
+    const positiveWindowRate = grid?.positive_window_rate ?? Number.NaN
+    const worstWindow = grid?.worst_avg_combined_return ?? Number.NaN
+    const isStable = Number.isFinite(positiveWindowRate) && positiveWindowRate >= 0.67 && Number.isFinite(worstWindow) && worstWindow > -0.03
+    const verdict = avgCombined > 0.04 && avgT0Edge > 0.03 && isStable ? '稳定可观察' : avgCombined > 0.03 && avgT0Edge > 0.03 ? '收益好待稳定' : avgCombined > 0 ? '仅观察' : '暂不自动化'
+    return { verdict, avgT0Edge, avgUnderlying, avgCombined, winRate, evalStart, evalEnd, count, grid }
   }, [timeMachineRows])
   const isRunning = runStatus?.state === 'running'
   const isTimeMachineRunning = timeMachineStatus?.state === 'running'
@@ -280,7 +317,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           <div className={`metricCard ${timeMachineSummary.avgCombined > 0 ? 'good' : ''}`}>
             <span>策略结论</span>
             <b>{timeMachineSummary.verdict}</b>
-            <em>{timeMachineSummary.count > 0 ? `${timeMachineSummary.count} 只历史样本` : '先运行时光机'}</em>
+            <em>{timeMachineSummary.grid?.best ? `最佳 ${timeMachineSummary.grid.best.lookback}/${timeMachineSummary.grid.best.eval_days} · ${timeMachineSummary.grid.best.anchor_count || 1}锚点` : timeMachineSummary.count > 0 ? `${timeMachineSummary.count} 只历史样本` : '先运行时光机'}</em>
           </div>
           <div className="metricCard good">
             <span>时光机合并收益</span>
@@ -288,9 +325,13 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
             <em>{timeMachineSummary.evalStart ? `${formatDate(timeMachineSummary.evalStart)} - ${formatDate(timeMachineSummary.evalEnd)}` : '暂无区间'}</em>
           </div>
           <div className="metricCard">
-            <span>做T贡献</span>
+            <span>稳定窗口</span>
             <b className={signedClass(timeMachineSummary.avgT0Edge)}>{percent(timeMachineSummary.avgT0Edge, true)}</b>
-            <em>标的自身 {percent(timeMachineSummary.avgUnderlying, true)}</em>
+            <em>
+              {timeMachineSummary.grid
+                ? `正收益 ${percent(timeMachineSummary.grid.positive_window_rate ?? Number.NaN)} · 最差 ${percent(timeMachineSummary.grid.worst_avg_combined_return ?? Number.NaN, true)}`
+                : `标的自身 ${percent(timeMachineSummary.avgUnderlying, true)}`}
+            </em>
           </div>
           <div className="metricCard">
             <span>胜率 / 今日Top10</span>

@@ -273,23 +273,25 @@ def read_daily_between(start_date: str, end_date: str) -> pd.DataFrame:
         )
 
 
-def add_metrics(df: pd.DataFrame) -> pd.DataFrame:
+def add_metrics(df: pd.DataFrame, metric_window: int = 20) -> pd.DataFrame:
     df = df.copy()
+    window = max(5, int(metric_window or 20))
+    min_periods = max(5, min(20, window // 2))
     for col in ["open", "high", "low", "close", "pre_close", "pct_chg", "amount"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
     df["trade_date"] = df["trade_date"].astype(str)
     df = df.sort_values(["ts_code", "trade_date"])
     group = df.groupby("ts_code", group_keys=False)
     prev_close_5 = group["close"].shift(4)
-    prev_close_20 = group["close"].shift(19)
-    rolling_high_20 = group["high"].rolling(20, min_periods=10).max().reset_index(level=0, drop=True)
+    prev_close_20 = group["close"].shift(window - 1)
+    rolling_high_20 = group["high"].rolling(window, min_periods=min_periods).max().reset_index(level=0, drop=True)
     df["return_5d"] = df["close"] / prev_close_5.replace(0, pd.NA) - 1
     df["return_20d"] = df["close"] / prev_close_20.replace(0, pd.NA) - 1
     df["range"] = (df["high"] - df["low"]) / df["close"].replace(0, pd.NA)
-    df["avg_range_20d"] = group["range"].rolling(20, min_periods=10).mean().reset_index(level=0, drop=True)
-    df["avg_amount_20d"] = group["amount"].rolling(20, min_periods=10).mean().reset_index(level=0, drop=True)
+    df["avg_range_20d"] = group["range"].rolling(window, min_periods=min_periods).mean().reset_index(level=0, drop=True)
+    df["avg_amount_20d"] = group["amount"].rolling(window, min_periods=min_periods).mean().reset_index(level=0, drop=True)
     df["ma5"] = group["close"].rolling(5, min_periods=3).mean().reset_index(level=0, drop=True)
-    df["ma20"] = group["close"].rolling(20, min_periods=10).mean().reset_index(level=0, drop=True)
+    df["ma20"] = group["close"].rolling(window, min_periods=min_periods).mean().reset_index(level=0, drop=True)
     df["drawdown_20d"] = df["close"] / rolling_high_20.replace(0, pd.NA) - 1
     return df.replace([math.inf, -math.inf], pd.NA).fillna(0.0)
 
@@ -373,9 +375,9 @@ def score_row(row: pd.Series, run_id: str) -> Candidate:
     )
 
 
-def build_candidates(df: pd.DataFrame, run_id: str, limit: int) -> list[Candidate]:
+def build_candidates(df: pd.DataFrame, run_id: str, limit: int, metric_window: int = 20) -> list[Candidate]:
     latest_date = str(df["trade_date"].max())
-    latest = add_metrics(df)
+    latest = add_metrics(df, metric_window)
     latest = latest[latest["trade_date"] == latest_date].copy()
     candidates = [score_row(row, run_id) for _, row in latest.iterrows()]
     candidates = [item for item in candidates if item.score >= 52]
@@ -383,10 +385,10 @@ def build_candidates(df: pd.DataFrame, run_id: str, limit: int) -> list[Candidat
     return candidates[:limit]
 
 
-def backtest_candidates(history: pd.DataFrame, run_id: str) -> list[dict[str, object]]:
+def backtest_candidates(history: pd.DataFrame, run_id: str, metric_window: int = 20) -> list[dict[str, object]]:
     if history.empty:
         return []
-    df = add_metrics(history)
+    df = add_metrics(history, metric_window)
     out: list[dict[str, object]] = []
     for code, group in df.groupby("ts_code"):
         group = group.sort_values("trade_date").reset_index(drop=True)
@@ -546,7 +548,7 @@ def resolve_time_machine_dates(as_of_date: str, lookback: int, eval_days: int) -
 
 def run_time_machine(run_id: str, as_of_date: str, lookback: int, eval_days: int, limit: int) -> dict[str, object]:
     start_date, as_of, eval_start, eval_end = resolve_time_machine_dates(as_of_date, lookback, eval_days)
-    df = add_metrics(read_daily_between(start_date, eval_end))
+    df = add_metrics(read_daily_between(start_date, eval_end), lookback)
     as_of_rows = df[df["trade_date"] == as_of].copy()
     candidates = [score_row(row, run_id) for _, row in as_of_rows.iterrows()]
     candidates = [item for item in candidates if item.score >= 52]
@@ -680,6 +682,141 @@ def run_time_machine(run_id: str, as_of_date: str, lookback: int, eval_days: int
     return {"run_id": run_id, **summary}
 
 
+def parse_int_grid(value: str, fallback: list[int]) -> list[int]:
+    if not value.strip():
+        return fallback
+    out: list[int] = []
+    for part in value.split(","):
+        try:
+            item = int(part.strip())
+        except ValueError:
+            continue
+        if item > 0 and item not in out:
+            out.append(item)
+    return out or fallback
+
+
+def window_stability_score(item: dict[str, object]) -> float:
+    avg_combined = safe_float(item.get("avg_combined_return"))
+    avg_t0_edge = safe_float(item.get("avg_t0_edge"))
+    win_rate = safe_float(item.get("win_rate"))
+    evaluated = safe_float(item.get("evaluated_count"))
+    return avg_combined * 100 + avg_t0_edge * 45 + win_rate * 8 + min(evaluated / 80, 1) * 2
+
+
+def resolve_anchor_dates(as_of_date: str, eval_days: int, count: int, step: int, min_lookback: int) -> list[str]:
+    if as_of_date.strip():
+        return [resolve_time_machine_dates(as_of_date, min_lookback, eval_days)[1]]
+    dates = trade_dates()
+    anchors: list[str] = []
+    latest_idx = len(dates) - eval_days - 1
+    for offset in range(max(1, count)):
+        idx = latest_idx - offset * max(1, step)
+        if idx < min_lookback:
+            break
+        anchors.append(dates[idx])
+    return anchors or [resolve_time_machine_dates("", min_lookback, eval_days)[1]]
+
+
+def aggregate_window_results(rows: list[dict[str, object]], lookback: int, eval_days: int) -> dict[str, object]:
+    combined = [safe_float(row.get("avg_combined_return")) for row in rows]
+    t0_edges = [safe_float(row.get("avg_t0_edge")) for row in rows]
+    win_rates = [safe_float(row.get("win_rate")) for row in rows]
+    evaluated = [safe_float(row.get("evaluated_count")) for row in rows]
+    mean_combined = sum(combined) / len(combined) if combined else 0.0
+    min_combined = min(combined) if combined else 0.0
+    positive_rate = len([value for value in combined if value > 0]) / len(combined) if combined else 0.0
+    mean_t0 = sum(t0_edges) / len(t0_edges) if t0_edges else 0.0
+    mean_win_rate = sum(win_rates) / len(win_rates) if win_rates else 0.0
+    stability_score = mean_combined * 100 + min_combined * 60 + positive_rate * 12 + mean_t0 * 35 + mean_win_rate * 6 + min(sum(evaluated) / max(len(evaluated), 1) / 80, 1) * 2
+    return {
+        "lookback": lookback,
+        "eval_days": eval_days,
+        "anchor_count": len(rows),
+        "anchors": [row.get("as_of_date", "") for row in rows],
+        "mean_avg_combined_return": mean_combined,
+        "worst_avg_combined_return": min_combined,
+        "positive_anchor_rate": positive_rate,
+        "mean_avg_t0_edge": mean_t0,
+        "mean_win_rate": mean_win_rate,
+        "stability_score": stability_score,
+        "runs": rows,
+    }
+
+
+def run_time_machine_grid(
+    run_id: str,
+    as_of_date: str,
+    lookbacks: list[int],
+    eval_days_list: list[int],
+    limit: int,
+    anchor_count: int,
+    anchor_step: int,
+) -> dict[str, object]:
+    windows: list[dict[str, object]] = []
+    best: dict[str, object] | None = None
+    min_lookback = max(lookbacks) if lookbacks else 80
+    total = max(1, len(lookbacks) * len(eval_days_list) * max(1, anchor_count))
+    step = 0
+    for lookback in lookbacks:
+        for eval_days in eval_days_list:
+            anchor_dates = resolve_anchor_dates(as_of_date, eval_days, anchor_count, anchor_step, min_lookback)
+            anchor_results: list[dict[str, object]] = []
+            for anchor in anchor_dates:
+                step += 1
+                run_status.progress(TIMEMACHINE_TASK_NAME, step, total + 1, "grid", f"压测窗口 lookback={lookback}, eval={eval_days}, as_of={anchor}")
+                window_run_id = f"{run_id}_lb{lookback}_ev{eval_days}_{anchor}"
+                result = run_time_machine(window_run_id, anchor, lookback, eval_days, limit)
+                anchor_results.append({
+                    "run_id": result["run_id"],
+                    "as_of_date": result.get("as_of_date", ""),
+                    "eval_start_date": result.get("eval_start_date", ""),
+                    "eval_end_date": result.get("eval_end_date", ""),
+                    "candidate_count": result.get("candidate_count", 0),
+                    "evaluated_count": result.get("evaluated_count", 0),
+                    "avg_t0_edge": result.get("avg_t0_edge", 0),
+                    "avg_underlying_return": result.get("avg_underlying_return", 0),
+                    "avg_combined_return": result.get("avg_combined_return", 0),
+                    "win_rate": result.get("win_rate", 0),
+                })
+            item = aggregate_window_results(anchor_results, lookback, eval_days)
+            windows.append(item)
+            if best is None or safe_float(item["stability_score"]) > safe_float(best["stability_score"]):
+                best = item
+    if best is None:
+        raise RuntimeError("做T时光机网格没有可用窗口")
+    run_status.progress(TIMEMACHINE_TASK_NAME, total, total + 1, "best", "写入最佳稳定窗口")
+    final_as_of = as_of_date or str((best.get("anchors") or [""])[0])
+    final = run_time_machine(run_id, final_as_of, int(best["lookback"]), int(best["eval_days"]), limit)
+    avg_returns = [safe_float(row.get("mean_avg_combined_return")) for row in windows]
+    worst_returns = [safe_float(row.get("worst_avg_combined_return")) for row in windows]
+    positive = [row for row in windows if safe_float(row.get("positive_anchor_rate")) >= 0.67]
+    grid_summary = {
+        "mode": "grid",
+        "lookbacks": lookbacks,
+        "eval_days": eval_days_list,
+        "anchor_count": anchor_count,
+        "anchor_step": anchor_step,
+        "window_count": len(windows),
+        "best": best,
+        "windows": sorted(windows, key=lambda row: safe_float(row["stability_score"]), reverse=True),
+        "positive_window_rate": len(positive) / len(windows) if windows else 0,
+        "worst_avg_combined_return": min(worst_returns) if worst_returns else 0,
+        "mean_avg_combined_return": sum(avg_returns) / len(avg_returns) if avg_returns else 0,
+    }
+    with write_transaction() as conn:
+        summary_text = json.dumps({**final, "grid": grid_summary}, ensure_ascii=False)
+        conn.execute(
+            "UPDATE t0_daily_time_machine_runs SET summary_json = ? WHERE run_id = ?",
+            (summary_text, run_id),
+        )
+        conn.execute(
+            "UPDATE t0_daily_time_machine_results SET summary_json = ? WHERE run_id = ?",
+            (summary_text, run_id),
+        )
+    return {"run_id": run_id, **final, "grid": grid_summary}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Daily-bar T0 suitability research worker")
     parser.add_argument("--data-path", default="")
@@ -688,6 +825,10 @@ def main() -> None:
     parser.add_argument("--mode", choices=["research", "time_machine"], default="research")
     parser.add_argument("--as-of-date", default="")
     parser.add_argument("--eval-days", type=int, default=20)
+    parser.add_argument("--lookback-grid", default="")
+    parser.add_argument("--eval-days-grid", default="")
+    parser.add_argument("--anchor-count", type=int, default=1)
+    parser.add_argument("--anchor-step", type=int, default=20)
     parser.add_argument("--lookback", type=int, default=80)
     parser.add_argument("--history-days", type=int, default=520)
     parser.add_argument("--limit", type=int, default=120)
@@ -702,20 +843,25 @@ def main() -> None:
         run_status.progress(task_name, 1, 5, "schema", "准备日线做T结果表")
         ensure_schema()
         if args.mode == "time_machine":
+            lookbacks = parse_int_grid(args.lookback_grid, [args.lookback])
+            eval_days_list = parse_int_grid(args.eval_days_grid, [args.eval_days])
             run_status.progress(task_name, 2, 5, "timemachine", "选择历史截面并评估后续收益")
-            result = run_time_machine(run_id, args.as_of_date.strip(), args.lookback, args.eval_days, args.limit)
+            if len(lookbacks) > 1 or len(eval_days_list) > 1:
+                result = run_time_machine_grid(run_id, args.as_of_date.strip(), lookbacks, eval_days_list, args.limit, args.anchor_count, args.anchor_step)
+            else:
+                result = run_time_machine(run_id, args.as_of_date.strip(), args.lookback, args.eval_days, args.limit)
             run_status.progress(task_name, 5, 5, "write", "写入做T时光机结果")
             run_status.done(task_name, f"完成做T时光机：候选 {result['candidate_count']}，评估 {result['evaluated_count']}")
             print(json.dumps(result, ensure_ascii=False))
             return
         run_status.progress(task_name, 2, 5, "daily", "读取最近日线并粗筛")
         recent = read_recent_daily(args.lookback)
-        candidates = build_candidates(recent, run_id, args.limit)
+        candidates = build_candidates(recent, run_id, args.limit, args.lookback)
         run_status.progress(task_name, 3, 5, "backtest", "读取候选历史日线")
         codes = [item.ts_code for item in candidates[: args.backtest_limit]]
         history = read_history_for_codes(codes, args.history_days)
         run_status.progress(task_name, 4, 5, "backtest", "执行日线近似回测")
-        backtests = backtest_candidates(history, run_id)
+        backtests = backtest_candidates(history, run_id, args.lookback)
         run_status.progress(task_name, 5, 5, "write", "写入日线做T研究结果")
         write_results(run_id, candidates, backtests)
         run_status.done(task_name, f"完成日线做T研究：候选 {len(candidates)}，回测 {len(backtests)}")

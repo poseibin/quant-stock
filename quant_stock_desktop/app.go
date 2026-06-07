@@ -2282,7 +2282,7 @@ func (app *App) RunT0DailyResearch() error {
 		"scripts/t0_daily_worker.py",
 		"--data-path", dataPath,
 		"--db-path", dbPath,
-		"--lookback", "80",
+		"--lookback", "120",
 		"--history-days", "520",
 		"--limit", "120",
 		"--backtest-limit", "80",
@@ -2345,8 +2345,10 @@ func (app *App) RunT0TimeMachine() error {
 		"--mode", "time_machine",
 		"--data-path", dataPath,
 		"--db-path", dbPath,
-		"--lookback", "80",
-		"--eval-days", "20",
+		"--lookback-grid", "40,60,80,120",
+		"--eval-days-grid", "10,20,40",
+		"--anchor-count", "4",
+		"--anchor-step", "20",
 		"--limit", "80",
 	}
 	cmd := exec.Command(pythonPath, args...)
