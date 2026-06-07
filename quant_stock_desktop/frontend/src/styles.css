@@ -2081,6 +2081,18 @@ h1 {
   font-size: 13px;
 }
 
+.t0StockCell .tableActionButton {
+  margin-bottom: 10px;
+}
+
+.t0StockCell .mono {
+  margin-top: 0;
+}
+
+.t0StockCell .recommendationMeta {
+  margin-top: 8px;
+}
+
 .hindsightCard {
   padding-bottom: 16px;
 }

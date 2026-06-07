@@ -377,7 +377,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 return (
                   <tr key={row.ts_code}>
                     <td><strong>{index + 1}</strong></td>
-                    <td>
+                    <td className="t0StockCell">
                       <button className="tableActionButton" onClick={() => onOpenResearch?.(row.ts_code)}>
                         {row.name || row.ts_code}
                       </button>
