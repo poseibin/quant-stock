@@ -382,6 +382,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                         {row.name || row.ts_code}
                       </button>
                       <div className="mono">{row.ts_code}</div>
+                      <div className="recommendationMeta">当前价 ¥{money(row.price)}</div>
                       <div className="recommendationMeta">{row.industry || '—'} · {formatDate(row.trade_date)}</div>
                     </td>
                     <td>
@@ -403,6 +404,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                     <td>
                       <strong>¥{money(plan.reduce)}</strong>
                       <div className="recommendationMeta">卖出触发价</div>
+                      <div className="recommendationMeta">距当前 {percent((plan.reduce / row.price) - 1, true)}</div>
                       <div className="recommendationMeta">到价卖 {plan.tRatio}</div>
                       <div className="recommendationMeta">未触达不追卖</div>
                     </td>
