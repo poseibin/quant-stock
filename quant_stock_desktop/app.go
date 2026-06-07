@@ -2285,7 +2285,7 @@ func (app *App) RunT0DailyResearch() error {
 		"--lookback", "120",
 		"--history-days", "520",
 		"--limit", "120",
-		"--backtest-limit", "80",
+		"--backtest-limit", "120",
 	}
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = quantRoot

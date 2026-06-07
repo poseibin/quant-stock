@@ -466,6 +466,78 @@ def backtest_candidates(history: pd.DataFrame, run_id: str, metric_window: int =
     return out
 
 
+def recent_backtest_stats(row: dict[str, object]) -> dict[str, float]:
+    try:
+        summary = json.loads(str(row.get("summary_json") or "{}"))
+        recent = summary.get("recent_2m") or {}
+    except Exception:
+        recent = {}
+    return {
+        "n_candidates": safe_float(recent.get("n_candidates")),
+        "two_sided_rate": safe_float(recent.get("two_sided_rate")),
+        "one_sided_rate": safe_float(recent.get("one_sided_rate")),
+        "avg_edge": safe_float(recent.get("avg_edge")),
+        "total_edge": safe_float(recent.get("total_edge")),
+        "avg_next_range": safe_float(recent.get("avg_next_range")),
+    }
+
+
+def apply_effective_scores(candidates: list[Candidate], backtests: list[dict[str, object]]) -> list[Candidate]:
+    backtest_by_code = {str(row.get("ts_code") or ""): row for row in backtests}
+    rescored: list[Candidate] = []
+    for item in candidates:
+        original_score = item.score
+        row = backtest_by_code.get(item.ts_code)
+        if row is None:
+            item.score = round(min(original_score, 45.0), 1)
+            item.action = "暂缓"
+            item.risks.append("缺少近2月做T验证，不进入实盘Top10")
+            rescored.append(item)
+            continue
+
+        recent = recent_backtest_stats(row)
+        recent_total = recent["total_edge"]
+        recent_two = recent["two_sided_rate"]
+        recent_avg = recent["avg_edge"]
+        recent_one = recent["one_sided_rate"]
+        liquidity = clamp((math.log10(max(item.avg_amount_20d, 1)) - 4.8) / 2.3, 0, 1)
+        suitability = clamp(original_score / 100, 0, 1)
+        score = (
+            clamp(recent_total / 0.30, 0, 1) * 38
+            + clamp(recent_two / 0.18, 0, 1) * 24
+            + clamp(recent_avg / 0.008, 0, 1) * 14
+            + clamp(safe_float(row.get("score")) / 100, 0, 1) * 8
+            + liquidity * 8
+            + suitability * 8
+        )
+        if recent_total <= 0:
+            score -= 35
+            item.risks.append("近2月做T累计收益为0或为负，剔除优先计划")
+        if recent_two <= 0:
+            score -= 25
+            item.risks.append("近2月没有两边触达样本，不适合当前规则做T")
+        if recent_one > 0.35:
+            score -= 8
+            item.risks.append(f"近2月单边触达 {recent_one * 100:.2f}%，容易卖出后接不回或低吸后继续跌")
+        if item.drawdown_20d < -0.18:
+            score -= 5
+        amount_ratio = item.amount / item.avg_amount_20d if item.avg_amount_20d > 0 else 0.0
+        if 0 < amount_ratio < 0.55:
+            score -= 6
+        item.score = round(clamp(score, 0, 100), 1)
+        if recent_total > 0 and recent_two > 0:
+            item.reasons.insert(0, f"近2月做T累计 {recent_total * 100:.2f}%，两边触达 {recent_two * 100:.2f}%")
+        if item.score >= 78:
+            item.action = "优先计划"
+        elif item.score >= 62:
+            item.action = "候选观察"
+        else:
+            item.action = "暂缓"
+        rescored.append(item)
+    rescored.sort(key=lambda item: (item.score, item.avg_amount_20d), reverse=True)
+    return rescored
+
+
 def write_results(run_id: str, candidates: list[Candidate], backtests: list[dict[str, object]]) -> None:
     generated_at = now()
     latest_date = candidates[0].trade_date if candidates else ""
@@ -862,6 +934,7 @@ def main() -> None:
         history = read_history_for_codes(codes, args.history_days)
         run_status.progress(task_name, 4, 5, "backtest", "执行日线近似回测")
         backtests = backtest_candidates(history, run_id, args.lookback)
+        candidates = apply_effective_scores(candidates, backtests)
         run_status.progress(task_name, 5, 5, "write", "写入日线做T研究结果")
         write_results(run_id, candidates, backtests)
         run_status.done(task_name, f"完成日线做T研究：候选 {len(candidates)}，回测 {len(backtests)}")
