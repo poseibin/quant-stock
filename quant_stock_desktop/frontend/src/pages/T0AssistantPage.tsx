@@ -230,12 +230,25 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
     }
   }, [timeMachineStatus?.state])
 
-  const operationTop10 = useMemo(() => pullCandidates.slice(0, 10), [pullCandidates])
   const backtestByCode = useMemo(() => {
     const map = new Map<string, T0DailyBacktest>()
     backtests.forEach((row) => map.set(row.ts_code, row))
     return map
   }, [backtests])
+  const operationTop10 = useMemo(() => {
+    return pullCandidates
+      .map((row) => ({ row, recent: parseRecentT0Stats(backtestByCode.get(row.ts_code)) }))
+      .filter((item) => item.recent && item.recent.total_edge > 0 && item.recent.two_sided_rate > 0)
+      .sort((a, b) => {
+        const edgeDiff = (b.recent?.total_edge || 0) - (a.recent?.total_edge || 0)
+        if (Math.abs(edgeDiff) > 0.0001) return edgeDiff
+        const hitDiff = (b.recent?.two_sided_rate || 0) - (a.recent?.two_sided_rate || 0)
+        if (Math.abs(hitDiff) > 0.0001) return hitDiff
+        return b.row.score - a.row.score
+      })
+      .slice(0, 10)
+      .map((item) => item.row)
+  }, [pullCandidates, backtestByCode])
   const timeMachineSummary = useMemo(() => {
     const grid = parseTimeMachineGrid(timeMachineRows)
     if (timeMachineRows.length === 0) {
