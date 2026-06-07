@@ -79,6 +79,17 @@ type TimeMachineGridSummary = {
     mean_win_rate?: number
     stability_score?: number
   }
+  windows?: Array<{
+    lookback?: number
+    eval_days?: number
+    anchor_count?: number
+    mean_avg_combined_return?: number
+    worst_avg_combined_return?: number
+    positive_anchor_rate?: number
+    mean_avg_t0_edge?: number
+    mean_win_rate?: number
+    stability_score?: number
+  }>
   positive_window_rate?: number
   worst_avg_combined_return?: number
   mean_avg_combined_return?: number
@@ -130,6 +141,10 @@ function parseTimeMachineGrid(rows: T0TimeMachineResult[]): TimeMachineGridSumma
   } catch {
     return null
   }
+}
+
+function topGridWindows(grid: TimeMachineGridSummary | null) {
+  return (grid?.windows || []).slice(0, 6)
 }
 
 export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
@@ -432,51 +447,68 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
         <div className="tableHeader">
           <div>
             <div className="sectionLabel">TIME MACHINE</div>
-            <h2>做T时光机整体收益</h2>
-            <p className="recommendationMeta">在历史截面只用当时之前的数据选候选，再评估后续 20 个交易日底仓做T价差、标的涨跌和合并收益。</p>
+            <h2>做T时光机稳定性验证</h2>
+            <p className="recommendationMeta">滚动测试不同选股窗口和评测窗口，只展示稳定性结论；逐票历史流水不再作为默认页面内容。</p>
           </div>
         </div>
-        <div className="tableWrap">
-          <table>
-            <thead>
-              <tr>
-                <th>股票</th>
-                <th>区间</th>
-                <th>评分</th>
-                <th>做T价差</th>
-                <th>标的涨跌</th>
-                <th>合并收益</th>
-                <th>完成次数</th>
-                <th>最大回撤</th>
-              </tr>
-            </thead>
-            <tbody>
-              {timeMachineRows.map((row) => (
-                <tr key={row.ts_code}>
-                  <td>
-                    <button className="tableActionButton" onClick={() => onOpenResearch?.(row.ts_code)}>
-                      {row.name || row.ts_code}
-                    </button>
-                    <div className="mono">{row.ts_code}</div>
-                    <div className="recommendationMeta">{row.industry || '—'}</div>
-                  </td>
-                  <td>
-                    <div>{formatDate(row.as_of_date)}</div>
-                    <div className="recommendationMeta">{formatDate(row.eval_start_date)} - {formatDate(row.eval_end_date)}</div>
-                  </td>
-                  <td><strong>{row.score.toFixed(1)}</strong></td>
-                  <td className={signedClass(row.t0_edge)}>{percent(row.t0_edge, true)}</td>
-                  <td className={signedClass(row.underlying_return)}>{percent(row.underlying_return, true)}</td>
-                  <td className={signedClass(row.combined_return)}>{percent(row.combined_return, true)}</td>
-                  <td>{row.two_sided_count}/{row.n_eval_days}<div className="recommendationMeta">单边 {row.one_sided_count}</div></td>
-                  <td className="negative">{percent(row.max_drawdown)}</td>
-                </tr>
-              ))}
-              {!loading && timeMachineRows.length === 0 ? <tr><td colSpan={8} className="emptyCell">暂无时光机结果，请先运行时光机</td></tr> : null}
-              {loading ? <tr><td colSpan={8} className="emptyCell">加载中...</td></tr> : null}
-            </tbody>
-          </table>
+        <div className="metricStrip">
+          <div className={`metricCard ${timeMachineSummary.grid ? 'good' : ''}`}>
+            <span>最佳窗口</span>
+            <b>{timeMachineSummary.grid?.best ? `${timeMachineSummary.grid.best.lookback}/${timeMachineSummary.grid.best.eval_days}` : '—'}</b>
+            <em>{timeMachineSummary.grid?.best ? `${timeMachineSummary.grid.best.anchor_count || 1} 个历史锚点` : '先运行时光机'}</em>
+          </div>
+          <div className="metricCard good">
+            <span>平均合并收益</span>
+            <b className={signedClass(timeMachineSummary.grid?.best?.mean_avg_combined_return ?? timeMachineSummary.avgCombined)}>
+              {percent(timeMachineSummary.grid?.best?.mean_avg_combined_return ?? timeMachineSummary.avgCombined, true)}
+            </b>
+            <em>最差 {percent(timeMachineSummary.grid?.best?.worst_avg_combined_return ?? Number.NaN, true)}</em>
+          </div>
+          <div className="metricCard">
+            <span>做T贡献</span>
+            <b className={signedClass(timeMachineSummary.grid?.best?.mean_avg_t0_edge ?? timeMachineSummary.avgT0Edge)}>
+              {percent(timeMachineSummary.grid?.best?.mean_avg_t0_edge ?? timeMachineSummary.avgT0Edge, true)}
+            </b>
+            <em>不含标的自身涨跌</em>
+          </div>
+          <div className="metricCard">
+            <span>稳定性</span>
+            <b>{percent(timeMachineSummary.grid?.best?.positive_anchor_rate ?? timeMachineSummary.grid?.positive_window_rate ?? Number.NaN)}</b>
+            <em>胜率 {percent(timeMachineSummary.grid?.best?.mean_win_rate ?? timeMachineSummary.winRate)}</em>
+          </div>
         </div>
+        {timeMachineSummary.grid ? (
+          <div className="tableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>窗口</th>
+                  <th>锚点</th>
+                  <th>平均收益</th>
+                  <th>最差收益</th>
+                  <th>正收益锚点</th>
+                  <th>做T贡献</th>
+                  <th>平均胜率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topGridWindows(timeMachineSummary.grid).map((row) => (
+                  <tr key={`${row.lookback}-${row.eval_days}`}>
+                    <td><strong>{row.lookback}/{row.eval_days}</strong></td>
+                    <td>{row.anchor_count || '—'}</td>
+                    <td className={signedClass(row.mean_avg_combined_return ?? Number.NaN)}>{percent(row.mean_avg_combined_return ?? Number.NaN, true)}</td>
+                    <td className={signedClass(row.worst_avg_combined_return ?? Number.NaN)}>{percent(row.worst_avg_combined_return ?? Number.NaN, true)}</td>
+                    <td>{percent(row.positive_anchor_rate ?? Number.NaN)}</td>
+                    <td className={signedClass(row.mean_avg_t0_edge ?? Number.NaN)}>{percent(row.mean_avg_t0_edge ?? Number.NaN, true)}</td>
+                    <td>{percent(row.mean_win_rate ?? Number.NaN)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="emptyCell">暂无稳定性网格，请先运行时光机</div>
+        )}
       </section>
 
       <section className="detailCard">
