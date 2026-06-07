@@ -148,6 +148,27 @@ type T0DailyBacktest struct {
 	UpdatedAt    string  `json:"updated_at"`
 }
 
+type T0TimeMachineResult struct {
+	RunID            string  `json:"run_id"`
+	TSCode           string  `json:"ts_code"`
+	Name             string  `json:"name"`
+	Industry         string  `json:"industry"`
+	AsOfDate         string  `json:"as_of_date"`
+	EvalStartDate    string  `json:"eval_start_date"`
+	EvalEndDate      string  `json:"eval_end_date"`
+	Score            float64 `json:"score"`
+	NEvalDays        int     `json:"n_eval_days"`
+	TwoSidedCount    int     `json:"two_sided_count"`
+	OneSidedCount    int     `json:"one_sided_count"`
+	T0Edge           float64 `json:"t0_edge"`
+	AvgT0Edge        float64 `json:"avg_t0_edge"`
+	UnderlyingReturn float64 `json:"underlying_return"`
+	CombinedReturn   float64 `json:"combined_return"`
+	MaxDrawdown      float64 `json:"max_drawdown"`
+	SummaryJSON      string  `json:"summary_json"`
+	UpdatedAt        string  `json:"updated_at"`
+}
+
 type FactorResearchRunSummary struct {
 	RunID       string  `json:"run_id"`
 	StartDate   string  `json:"start_date"`
@@ -1248,7 +1269,7 @@ func runStatusTaskType(taskName string) string {
 		return "signal"
 	case "limit_signal_evaluation":
 		return "evaluation"
-	case "limit_breakout", "limit_up_momentum", "t0_daily_research":
+	case "limit_breakout", "limit_up_momentum", "t0_daily_research", "t0_daily_timemachine":
 		return "market_scan"
 	case "policy_support_analysis":
 		return "analysis"
@@ -2189,6 +2210,41 @@ func (app *App) ListT0DailyBacktests(limit int) ([]T0DailyBacktest, error) {
 	return out, rows.Err()
 }
 
+func (app *App) ListT0TimeMachineResults(limit int) ([]T0TimeMachineResult, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 300 {
+		limit = 100
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, ts_code, name, industry, as_of_date, eval_start_date, eval_end_date, score,
+		       n_eval_days, two_sided_count, one_sided_count, t0_edge, avg_t0_edge, underlying_return,
+		       combined_return, max_drawdown, summary_json, updated_at
+		FROM t0_daily_time_machine_results
+		WHERE run_id = (SELECT run_id FROM t0_daily_time_machine_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
+		ORDER BY combined_return DESC, t0_edge DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]T0TimeMachineResult, 0)
+	for rows.Next() {
+		var item T0TimeMachineResult
+		if err := rows.Scan(
+			&item.RunID, &item.TSCode, &item.Name, &item.Industry, &item.AsOfDate, &item.EvalStartDate,
+			&item.EvalEndDate, &item.Score, &item.NEvalDays, &item.TwoSidedCount, &item.OneSidedCount,
+			&item.T0Edge, &item.AvgT0Edge, &item.UnderlyingReturn, &item.CombinedReturn, &item.MaxDrawdown,
+			&item.SummaryJSON, &item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (app *App) RunT0DailyResearch() error {
 	if err := app.ensureDatabase(); err != nil {
 		return err
@@ -2251,6 +2307,81 @@ func (app *App) RunT0DailyResearch() error {
 	return nil
 }
 
+func (app *App) RunT0TimeMachine() error {
+	if err := app.ensureDatabase(); err != nil {
+		return err
+	}
+	if status, err := app.GetT0TimeMachineStatus(); err == nil && status.State == "running" {
+		return errors.New("做T时光机正在运行")
+	}
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return errors.New("数据路径未设置")
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(dataPath, "meta.db")
+	logDir := filepath.Join(dataPath, "logs", "t0_daily_timemachine")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(logDir, time.Now().Format("20060102_150405")+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "task_type", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"task_type", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+		),
+		"t0_daily_timemachine", "market_scan", "running", 0, 5, "prepare", "启动做T时光机", "", now, now, "",
+	)
+	args := []string{
+		"scripts/t0_daily_worker.py",
+		"--mode", "time_machine",
+		"--data-path", dataPath,
+		"--db-path", dbPath,
+		"--lookback", "80",
+		"--eval-days", "20",
+		"--limit", "80",
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		finishedAt := time.Now().Format(time.RFC3339)
+		_, _ = app.database.Conn().Exec(
+			`UPDATE task_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='t0_daily_timemachine'`,
+			err.Error(),
+			finishedAt,
+			finishedAt,
+		)
+		return err
+	}
+	go app.waitT0TimeMachine(cmd, logFile, logPath)
+	return nil
+}
+
+func (app *App) waitT0TimeMachine(cmd *exec.Cmd, logFile *os.File, logPath string) {
+	err := cmd.Wait()
+	_ = logFile.Close()
+	if err == nil || app.database == nil {
+		return
+	}
+	status, statusErr := app.GetT0TimeMachineStatus()
+	if statusErr == nil && status.State != "running" {
+		return
+	}
+	app.markPythonStatusTaskError("t0_daily_timemachine", "做T时光机进程已退出: "+err.Error()+"，日志: "+logPath)
+}
+
 func (app *App) waitT0DailyResearch(cmd *exec.Cmd, logFile *os.File, logPath string) {
 	err := cmd.Wait()
 	_ = logFile.Close()
@@ -2269,6 +2400,13 @@ func (app *App) GetT0DailyResearchStatus() (position.RunStatus, error) {
 		return position.RunStatus{}, err
 	}
 	return app.positionService.GetRunStatus("t0_daily_research")
+}
+
+func (app *App) GetT0TimeMachineStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("t0_daily_timemachine")
 }
 
 func parseJSONStringList(value string) []string {

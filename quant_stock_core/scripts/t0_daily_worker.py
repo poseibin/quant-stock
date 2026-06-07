@@ -22,6 +22,7 @@ from common.infra.db import open_db, replace_sql, table_exists, upsert_sql, writ
 
 
 TASK_NAME = "t0_daily_research"
+TIMEMACHINE_TASK_NAME = "t0_daily_timemachine"
 COST_RATE = 0.004
 
 
@@ -138,6 +139,58 @@ def ensure_schema() -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_t0_daily_candidates_latest ON t0_daily_candidates(trade_date, score DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_t0_daily_backtests_score ON t0_daily_backtests(run_id, score DESC)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS t0_daily_time_machine_runs (
+                run_id TEXT PRIMARY KEY,
+                as_of_date TEXT NOT NULL,
+                eval_start_date TEXT NOT NULL,
+                eval_end_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                candidate_count INTEGER NOT NULL DEFAULT 0,
+                evaluated_count INTEGER NOT NULL DEFAULT 0,
+                avg_t0_edge REAL NOT NULL DEFAULT 0,
+                avg_underlying_return REAL NOT NULL DEFAULT 0,
+                avg_combined_return REAL NOT NULL DEFAULT 0,
+                win_rate REAL NOT NULL DEFAULT 0,
+                summary_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS t0_daily_time_machine_results (
+                run_id TEXT NOT NULL,
+                ts_code TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                industry TEXT NOT NULL DEFAULT '',
+                as_of_date TEXT NOT NULL,
+                eval_start_date TEXT NOT NULL,
+                eval_end_date TEXT NOT NULL,
+                score REAL NOT NULL DEFAULT 0,
+                n_eval_days INTEGER NOT NULL DEFAULT 0,
+                two_sided_count INTEGER NOT NULL DEFAULT 0,
+                one_sided_count INTEGER NOT NULL DEFAULT 0,
+                t0_edge REAL NOT NULL DEFAULT 0,
+                avg_t0_edge REAL NOT NULL DEFAULT 0,
+                underlying_return REAL NOT NULL DEFAULT 0,
+                combined_return REAL NOT NULL DEFAULT 0,
+                max_drawdown REAL NOT NULL DEFAULT 0,
+                summary_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (run_id, ts_code)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_t0_daily_tm_results_score ON t0_daily_time_machine_results(run_id, combined_return DESC)")
+
+
+def trade_dates() -> list[str]:
+    with open_db() as conn:
+        rows = pd.read_sql("SELECT DISTINCT trade_date FROM data_daily_bars ORDER BY trade_date", conn.raw)
+    return rows["trade_date"].astype(str).tolist()
 
 
 def read_recent_daily(lookback: int) -> pd.DataFrame:
@@ -200,6 +253,23 @@ def read_history_for_codes(codes: list[str], days: int) -> pd.DataFrame:
             """,
             raw,
             params=tuple(codes),
+        )
+
+
+def read_daily_between(start_date: str, end_date: str) -> pd.DataFrame:
+    with open_db() as conn:
+        raw = conn.raw
+        return pd.read_sql(
+            f"""
+            SELECT d.ts_code, COALESCE(s.name, '') AS name, COALESCE(s.industry, '') AS industry,
+                   d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount
+            FROM data_daily_bars d
+            LEFT JOIN data_stock_basic s ON s.ts_code = d.ts_code
+            WHERE d.trade_date >= '{start_date}' AND d.trade_date <= '{end_date}'
+              AND COALESCE(s.name, '') NOT LIKE '%%ST%%'
+            ORDER BY d.ts_code, d.trade_date
+            """,
+            raw,
         )
 
 
@@ -421,36 +491,207 @@ def write_results(run_id: str, candidates: list[Candidate], backtests: list[dict
             )
 
 
+def resolve_time_machine_dates(as_of_date: str, lookback: int, eval_days: int) -> tuple[str, str, str, str]:
+    dates = trade_dates()
+    if not dates:
+        raise RuntimeError("data_daily_bars 为空")
+    if as_of_date:
+        eligible = [date for date in dates if date <= as_of_date]
+        if not eligible:
+            raise RuntimeError(f"找不到 as_of_date={as_of_date} 之前的交易日")
+        as_of = eligible[-1]
+    else:
+        idx = max(lookback, len(dates) - eval_days - 1)
+        idx = min(idx, len(dates) - eval_days - 1)
+        if idx < lookback:
+            raise RuntimeError("交易日数量不足，无法执行时光机")
+        as_of = dates[idx]
+    as_idx = dates.index(as_of)
+    eval_dates = dates[as_idx + 1: as_idx + 1 + eval_days]
+    if not eval_dates:
+        raise RuntimeError("as_of_date 后没有可评估交易日")
+    start_idx = max(0, as_idx - lookback + 1)
+    return dates[start_idx], as_of, eval_dates[0], eval_dates[-1]
+
+
+def run_time_machine(run_id: str, as_of_date: str, lookback: int, eval_days: int, limit: int) -> dict[str, object]:
+    start_date, as_of, eval_start, eval_end = resolve_time_machine_dates(as_of_date, lookback, eval_days)
+    df = add_metrics(read_daily_between(start_date, eval_end))
+    as_of_rows = df[df["trade_date"] == as_of].copy()
+    candidates = [score_row(row, run_id) for _, row in as_of_rows.iterrows()]
+    candidates = [item for item in candidates if item.score >= 52]
+    candidates.sort(key=lambda item: (item.score, item.avg_amount_20d), reverse=True)
+    candidates = candidates[:limit]
+    code_set = {item.ts_code for item in candidates}
+    results: list[dict[str, object]] = []
+    for item in candidates:
+        group = df[df["ts_code"] == item.ts_code].sort_values("trade_date").reset_index(drop=True)
+        as_rows = group.index[group["trade_date"] == as_of].tolist()
+        if not as_rows:
+            continue
+        start_pos = as_rows[0]
+        eval_rows = []
+        closes = []
+        for pos in range(start_pos, len(group) - 1):
+            row = group.iloc[pos]
+            nxt = group.iloc[pos + 1]
+            if str(nxt["trade_date"]) > eval_end:
+                break
+            if str(nxt["trade_date"]) < eval_start:
+                continue
+            daily_candidate = score_row(row, run_id)
+            band = clamp(daily_candidate.avg_range_20d * 0.55, 0.008, 0.04)
+            reduce_price = daily_candidate.price * (1 + band)
+            buy_price = daily_candidate.price * (1 - band)
+            high_hit = safe_float(nxt["high"]) >= reduce_price
+            low_hit = safe_float(nxt["low"]) <= buy_price
+            raw_edge = (reduce_price - buy_price) / max(daily_candidate.price, 0.01) - COST_RATE
+            eval_rows.append({
+                "two_sided": high_hit and low_hit,
+                "one_sided": high_hit ^ low_hit,
+                "edge": raw_edge if high_hit and low_hit else 0.0,
+                "close": safe_float(nxt["close"]),
+            })
+            closes.append(safe_float(nxt["close"]))
+        if not eval_rows:
+            continue
+        frame = pd.DataFrame(eval_rows)
+        t0_edge = safe_float(frame["edge"].sum())
+        avg_t0_edge = safe_float(frame["edge"].mean())
+        base_close = max(item.price, 0.01)
+        underlying_return = safe_float(closes[-1] / base_close - 1) if closes else 0.0
+        curve = [safe_float(close / base_close - 1) for close in closes]
+        max_drawdown = 0.0
+        peak = -1e9
+        for value in curve:
+            peak = max(peak, value)
+            max_drawdown = min(max_drawdown, value - peak)
+        combined_return = underlying_return + t0_edge
+        results.append({
+            "run_id": run_id,
+            "ts_code": item.ts_code,
+            "name": item.name,
+            "industry": item.industry,
+            "as_of_date": as_of,
+            "eval_start_date": eval_start,
+            "eval_end_date": eval_end,
+            "score": item.score,
+            "n_eval_days": int(len(eval_rows)),
+            "two_sided_count": int(frame["two_sided"].sum()),
+            "one_sided_count": int(frame["one_sided"].sum()),
+            "t0_edge": t0_edge,
+            "avg_t0_edge": avg_t0_edge,
+            "underlying_return": underlying_return,
+            "combined_return": combined_return,
+            "max_drawdown": max_drawdown,
+            "summary_json": json.dumps({
+                "note": "做T时光机：as_of 当日只使用历史数据选股；后续每日用前一日收盘生成高抛/低吸区间。只有次日 high/low 同时触达才计入做T价差。",
+                "cost_rate": COST_RATE,
+            }, ensure_ascii=False),
+            "updated_at": now(),
+        })
+    results.sort(key=lambda row: safe_float(row["combined_return"]), reverse=True)
+    generated_at = now()
+    evaluated = len(results)
+    avg_t0_edge = safe_float(pd.Series([row["t0_edge"] for row in results]).mean()) if results else 0.0
+    avg_underlying = safe_float(pd.Series([row["underlying_return"] for row in results]).mean()) if results else 0.0
+    avg_combined = safe_float(pd.Series([row["combined_return"] for row in results]).mean()) if results else 0.0
+    win_rate = safe_float(pd.Series([row["combined_return"] > 0 for row in results]).mean()) if results else 0.0
+    summary = {
+        "as_of_date": as_of,
+        "eval_start_date": eval_start,
+        "eval_end_date": eval_end,
+        "candidate_count": len(candidates),
+        "evaluated_count": evaluated,
+        "avg_t0_edge": avg_t0_edge,
+        "avg_underlying_return": avg_underlying,
+        "avg_combined_return": avg_combined,
+        "win_rate": win_rate,
+        "selected_codes": sorted(code_set)[:20],
+    }
+    with write_transaction() as conn:
+        conn.execute(
+            replace_sql(
+                "t0_daily_time_machine_runs",
+                [
+                    "run_id", "as_of_date", "eval_start_date", "eval_end_date", "status", "candidate_count",
+                    "evaluated_count", "avg_t0_edge", "avg_underlying_return", "avg_combined_return",
+                    "win_rate", "summary_json", "created_at", "updated_at",
+                ],
+                ["run_id"],
+            ),
+            (
+                run_id, as_of, eval_start, eval_end, "success", len(candidates), evaluated, avg_t0_edge,
+                avg_underlying, avg_combined, win_rate, json.dumps(summary, ensure_ascii=False), generated_at, generated_at,
+            ),
+        )
+        if results:
+            conn.executemany(
+                replace_sql(
+                    "t0_daily_time_machine_results",
+                    [
+                        "run_id", "ts_code", "name", "industry", "as_of_date", "eval_start_date", "eval_end_date",
+                        "score", "n_eval_days", "two_sided_count", "one_sided_count", "t0_edge", "avg_t0_edge",
+                        "underlying_return", "combined_return", "max_drawdown", "summary_json", "updated_at",
+                    ],
+                    ["run_id", "ts_code"],
+                ),
+                [
+                    (
+                        row["run_id"], row["ts_code"], row["name"], row["industry"], row["as_of_date"],
+                        row["eval_start_date"], row["eval_end_date"], row["score"], row["n_eval_days"],
+                        row["two_sided_count"], row["one_sided_count"], row["t0_edge"], row["avg_t0_edge"],
+                        row["underlying_return"], row["combined_return"], row["max_drawdown"],
+                        row["summary_json"], row["updated_at"],
+                    )
+                    for row in results
+                ],
+            )
+    return {"run_id": run_id, **summary}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Daily-bar T0 suitability research worker")
     parser.add_argument("--data-path", default="")
     parser.add_argument("--db-path", default="")
     parser.add_argument("--run-id", default="")
+    parser.add_argument("--mode", choices=["research", "time_machine"], default="research")
+    parser.add_argument("--as-of-date", default="")
+    parser.add_argument("--eval-days", type=int, default=20)
     parser.add_argument("--lookback", type=int, default=80)
     parser.add_argument("--history-days", type=int, default=520)
     parser.add_argument("--limit", type=int, default=120)
     parser.add_argument("--backtest-limit", type=int, default=80)
     args = parser.parse_args()
 
-    run_id = args.run_id.strip() or "t0_daily_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_status.begin(TASK_NAME)
+    run_id_prefix = "t0_tm" if args.mode == "time_machine" else "t0_daily"
+    run_id = args.run_id.strip() or run_id_prefix + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    task_name = TIMEMACHINE_TASK_NAME if args.mode == "time_machine" else TASK_NAME
+    run_status.begin(task_name)
     try:
-        run_status.progress(TASK_NAME, 1, 5, "schema", "准备日线做T结果表")
+        run_status.progress(task_name, 1, 5, "schema", "准备日线做T结果表")
         ensure_schema()
-        run_status.progress(TASK_NAME, 2, 5, "daily", "读取最近日线并粗筛")
+        if args.mode == "time_machine":
+            run_status.progress(task_name, 2, 5, "timemachine", "选择历史截面并评估后续收益")
+            result = run_time_machine(run_id, args.as_of_date.strip(), args.lookback, args.eval_days, args.limit)
+            run_status.progress(task_name, 5, 5, "write", "写入做T时光机结果")
+            run_status.done(task_name, f"完成做T时光机：候选 {result['candidate_count']}，评估 {result['evaluated_count']}")
+            print(json.dumps(result, ensure_ascii=False))
+            return
+        run_status.progress(task_name, 2, 5, "daily", "读取最近日线并粗筛")
         recent = read_recent_daily(args.lookback)
         candidates = build_candidates(recent, run_id, args.limit)
-        run_status.progress(TASK_NAME, 3, 5, "backtest", "读取候选历史日线")
+        run_status.progress(task_name, 3, 5, "backtest", "读取候选历史日线")
         codes = [item.ts_code for item in candidates[: args.backtest_limit]]
         history = read_history_for_codes(codes, args.history_days)
-        run_status.progress(TASK_NAME, 4, 5, "backtest", "执行日线近似回测")
+        run_status.progress(task_name, 4, 5, "backtest", "执行日线近似回测")
         backtests = backtest_candidates(history, run_id)
-        run_status.progress(TASK_NAME, 5, 5, "write", "写入日线做T研究结果")
+        run_status.progress(task_name, 5, 5, "write", "写入日线做T研究结果")
         write_results(run_id, candidates, backtests)
-        run_status.done(TASK_NAME, f"完成日线做T研究：候选 {len(candidates)}，回测 {len(backtests)}")
+        run_status.done(task_name, f"完成日线做T研究：候选 {len(candidates)}，回测 {len(backtests)}")
         print(json.dumps({"run_id": run_id, "candidates": len(candidates), "backtests": len(backtests)}, ensure_ascii=False))
     except Exception as exc:
-        run_status.error(TASK_NAME, str(exc))
+        run_status.error(task_name, str(exc))
         raise
 
 

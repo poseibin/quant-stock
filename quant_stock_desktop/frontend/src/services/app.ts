@@ -65,8 +65,11 @@ declare global {
           ListT0Recommendations: (limit: number) => Promise<T0Recommendation[]>
           ListT0DataPullCandidates: (limit: number) => Promise<T0DataPullCandidate[]>
           ListT0DailyBacktests: (limit: number) => Promise<T0DailyBacktest[]>
+          ListT0TimeMachineResults: (limit: number) => Promise<T0TimeMachineResult[]>
           RunT0DailyResearch: () => Promise<void>
+          RunT0TimeMachine: () => Promise<void>
           GetT0DailyResearchStatus: () => Promise<RunStatus>
+          GetT0TimeMachineStatus: () => Promise<RunStatus>
           GetPositionHistory: () => Promise<PositionHistoryPoint[]>
           GetPositionHoldings: () => Promise<PositionItem[]>
           GetPositionRecommendation: () => Promise<PositionRecommendation>
@@ -865,6 +868,27 @@ export interface T0DailyBacktest {
   updated_at: string
 }
 
+export interface T0TimeMachineResult {
+  run_id: string
+  ts_code: string
+  name: string
+  industry: string
+  as_of_date: string
+  eval_start_date: string
+  eval_end_date: string
+  score: number
+  n_eval_days: number
+  two_sided_count: number
+  one_sided_count: number
+  t0_edge: number
+  avg_t0_edge: number
+  underlying_return: number
+  combined_return: number
+  max_drawdown: number
+  summary_json: string
+  updated_at: string
+}
+
 export async function getAppInfo(): Promise<AppInfo> {
   if (window.go?.main?.App?.GetAppInfo) {
     return window.go.main.App.GetAppInfo()
@@ -1594,9 +1618,22 @@ export async function listT0DailyBacktests(limit = 100): Promise<T0DailyBacktest
   return []
 }
 
+export async function listT0TimeMachineResults(limit = 100): Promise<T0TimeMachineResult[]> {
+  if (window.go?.main?.App?.ListT0TimeMachineResults) {
+    return (await window.go.main.App.ListT0TimeMachineResults(limit)) || []
+  }
+  return []
+}
+
 export async function runT0DailyResearch(): Promise<void> {
   if (window.go?.main?.App?.RunT0DailyResearch) {
     await window.go.main.App.RunT0DailyResearch()
+  }
+}
+
+export async function runT0TimeMachine(): Promise<void> {
+  if (window.go?.main?.App?.RunT0TimeMachine) {
+    await window.go.main.App.RunT0TimeMachine()
   }
 }
 
@@ -1605,6 +1642,13 @@ export async function getT0DailyResearchStatus(): Promise<RunStatus> {
     return window.go.main.App.GetT0DailyResearchStatus()
   }
   return emptyRunStatus('t0_daily_research')
+}
+
+export async function getT0TimeMachineStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetT0TimeMachineStatus) {
+    return window.go.main.App.GetT0TimeMachineStatus()
+  }
+  return emptyRunStatus('t0_daily_timemachine')
 }
 
 export async function generatePositionSignal(req: GenerateSignalRequest = {}): Promise<GenerateSignalResponse> {

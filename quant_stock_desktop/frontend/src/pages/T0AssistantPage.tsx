@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, LineChart, RefreshCw, ShieldCheck, Target } from 'lucide-react'
-import { getT0DailyResearchStatus, listT0DailyBacktests, listT0DataPullCandidates, listT0Recommendations, runT0DailyResearch, type RunStatus, type T0DailyBacktest, type T0DataPullCandidate, type T0Recommendation } from '../services/app'
+import { getT0DailyResearchStatus, getT0TimeMachineStatus, listT0DailyBacktests, listT0DataPullCandidates, listT0Recommendations, listT0TimeMachineResults, runT0DailyResearch, runT0TimeMachine, type RunStatus, type T0DailyBacktest, type T0DataPullCandidate, type T0Recommendation, type T0TimeMachineResult } from '../services/app'
 
 function money(value: number) {
   if (!Number.isFinite(value) || value === 0) return '—'
@@ -41,20 +41,25 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
   const [rows, setRows] = useState<T0Recommendation[]>([])
   const [pullCandidates, setPullCandidates] = useState<T0DataPullCandidate[]>([])
   const [backtests, setBacktests] = useState<T0DailyBacktest[]>([])
+  const [timeMachineRows, setTimeMachineRows] = useState<T0TimeMachineResult[]>([])
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null)
+  const [timeMachineStatus, setTimeMachineStatus] = useState<RunStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
+  const [timeMachineRunning, setTimeMachineRunning] = useState(false)
   const [error, setError] = useState('')
 
   const load = () => {
     setLoading(true)
     setError('')
-    Promise.all([listT0Recommendations(80), listT0DataPullCandidates(80), listT0DailyBacktests(80), getT0DailyResearchStatus()])
-      .then(([nextRows, nextPullCandidates, nextBacktests, nextStatus]) => {
+    Promise.all([listT0Recommendations(80), listT0DataPullCandidates(80), listT0DailyBacktests(80), listT0TimeMachineResults(80), getT0DailyResearchStatus(), getT0TimeMachineStatus()])
+      .then(([nextRows, nextPullCandidates, nextBacktests, nextTimeMachineRows, nextStatus, nextTimeMachineStatus]) => {
         setRows(nextRows)
         setPullCandidates(nextPullCandidates)
         setBacktests(nextBacktests)
+        setTimeMachineRows(nextTimeMachineRows)
         setRunStatus(nextStatus)
+        setTimeMachineStatus(nextTimeMachineStatus)
       })
       .catch((err: Error) => setError(err.message || '加载做T建议失败'))
       .finally(() => setLoading(false))
@@ -68,6 +73,16 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
       .then(setRunStatus)
       .catch((err: Error) => setError(err.message || '启动日线做T评估失败'))
       .finally(() => setRunning(false))
+  }
+
+  const runTimeMachine = () => {
+    setTimeMachineRunning(true)
+    setError('')
+    runT0TimeMachine()
+      .then(() => getT0TimeMachineStatus())
+      .then(setTimeMachineStatus)
+      .catch((err: Error) => setError(err.message || '启动做T时光机失败'))
+      .finally(() => setTimeMachineRunning(false))
   }
 
   useEffect(() => {
@@ -95,6 +110,27 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
     }
   }, [runStatus?.state])
 
+  useEffect(() => {
+    let cancelled = false
+    const tick = () => {
+      getT0TimeMachineStatus()
+        .then((status) => {
+          if (cancelled) return
+          const prev = timeMachineStatus?.state || ''
+          setTimeMachineStatus(status)
+          if (prev === 'running' && status.state !== 'running') {
+            load()
+          }
+        })
+        .catch(() => {})
+    }
+    const id = setInterval(tick, 1200)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [timeMachineStatus?.state])
+
   const stats = useMemo(() => {
     const tradable = rows.filter((row) => row.action === '适合做T').length
     const priorityPulls = pullCandidates.filter((row) => row.action === '优先计划').length
@@ -103,9 +139,13 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
     return { tradable, priorityPulls, latest }
   }, [rows, pullCandidates])
   const isRunning = runStatus?.state === 'running'
+  const isTimeMachineRunning = timeMachineStatus?.state === 'running'
   const total = runStatus?.total ?? 0
   const idx = runStatus?.idx ?? 0
   const pct = total > 0 ? Math.min(100, Math.round((idx / total) * 100)) : 0
+  const tmTotal = timeMachineStatus?.total ?? 0
+  const tmIdx = timeMachineStatus?.idx ?? 0
+  const tmPct = tmTotal > 0 ? Math.min(100, Math.round((tmIdx / tmTotal) * 100)) : 0
 
   return (
     <div className="positionPage">
@@ -119,6 +159,15 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: total > 0 ? `${pct}%` : '15%' }} /></div>
         </div>
       ) : null}
+      {isTimeMachineRunning ? (
+        <div className="signalProgress signalProgressStandalone">
+          <div className="signalProgressHeader">
+            <span>{timeMachineStatus?.stage || 'running'} · {timeMachineStatus?.name || '做T时光机'}</span>
+            <span>{tmTotal > 0 ? `${tmIdx}/${tmTotal} (${tmPct}%)` : timeMachineStatus?.updated_at || ''}</span>
+          </div>
+          <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: tmTotal > 0 ? `${tmPct}%` : '15%' }} /></div>
+        </div>
+      ) : null}
 
       <section className="detailCard">
         <div className="tableHeader">
@@ -130,6 +179,9 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           <div className="tableHeaderRight">
             <button className="secondaryButton startButton" onClick={run} disabled={loading || running || isRunning}>
               {running || isRunning ? '运行中' : '运行日线评估'}
+            </button>
+            <button className="secondaryButton startButton" onClick={runTimeMachine} disabled={loading || timeMachineRunning || isTimeMachineRunning}>
+              {timeMachineRunning || isTimeMachineRunning ? '时光机运行中' : '运行时光机'}
             </button>
             <button className="secondaryButton quietButton" onClick={load} disabled={loading}>
               <RefreshCw size={15} />{loading ? '刷新中' : '刷新'}
@@ -221,6 +273,57 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 </tr>
               ))}
               {!loading && pullCandidates.length === 0 ? <tr><td colSpan={8} className="emptyCell">暂无日线候选，请先运行日线评估</td></tr> : null}
+              {loading ? <tr><td colSpan={8} className="emptyCell">加载中...</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="detailCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">TIME MACHINE</div>
+            <h2>做T时光机收益评估</h2>
+            <p className="recommendationMeta">在历史截面只用当时之前的数据选候选，再评估后续 20 个交易日底仓做T价差、标的涨跌和合并收益。</p>
+          </div>
+        </div>
+        <div className="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>股票</th>
+                <th>区间</th>
+                <th>评分</th>
+                <th>做T价差</th>
+                <th>标的涨跌</th>
+                <th>合并收益</th>
+                <th>完成次数</th>
+                <th>最大回撤</th>
+              </tr>
+            </thead>
+            <tbody>
+              {timeMachineRows.map((row) => (
+                <tr key={row.ts_code}>
+                  <td>
+                    <button className="tableActionButton" onClick={() => onOpenResearch?.(row.ts_code)}>
+                      {row.name || row.ts_code}
+                    </button>
+                    <div className="mono">{row.ts_code}</div>
+                    <div className="recommendationMeta">{row.industry || '—'}</div>
+                  </td>
+                  <td>
+                    <div>{formatDate(row.as_of_date)}</div>
+                    <div className="recommendationMeta">{formatDate(row.eval_start_date)} - {formatDate(row.eval_end_date)}</div>
+                  </td>
+                  <td><strong>{row.score.toFixed(1)}</strong></td>
+                  <td className={signedClass(row.t0_edge)}>{percent(row.t0_edge, true)}</td>
+                  <td className={signedClass(row.underlying_return)}>{percent(row.underlying_return, true)}</td>
+                  <td className={signedClass(row.combined_return)}>{percent(row.combined_return, true)}</td>
+                  <td>{row.two_sided_count}/{row.n_eval_days}<div className="recommendationMeta">单边 {row.one_sided_count}</div></td>
+                  <td className="negative">{percent(row.max_drawdown)}</td>
+                </tr>
+              ))}
+              {!loading && timeMachineRows.length === 0 ? <tr><td colSpan={8} className="emptyCell">暂无时光机结果，请先运行时光机</td></tr> : null}
               {loading ? <tr><td colSpan={8} className="emptyCell">加载中...</td></tr> : null}
             </tbody>
           </table>
