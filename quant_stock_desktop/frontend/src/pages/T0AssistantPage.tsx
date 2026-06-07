@@ -401,17 +401,20 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                       <div className="recommendationMeta">成交额 {amountYi(row.amount)} / {flow.detail}</div>
                     </td>
                     <td>
-                      <strong>{money(plan.reduce)}</strong>
-                      <div className="recommendationMeta">盘中触达卖 {plan.tRatio}</div>
+                      <strong>¥{money(plan.reduce)}</strong>
+                      <div className="recommendationMeta">卖出触发价</div>
+                      <div className="recommendationMeta">到价卖 {plan.tRatio}</div>
                       <div className="recommendationMeta">未触达不追卖</div>
                     </td>
                     <td>
-                      <strong>{money(plan.buy)}</strong>
-                      <div className="recommendationMeta">卖出后回落接回</div>
+                      <strong>¥{money(plan.buy)}</strong>
+                      <div className="recommendationMeta">接回触发价</div>
+                      <div className="recommendationMeta">卖出后回落再买</div>
                       <div className="recommendationMeta">现价下方 {percent(1 - (plan.buy / row.price))}</div>
                     </td>
                     <td className="negative">
-                      <strong>{money(plan.stop)}</strong>
+                      <strong>¥{money(plan.stop)}</strong>
+                      <div className="recommendationMeta">风险触发价</div>
                       <div className="recommendationMeta">破位先停手</div>
                     </td>
                     <td>
