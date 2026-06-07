@@ -37,6 +37,17 @@ function formatDate(value: string) {
   return value
 }
 
+function planBand(row: T0DataPullCandidate) {
+  const band = Math.max(0.008, Math.min(0.04, row.avg_range_20d * 0.55))
+  const stopBand = Math.max(0.018, Math.min(0.06, row.avg_range_20d * 0.9))
+  return {
+    reduce: row.price * (1 + band),
+    buy: row.price * (1 - band),
+    stop: row.price * (1 - stopBand),
+    tRatio: row.score >= 85 ? '30%' : row.score >= 72 ? '20%' : '10%',
+  }
+}
+
 export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
   const [rows, setRows] = useState<T0Recommendation[]>([])
   const [pullCandidates, setPullCandidates] = useState<T0DataPullCandidate[]>([])
@@ -131,13 +142,32 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
     }
   }, [timeMachineStatus?.state])
 
-  const stats = useMemo(() => {
-    const tradable = rows.filter((row) => row.action === '适合做T').length
-    const priorityPulls = pullCandidates.filter((row) => row.action === '优先计划').length
-    const generatedTimes = [...rows.map((row) => row.generated_at), ...pullCandidates.map((row) => row.generated_at)].filter(Boolean).sort()
-    const latest = generatedTimes.length ? generatedTimes[generatedTimes.length - 1] : ''
-    return { tradable, priorityPulls, latest }
-  }, [rows, pullCandidates])
+  const operationTop10 = useMemo(() => pullCandidates.slice(0, 10), [pullCandidates])
+  const timeMachineSummary = useMemo(() => {
+    if (timeMachineRows.length === 0) {
+      return {
+        verdict: '未验证',
+        avgT0Edge: Number.NaN,
+        avgUnderlying: Number.NaN,
+        avgCombined: Number.NaN,
+        winRate: Number.NaN,
+        evalStart: '',
+        evalEnd: '',
+        count: 0,
+      }
+    }
+    const count = timeMachineRows.length
+    const avg = (pick: (row: T0TimeMachineResult) => number) => timeMachineRows.reduce((sum, row) => sum + pick(row), 0) / count
+    const avgT0Edge = avg((row) => row.t0_edge)
+    const avgUnderlying = avg((row) => row.underlying_return)
+    const avgCombined = avg((row) => row.combined_return)
+    const winRate = timeMachineRows.filter((row) => row.combined_return > 0).length / count
+    const evalStart = timeMachineRows.map((row) => row.eval_start_date).filter(Boolean).sort()[0] || ''
+    const evalEnds = timeMachineRows.map((row) => row.eval_end_date).filter(Boolean).sort()
+    const evalEnd = evalEnds.length ? evalEnds[evalEnds.length - 1] : ''
+    const verdict = avgCombined > 0.03 && avgT0Edge > 0.03 ? '可小仓试运行' : avgCombined > 0 ? '仅观察' : '暂不自动化'
+    return { verdict, avgT0Edge, avgUnderlying, avgCombined, winRate, evalStart, evalEnd, count }
+  }, [timeMachineRows])
   const isRunning = runStatus?.state === 'running'
   const isTimeMachineRunning = timeMachineStatus?.state === 'running'
   const total = runStatus?.total ?? 0
@@ -173,8 +203,8 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
         <div className="tableHeader">
           <div>
             <div className="sectionLabel">T0 ASSISTANT</div>
-            <h2>日线做T计划与回测</h2>
-            <p className="recommendationMeta">Go 只负责编排和展示，日线评分与近似回测由 Python 研究引擎落库；当前不训练模型、不下单、不改仓位。</p>
+            <h2>做T实盘观察清单</h2>
+            <p className="recommendationMeta">先用时光机验证策略整体收益，再给今日 Top10 观察票；当前只给操作计划，不自动下单、不改仓位。</p>
           </div>
           <div className="tableHeaderRight">
             <button className="secondaryButton startButton" onClick={run} disabled={loading || running || isRunning}>
@@ -190,25 +220,25 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
         </div>
 
         <div className="metricStrip">
-          <div className="metricCard">
-            <span>持仓候选</span>
-            <b>{rows.length}</b>
-            <em>当前账户持仓</em>
+          <div className={`metricCard ${timeMachineSummary.avgCombined > 0 ? 'good' : ''}`}>
+            <span>策略结论</span>
+            <b>{timeMachineSummary.verdict}</b>
+            <em>{timeMachineSummary.count > 0 ? `${timeMachineSummary.count} 只历史样本` : '先运行时光机'}</em>
           </div>
           <div className="metricCard good">
-            <span>适合做T</span>
-            <b>{stats.tradable}</b>
-            <em>满足价差和底仓</em>
+            <span>时光机合并收益</span>
+            <b className={signedClass(timeMachineSummary.avgCombined)}>{percent(timeMachineSummary.avgCombined, true)}</b>
+            <em>{timeMachineSummary.evalStart ? `${formatDate(timeMachineSummary.evalStart)} - ${formatDate(timeMachineSummary.evalEnd)}` : '暂无区间'}</em>
           </div>
           <div className="metricCard">
-            <span>日线候选</span>
-            <b>{pullCandidates.length}</b>
-            <em>日线全市场粗筛</em>
+            <span>做T贡献</span>
+            <b className={signedClass(timeMachineSummary.avgT0Edge)}>{percent(timeMachineSummary.avgT0Edge, true)}</b>
+            <em>标的自身 {percent(timeMachineSummary.avgUnderlying, true)}</em>
           </div>
           <div className="metricCard">
-            <span>优先计划</span>
-            <b>{stats.priorityPulls}</b>
-            <em>{stats.latest ? `更新 ${formatDate(stats.latest.slice(0, 10).replace(/-/g, ''))}` : '无更新时间'}</em>
+            <span>胜率 / 今日Top10</span>
+            <b>{percent(timeMachineSummary.winRate)}</b>
+            <em>{operationTop10.length} 只今日观察</em>
           </div>
         </div>
       </section>
@@ -216,9 +246,87 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
       <section className="detailCard">
         <div className="tableHeader">
           <div>
+            <div className="sectionLabel">ACTION LIST</div>
+            <h2>今日 Top10 做T观察票</h2>
+            <p className="recommendationMeta">只适合已有底仓做T观察；高抛、低吸、止损都是日线计划价，实盘要等盘中价格触发，不追价。</p>
+          </div>
+        </div>
+        <div className="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>股票</th>
+                <th>评分 / 状态</th>
+                <th>高抛价</th>
+                <th>低吸价</th>
+                <th>止损观察</th>
+                <th>T仓建议</th>
+                <th>依据</th>
+                <th>风险</th>
+              </tr>
+            </thead>
+            <tbody>
+              {operationTop10.map((row, index) => {
+                const plan = planBand(row)
+                return (
+                  <tr key={row.ts_code}>
+                    <td><strong>{index + 1}</strong></td>
+                    <td>
+                      <button className="tableActionButton" onClick={() => onOpenResearch?.(row.ts_code)}>
+                        {row.name || row.ts_code}
+                      </button>
+                      <div className="mono">{row.ts_code}</div>
+                      <div className="recommendationMeta">{row.industry || '—'} · {formatDate(row.trade_date)}</div>
+                    </td>
+                    <td>
+                      <strong>{row.score.toFixed(1)}</strong>
+                      <div><span className={`badge ${pullBadge(row.action)}`}>{row.action}</span></div>
+                    </td>
+                    <td>
+                      <strong>{money(plan.reduce)}</strong>
+                      <div className="recommendationMeta">现价上方 {percent((plan.reduce / row.price) - 1)}</div>
+                    </td>
+                    <td>
+                      <strong>{money(plan.buy)}</strong>
+                      <div className="recommendationMeta">现价下方 {percent(1 - (plan.buy / row.price))}</div>
+                    </td>
+                    <td className="negative">
+                      <strong>{money(plan.stop)}</strong>
+                      <div className="recommendationMeta">破位先停手</div>
+                    </td>
+                    <td>
+                      <strong>{plan.tRatio}</strong>
+                      <div className="recommendationMeta">仅用可T底仓</div>
+                    </td>
+                    <td>
+                      <ul className="compactList">
+                        {row.reasons.slice(0, 2).map((reason) => <li key={reason}>{reason}</li>)}
+                        {row.reasons.length === 0 ? <li>暂无正向依据</li> : null}
+                      </ul>
+                    </td>
+                    <td>
+                      <ul className="compactList">
+                        {row.risks.slice(0, 2).map((risk) => <li key={risk}><AlertTriangle size={13} /> {risk}</li>)}
+                        {row.risks.length === 0 ? <li>暂无显著风险</li> : null}
+                      </ul>
+                    </td>
+                  </tr>
+                )
+              })}
+              {!loading && operationTop10.length === 0 ? <tr><td colSpan={9} className="emptyCell">暂无 Top10，请先运行日线评估</td></tr> : null}
+              {loading ? <tr><td colSpan={9} className="emptyCell">加载中...</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="detailCard">
+        <div className="tableHeader">
+          <div>
             <div className="sectionLabel">DAILY TARGETS</div>
-            <h2>日线做T计划候选</h2>
-            <p className="recommendationMeta">用最近日线筛选适合底仓做T的股票；后续每日收盘生成明日高抛/低吸计划。</p>
+            <h2>日线候选明细</h2>
+            <p className="recommendationMeta">这里是 Top10 的候选池证据，用来解释为什么入选，不作为第一眼的操作入口。</p>
           </div>
         </div>
         <div className="tableWrap">
@@ -283,7 +391,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
         <div className="tableHeader">
           <div>
             <div className="sectionLabel">TIME MACHINE</div>
-            <h2>做T时光机收益评估</h2>
+            <h2>做T时光机整体收益</h2>
             <p className="recommendationMeta">在历史截面只用当时之前的数据选候选，再评估后续 20 个交易日底仓做T价差、标的涨跌和合并收益。</p>
           </div>
         </div>

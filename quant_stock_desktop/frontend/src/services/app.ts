@@ -1532,7 +1532,7 @@ function inferRunStatusTaskType(task: string): string {
   if (task === 'data_update') return 'data_update'
   if (task === 'daily_signal') return 'signal'
   if (task === 'limit_signal_evaluation') return 'evaluation'
-  if (task === 'limit_breakout' || task === 'limit_up_momentum') return 'market_scan'
+  if (task === 'limit_breakout' || task === 'limit_up_momentum' || task === 't0_daily_research' || task === 't0_daily_timemachine') return 'market_scan'
   if (task === 'policy_support_analysis') return 'analysis'
   return 'python'
 }
