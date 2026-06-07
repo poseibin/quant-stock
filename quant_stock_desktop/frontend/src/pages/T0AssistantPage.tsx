@@ -395,7 +395,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                         {row.name || row.ts_code}
                       </button>
                       <div className="mono">{row.ts_code}</div>
-                      <div className="recommendationMeta">当前价 ¥{money(row.price)}</div>
+                      <div className="recommendationMeta t0CurrentPrice">当前价 ¥{money(row.price)}</div>
                       <div className="recommendationMeta">{row.industry || '—'} · {formatDate(row.trade_date)}</div>
                     </td>
                     <td>
