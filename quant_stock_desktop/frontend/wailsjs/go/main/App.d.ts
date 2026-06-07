@@ -40,9 +40,13 @@ export function GetFactorModelRun(arg1:string):Promise<main.FactorModelRun>;
 
 export function GetLatestPolicySupportSignal():Promise<main.PolicySupportSignalDTO>;
 
+export function GetLimitBreakoutModelRunStatus():Promise<position.RunStatus>;
+
 export function GetLimitBreakoutRunStatus():Promise<position.RunStatus>;
 
 export function GetLimitSignalEvaluationRunStatus():Promise<position.RunStatus>;
+
+export function GetLimitUpModelRunStatus():Promise<position.RunStatus>;
 
 export function GetLimitUpMomentumRunStatus():Promise<position.RunStatus>;
 
@@ -64,23 +68,39 @@ export function GetSignalRunStatus():Promise<position.RunStatus>;
 
 export function GetStockValuation(arg1:market.ValuationQuery):Promise<market.StockValuation>;
 
+export function GetT0DailyResearchStatus():Promise<position.RunStatus>;
+
+export function GetT0TimeMachineStatus():Promise<position.RunStatus>;
+
 export function GetTask(arg1:string):Promise<task.DTO>;
 
 export function GetTaskLog(arg1:string,arg2:number):Promise<string>;
 
 export function GetTimeMachineDetail(arg1:string):Promise<result.TimeMachineDetail>;
 
+export function ListCrashWarningFeatures(arg1:string,arg2:number):Promise<Array<main.CrashWarningFeature>>;
+
+export function ListCrashWarningRuns(arg1:number):Promise<Array<main.CrashWarningRunSummary>>;
+
 export function ListDailyBars(arg1:market.DailyQuery):Promise<Array<market.DailyBar>>;
 
 export function ListDatasetUpdateStatus():Promise<Array<datafetch.DatasetStatus>>;
 
-export function ListFactorICResults(arg1:string,arg2:number):Promise<Array<main.FactorICResult>>;
+export function ListFactorAdmissionComparisons(arg1:number):Promise<Array<main.FactorAdmissionComparison>>;
 
 export function ListFactorCorrelationResults(arg1:string,arg2:number):Promise<Array<main.FactorCorrelationResult>>;
 
+export function ListFactorICResults(arg1:string,arg2:number):Promise<Array<main.FactorICResult>>;
+
 export function ListFactorLatestPredictions(arg1:string,arg2:number):Promise<Array<main.FactorLatestPrediction>>;
 
+export function ListFactorModelFeatures(arg1:string,arg2:number):Promise<Array<main.FactorModelFeature>>;
+
+export function ListFactorModelPredictions(arg1:string,arg2:number):Promise<Array<main.FactorModelPrediction>>;
+
 export function ListFactorResearchRuns(arg1:number):Promise<Array<main.FactorResearchRunSummary>>;
+
+export function ListFactorStateICResults(arg1:string,arg2:number):Promise<Array<main.FactorStateICResult>>;
 
 export function ListFactorStressResults(arg1:string,arg2:number):Promise<Array<main.FactorStressResult>>;
 
@@ -90,7 +110,25 @@ export function ListGovernanceDashboard():Promise<main.GovernanceDashboardDTO>;
 
 export function ListLimitBreakoutCandidates(arg1:market.BreakoutQuery):Promise<Array<market.LimitBreakoutCandidate>>;
 
+export function ListLimitBreakoutModelFeatures(arg1:string,arg2:number):Promise<Array<main.LimitUpModelFeature>>;
+
+export function ListLimitBreakoutModelPredictions(arg1:string,arg2:number):Promise<Array<main.LimitUpModelPrediction>>;
+
+export function ListLimitBreakoutModelRuns(arg1:number):Promise<Array<main.LimitUpModelRunSummary>>;
+
+export function ListLimitBreakoutModelTimeMachineSlices(arg1:string,arg2:number):Promise<Array<main.LimitUpModelTimeMachineSlice>>;
+
 export function ListLimitSignalEvaluationSummary():Promise<Array<market.LimitSignalEvaluationSummary>>;
+
+export function ListLimitSignalTimeMachineSlices(arg1:number):Promise<Array<market.LimitSignalTimeMachineSlice>>;
+
+export function ListLimitUpModelFeatures(arg1:string,arg2:number):Promise<Array<main.LimitUpModelFeature>>;
+
+export function ListLimitUpModelPredictions(arg1:string,arg2:number):Promise<Array<main.LimitUpModelPrediction>>;
+
+export function ListLimitUpModelRuns(arg1:number):Promise<Array<main.LimitUpModelRunSummary>>;
+
+export function ListLimitUpModelTimeMachineSlices(arg1:string,arg2:number):Promise<Array<main.LimitUpModelTimeMachineSlice>>;
 
 export function ListLimitUpMomentumCandidates(arg1:market.LimitUpMomentumQuery):Promise<Array<market.LimitUpMomentumCandidate>>;
 
@@ -103,6 +141,16 @@ export function ListRecommendationHindsight():Promise<Array<main.RecommendationH
 export function ListStockBasic(arg1:market.StockBasicQuery):Promise<Array<market.StockBasic>>;
 
 export function ListStrategyVersions(arg1:string):Promise<Array<main.StrategyVersionDTO>>;
+
+export function ListT0DailyBacktests(arg1:number):Promise<Array<main.T0DailyBacktest>>;
+
+export function ListT0DailyRuns(arg1:number):Promise<Array<main.T0DailyRunSummary>>;
+
+export function ListT0DataPullCandidates(arg1:number):Promise<Array<main.T0DataPullCandidate>>;
+
+export function ListT0Recommendations(arg1:number):Promise<Array<main.T0Recommendation>>;
+
+export function ListT0TimeMachineResults(arg1:number):Promise<Array<main.T0TimeMachineResult>>;
 
 export function ListTasks(arg1:task.Query):Promise<Array<task.DTO>>;
 
@@ -124,9 +172,17 @@ export function ReviewStrategyVersion(arg1:main.StrategyVersionActivateRequest):
 
 export function RunDataUpdate(arg1:datafetch.UpdateRequest):Promise<void>;
 
+export function RunLimitBreakoutModelTraining():Promise<void>;
+
 export function RunLimitSignalEvaluation():Promise<void>;
 
+export function RunLimitUpModelTraining():Promise<void>;
+
 export function RunPolicySupportAnalysis():Promise<void>;
+
+export function RunT0DailyResearch():Promise<void>;
+
+export function RunT0TimeMachine():Promise<void>;
 
 export function SaveSettings(arg1:config.Settings):Promise<main.SettingsResponse>;
 

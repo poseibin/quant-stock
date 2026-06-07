@@ -94,8 +94,7 @@ func (service *Service) ClearLimitUpMomentumCandidates() error {
 }
 
 func (repo *Repository) ListLimitUpMomentumCache(cacheKey string, limit int) ([]LimitUpMomentumCandidate, error) {
-	rows, err := repo.db.Conn().Query(`SELECT payload_json FROM market_limit_momentum_cache
-		WHERE cache_key = ? ORDER BY rank ASC LIMIT ?`, cacheKey, limit)
+	rows, err := repo.db.Conn().Query("SELECT payload_json FROM market_limit_momentum_cache WHERE cache_key = ? ORDER BY `rank` ASC LIMIT ?", cacheKey, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +143,7 @@ func (repo *Repository) ReplaceLimitUpMomentumCache(cacheKey string, items []Lim
 		return err
 	}
 	stmt, err := tx.Prepare(`INSERT INTO market_limit_momentum_cache (
-		cache_key, rank, ts_code, trade_date, score, payload_json, generated_at, updated_at
+		cache_key, ` + "`rank`" + `, ts_code, trade_date, score, payload_json, generated_at, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()

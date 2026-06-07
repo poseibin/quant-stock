@@ -20,6 +20,8 @@ def _task_type(task: str) -> str:
         return "evaluation"
     if task in {"limit_breakout", "limit_up_momentum", "t0_daily_research", "t0_daily_timemachine"}:
         return "market_scan"
+    if task in {"limit_up_model", "limit_breakout_model"}:
+        return "model_training"
     if task == "policy_support_analysis":
         return "analysis"
     return "python"

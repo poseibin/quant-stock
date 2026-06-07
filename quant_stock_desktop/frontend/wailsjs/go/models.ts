@@ -215,6 +215,70 @@ export namespace main {
 	        this.candidate_id = source["candidate_id"];
 	    }
 	}
+	export class CrashWarningFeature {
+	    run_id: string;
+	    feature: string;
+	    importance: number;
+	    rank_no: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CrashWarningFeature(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.feature = source["feature"];
+	        this.importance = source["importance"];
+	        this.rank_no = source["rank_no"];
+	    }
+	}
+	export class CrashWarningRunSummary {
+	    run_id: string;
+	    model_type: string;
+	    start_date: string;
+	    end_date: string;
+	    horizon: number;
+	    feature_count: number;
+	    status: string;
+	    model_path: string;
+	    rows: number;
+	    positive_rate: number;
+	    roc_auc: number;
+	    avg_precision: number;
+	    top10_precision: number;
+	    top10_capture: number;
+	    p90_precision: number;
+	    p90_recall: number;
+	    summary_json: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CrashWarningRunSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.model_type = source["model_type"];
+	        this.start_date = source["start_date"];
+	        this.end_date = source["end_date"];
+	        this.horizon = source["horizon"];
+	        this.feature_count = source["feature_count"];
+	        this.status = source["status"];
+	        this.model_path = source["model_path"];
+	        this.rows = source["rows"];
+	        this.positive_rate = source["positive_rate"];
+	        this.roc_auc = source["roc_auc"];
+	        this.avg_precision = source["avg_precision"];
+	        this.top10_precision = source["top10_precision"];
+	        this.top10_capture = source["top10_capture"];
+	        this.p90_precision = source["p90_precision"];
+	        this.p90_recall = source["p90_recall"];
+	        this.summary_json = source["summary_json"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class DataSnapshotDTO {
 	    id: string;
 	    subject_type: string;
@@ -233,6 +297,80 @@ export namespace main {
 	        this.subject_id = source["subject_id"];
 	        this.snapshot = source["snapshot"];
 	        this.created_at = source["created_at"];
+	    }
+	}
+	export class FactorAdmissionComparison {
+	    run_id: string;
+	    strategy: string;
+	    admission: string;
+	    admission_score: number;
+	    reason: string;
+	    annual_return: number;
+	    total_return: number;
+	    max_drawdown: number;
+	    sharpe: number;
+	    avg_turnover: number;
+	    effective_start: string;
+	    effective_end: string;
+	    stress_penalty: number;
+	    stress_bad_event_count: number;
+	    stress_crash_state_failed: boolean;
+	    stress_weak_drawdown_failed: boolean;
+	    generated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorAdmissionComparison(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.strategy = source["strategy"];
+	        this.admission = source["admission"];
+	        this.admission_score = source["admission_score"];
+	        this.reason = source["reason"];
+	        this.annual_return = source["annual_return"];
+	        this.total_return = source["total_return"];
+	        this.max_drawdown = source["max_drawdown"];
+	        this.sharpe = source["sharpe"];
+	        this.avg_turnover = source["avg_turnover"];
+	        this.effective_start = source["effective_start"];
+	        this.effective_end = source["effective_end"];
+	        this.stress_penalty = source["stress_penalty"];
+	        this.stress_bad_event_count = source["stress_bad_event_count"];
+	        this.stress_crash_state_failed = source["stress_crash_state_failed"];
+	        this.stress_weak_drawdown_failed = source["stress_weak_drawdown_failed"];
+	        this.generated_at = source["generated_at"];
+	    }
+	}
+	export class FactorCorrelationResult {
+	    run_id: string;
+	    feature_a: string;
+	    feature_b: string;
+	    correlation: number;
+	    abs_correlation: number;
+	    family_a: string;
+	    family_b: string;
+	    keep_feature: string;
+	    drop_feature: string;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorCorrelationResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.feature_a = source["feature_a"];
+	        this.feature_b = source["feature_b"];
+	        this.correlation = source["correlation"];
+	        this.abs_correlation = source["abs_correlation"];
+	        this.family_a = source["family_a"];
+	        this.family_b = source["family_b"];
+	        this.keep_feature = source["keep_feature"];
+	        this.drop_feature = source["drop_feature"];
+	        this.reason = source["reason"];
 	    }
 	}
 	export class FactorICResult {
@@ -269,36 +407,6 @@ export namespace main {
 	        this.monotonic_score = source["monotonic_score"];
 	    }
 	}
-	export class FactorCorrelationResult {
-	    run_id: string;
-	    feature_a: string;
-	    feature_b: string;
-	    correlation: number;
-	    abs_correlation: number;
-	    family_a: string;
-	    family_b: string;
-	    keep_feature: string;
-	    drop_feature: string;
-	    reason: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new FactorCorrelationResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.run_id = source["run_id"];
-	        this.feature_a = source["feature_a"];
-	        this.feature_b = source["feature_b"];
-	        this.correlation = source["correlation"];
-	        this.abs_correlation = source["abs_correlation"];
-	        this.family_a = source["family_a"];
-	        this.family_b = source["family_b"];
-	        this.keep_feature = source["keep_feature"];
-	        this.drop_feature = source["drop_feature"];
-	        this.reason = source["reason"];
-	    }
-	}
 	export class FactorLatestPrediction {
 	    run_id: string;
 	    trade_date: string;
@@ -323,44 +431,48 @@ export namespace main {
 	        this.model_path = source["model_path"];
 	    }
 	}
-	export class FactorStressResult {
+	export class FactorModelFeature {
 	    run_id: string;
-	    bucket_type: string;
-	    bucket_key: string;
-	    bucket_label: string;
-	    start_date: string;
-	    end_date: string;
-	    n_days: number;
-	    total_return: number;
-	    annual_return: number;
-	    max_drawdown: number;
-	    sharpe: number;
-	    win_rate: number;
-	    avg_daily_return: number;
-	    volatility: number;
+	    feature: string;
+	    importance: number;
+	    rank_no: number;
 	    summary_json: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new FactorStressResult(source);
+	        return new FactorModelFeature(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.run_id = source["run_id"];
-	        this.bucket_type = source["bucket_type"];
-	        this.bucket_key = source["bucket_key"];
-	        this.bucket_label = source["bucket_label"];
-	        this.start_date = source["start_date"];
-	        this.end_date = source["end_date"];
-	        this.n_days = source["n_days"];
-	        this.total_return = source["total_return"];
-	        this.annual_return = source["annual_return"];
-	        this.max_drawdown = source["max_drawdown"];
-	        this.sharpe = source["sharpe"];
-	        this.win_rate = source["win_rate"];
-	        this.avg_daily_return = source["avg_daily_return"];
-	        this.volatility = source["volatility"];
+	        this.feature = source["feature"];
+	        this.importance = source["importance"];
+	        this.rank_no = source["rank_no"];
 	        this.summary_json = source["summary_json"];
+	    }
+	}
+	export class FactorModelPrediction {
+	    run_id: string;
+	    trade_date: string;
+	    ts_code: string;
+	    pred_score: number;
+	    realized_return: number;
+	    pred_rank: number;
+	    test_year: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorModelPrediction(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.trade_date = source["trade_date"];
+	        this.ts_code = source["ts_code"];
+	        this.pred_score = source["pred_score"];
+	        this.realized_return = source["realized_return"];
+	        this.pred_rank = source["pred_rank"];
+	        this.test_year = source["test_year"];
 	    }
 	}
 	export class FactorModelRun {
@@ -427,6 +539,82 @@ export namespace main {
 	        this.updated_at = source["updated_at"];
 	        this.model_status = source["model_status"];
 	        this.rank_ic = source["rank_ic"];
+	    }
+	}
+	export class FactorStateICResult {
+	    run_id: string;
+	    factor: string;
+	    family: string;
+	    variant: string;
+	    horizon: string;
+	    market_state: string;
+	    rank_ic_mean: number;
+	    ic_win_rate: number;
+	    icir: number;
+	    n_periods: number;
+	    n_obs: number;
+	    status: string;
+	    summary_json: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorStateICResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.factor = source["factor"];
+	        this.family = source["family"];
+	        this.variant = source["variant"];
+	        this.horizon = source["horizon"];
+	        this.market_state = source["market_state"];
+	        this.rank_ic_mean = source["rank_ic_mean"];
+	        this.ic_win_rate = source["ic_win_rate"];
+	        this.icir = source["icir"];
+	        this.n_periods = source["n_periods"];
+	        this.n_obs = source["n_obs"];
+	        this.status = source["status"];
+	        this.summary_json = source["summary_json"];
+	    }
+	}
+	export class FactorStressResult {
+	    run_id: string;
+	    bucket_type: string;
+	    bucket_key: string;
+	    bucket_label: string;
+	    start_date: string;
+	    end_date: string;
+	    n_days: number;
+	    total_return: number;
+	    annual_return: number;
+	    max_drawdown: number;
+	    sharpe: number;
+	    win_rate: number;
+	    avg_daily_return: number;
+	    volatility: number;
+	    summary_json: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorStressResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.bucket_type = source["bucket_type"];
+	        this.bucket_key = source["bucket_key"];
+	        this.bucket_label = source["bucket_label"];
+	        this.start_date = source["start_date"];
+	        this.end_date = source["end_date"];
+	        this.n_days = source["n_days"];
+	        this.total_return = source["total_return"];
+	        this.annual_return = source["annual_return"];
+	        this.max_drawdown = source["max_drawdown"];
+	        this.sharpe = source["sharpe"];
+	        this.win_rate = source["win_rate"];
+	        this.avg_daily_return = source["avg_daily_return"];
+	        this.volatility = source["volatility"];
+	        this.summary_json = source["summary_json"];
 	    }
 	}
 	export class ResearchReportDTO {
@@ -702,6 +890,158 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class LimitUpModelFeature {
+	    run_id: string;
+	    feature: string;
+	    importance: number;
+	    rank_no: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LimitUpModelFeature(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.feature = source["feature"];
+	        this.importance = source["importance"];
+	        this.rank_no = source["rank_no"];
+	    }
+	}
+	export class LimitUpModelPrediction {
+	    run_id: string;
+	    trade_date: string;
+	    ts_code: string;
+	    name: string;
+	    industry: string;
+	    price: number;
+	    high: number;
+	    low: number;
+	    today_pct: number;
+	    prob: number;
+	    model_score: number;
+	    label: number;
+	    fwd5_return: number;
+	    fwd5_max_return: number;
+	    max_drawdown_5d: number;
+	    hit_limit_up_5d: number;
+	    is_latest: boolean;
+	    summary_json: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LimitUpModelPrediction(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.trade_date = source["trade_date"];
+	        this.ts_code = source["ts_code"];
+	        this.name = source["name"];
+	        this.industry = source["industry"];
+	        this.price = source["price"];
+	        this.high = source["high"];
+	        this.low = source["low"];
+	        this.today_pct = source["today_pct"];
+	        this.prob = source["prob"];
+	        this.model_score = source["model_score"];
+	        this.label = source["label"];
+	        this.fwd5_return = source["fwd5_return"];
+	        this.fwd5_max_return = source["fwd5_max_return"];
+	        this.max_drawdown_5d = source["max_drawdown_5d"];
+	        this.hit_limit_up_5d = source["hit_limit_up_5d"];
+	        this.is_latest = source["is_latest"];
+	        this.summary_json = source["summary_json"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class LimitUpModelRunSummary {
+	    run_id: string;
+	    start_date: string;
+	    end_date: string;
+	    horizon: number;
+	    model_type: string;
+	    feature_count: number;
+	    status: string;
+	    model_path: string;
+	    rows: number;
+	    candidate_rows: number;
+	    latest_date: string;
+	    latest_count: number;
+	    positive_rate: number;
+	    baseline_return: number;
+	    top_return: number;
+	    top_excess_return: number;
+	    top_hit_rate: number;
+	    top_limit_up_rate: number;
+	    top_drawdown: number;
+	    rank_ic: number;
+	    summary_json: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LimitUpModelRunSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.start_date = source["start_date"];
+	        this.end_date = source["end_date"];
+	        this.horizon = source["horizon"];
+	        this.model_type = source["model_type"];
+	        this.feature_count = source["feature_count"];
+	        this.status = source["status"];
+	        this.model_path = source["model_path"];
+	        this.rows = source["rows"];
+	        this.candidate_rows = source["candidate_rows"];
+	        this.latest_date = source["latest_date"];
+	        this.latest_count = source["latest_count"];
+	        this.positive_rate = source["positive_rate"];
+	        this.baseline_return = source["baseline_return"];
+	        this.top_return = source["top_return"];
+	        this.top_excess_return = source["top_excess_return"];
+	        this.top_hit_rate = source["top_hit_rate"];
+	        this.top_limit_up_rate = source["top_limit_up_rate"];
+	        this.top_drawdown = source["top_drawdown"];
+	        this.rank_ic = source["rank_ic"];
+	        this.summary_json = source["summary_json"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class LimitUpModelTimeMachineSlice {
+	    run_id: string;
+	    trade_date: string;
+	    candidate_count: number;
+	    top_count: number;
+	    avg_return: number;
+	    avg_max_return: number;
+	    hit_rate: number;
+	    limit_up_hit_rate: number;
+	    avg_drawdown: number;
+	    rank_ic: number;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LimitUpModelTimeMachineSlice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.trade_date = source["trade_date"];
+	        this.candidate_count = source["candidate_count"];
+	        this.top_count = source["top_count"];
+	        this.avg_return = source["avg_return"];
+	        this.avg_max_return = source["avg_max_return"];
+	        this.hit_rate = source["hit_rate"];
+	        this.limit_up_hit_rate = source["limit_up_hit_rate"];
+	        this.avg_drawdown = source["avg_drawdown"];
+	        this.rank_ic = source["rank_ic"];
+	        this.updated_at = source["updated_at"];
+	    }
 	}
 	
 	
@@ -979,6 +1319,252 @@ export namespace main {
 	        this.strategy = source["strategy"];
 	        this.version = source["version"];
 	        this.status = source["status"];
+	    }
+	}
+	export class T0DailyBacktest {
+	    run_id: string;
+	    ts_code: string;
+	    name: string;
+	    industry: string;
+	    n_days: number;
+	    n_candidates: number;
+	    two_sided_rate: number;
+	    one_sided_rate: number;
+	    avg_edge: number;
+	    total_edge: number;
+	    avg_next_range: number;
+	    score: number;
+	    summary_json: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new T0DailyBacktest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.ts_code = source["ts_code"];
+	        this.name = source["name"];
+	        this.industry = source["industry"];
+	        this.n_days = source["n_days"];
+	        this.n_candidates = source["n_candidates"];
+	        this.two_sided_rate = source["two_sided_rate"];
+	        this.one_sided_rate = source["one_sided_rate"];
+	        this.avg_edge = source["avg_edge"];
+	        this.total_edge = source["total_edge"];
+	        this.avg_next_range = source["avg_next_range"];
+	        this.score = source["score"];
+	        this.summary_json = source["summary_json"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class T0DailyRunSummary {
+	    run_id: string;
+	    trade_date: string;
+	    status: string;
+	    candidate_count: number;
+	    backtest_count: number;
+	    summary_json: string;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new T0DailyRunSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.trade_date = source["trade_date"];
+	        this.status = source["status"];
+	        this.candidate_count = source["candidate_count"];
+	        this.backtest_count = source["backtest_count"];
+	        this.summary_json = source["summary_json"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class T0DataPullCandidate {
+	    ts_code: string;
+	    name: string;
+	    industry: string;
+	    trade_date: string;
+	    action: string;
+	    score: number;
+	    state: string;
+	    setup: string;
+	    first_action: string;
+	    price: number;
+	    reduce_price: number;
+	    buy_price: number;
+	    stop_price: number;
+	    t_ratio: number;
+	    today_pct: number;
+	    return_5d: number;
+	    return_20d: number;
+	    avg_range_20d: number;
+	    drawdown_20d: number;
+	    amount: number;
+	    avg_amount_20d: number;
+	    expected_edge: number;
+	    target_freq: string;
+	    lookback_days: number;
+	    plan_json: string;
+	    reasons: string[];
+	    risks: string[];
+	    generated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new T0DataPullCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ts_code = source["ts_code"];
+	        this.name = source["name"];
+	        this.industry = source["industry"];
+	        this.trade_date = source["trade_date"];
+	        this.action = source["action"];
+	        this.score = source["score"];
+	        this.state = source["state"];
+	        this.setup = source["setup"];
+	        this.first_action = source["first_action"];
+	        this.price = source["price"];
+	        this.reduce_price = source["reduce_price"];
+	        this.buy_price = source["buy_price"];
+	        this.stop_price = source["stop_price"];
+	        this.t_ratio = source["t_ratio"];
+	        this.today_pct = source["today_pct"];
+	        this.return_5d = source["return_5d"];
+	        this.return_20d = source["return_20d"];
+	        this.avg_range_20d = source["avg_range_20d"];
+	        this.drawdown_20d = source["drawdown_20d"];
+	        this.amount = source["amount"];
+	        this.avg_amount_20d = source["avg_amount_20d"];
+	        this.expected_edge = source["expected_edge"];
+	        this.target_freq = source["target_freq"];
+	        this.lookback_days = source["lookback_days"];
+	        this.plan_json = source["plan_json"];
+	        this.reasons = source["reasons"];
+	        this.risks = source["risks"];
+	        this.generated_at = source["generated_at"];
+	    }
+	}
+	export class T0Recommendation {
+	    ts_code: string;
+	    name: string;
+	    industry: string;
+	    trade_date: string;
+	    action: string;
+	    recommendation: string;
+	    score: number;
+	    state: string;
+	    setup: string;
+	    first_action: string;
+	    shares: number;
+	    max_t0_shares: number;
+	    price: number;
+	    avg_cost: number;
+	    position_weight: number;
+	    today_pct: number;
+	    return_5d: number;
+	    return_20d: number;
+	    avg_range_20d: number;
+	    drawdown_20d: number;
+	    amount: number;
+	    buy_back_price: number;
+	    reduce_price: number;
+	    stop_price: number;
+	    t_ratio: number;
+	    expected_edge: number;
+	    plan_json: string;
+	    reasons: string[];
+	    risks: string[];
+	    generated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new T0Recommendation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ts_code = source["ts_code"];
+	        this.name = source["name"];
+	        this.industry = source["industry"];
+	        this.trade_date = source["trade_date"];
+	        this.action = source["action"];
+	        this.recommendation = source["recommendation"];
+	        this.score = source["score"];
+	        this.state = source["state"];
+	        this.setup = source["setup"];
+	        this.first_action = source["first_action"];
+	        this.shares = source["shares"];
+	        this.max_t0_shares = source["max_t0_shares"];
+	        this.price = source["price"];
+	        this.avg_cost = source["avg_cost"];
+	        this.position_weight = source["position_weight"];
+	        this.today_pct = source["today_pct"];
+	        this.return_5d = source["return_5d"];
+	        this.return_20d = source["return_20d"];
+	        this.avg_range_20d = source["avg_range_20d"];
+	        this.drawdown_20d = source["drawdown_20d"];
+	        this.amount = source["amount"];
+	        this.buy_back_price = source["buy_back_price"];
+	        this.reduce_price = source["reduce_price"];
+	        this.stop_price = source["stop_price"];
+	        this.t_ratio = source["t_ratio"];
+	        this.expected_edge = source["expected_edge"];
+	        this.plan_json = source["plan_json"];
+	        this.reasons = source["reasons"];
+	        this.risks = source["risks"];
+	        this.generated_at = source["generated_at"];
+	    }
+	}
+	export class T0TimeMachineResult {
+	    run_id: string;
+	    ts_code: string;
+	    name: string;
+	    industry: string;
+	    as_of_date: string;
+	    eval_start_date: string;
+	    eval_end_date: string;
+	    score: number;
+	    n_eval_days: number;
+	    two_sided_count: number;
+	    one_sided_count: number;
+	    t0_edge: number;
+	    avg_t0_edge: number;
+	    underlying_return: number;
+	    combined_return: number;
+	    max_drawdown: number;
+	    summary_json: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new T0TimeMachineResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.ts_code = source["ts_code"];
+	        this.name = source["name"];
+	        this.industry = source["industry"];
+	        this.as_of_date = source["as_of_date"];
+	        this.eval_start_date = source["eval_start_date"];
+	        this.eval_end_date = source["eval_end_date"];
+	        this.score = source["score"];
+	        this.n_eval_days = source["n_eval_days"];
+	        this.two_sided_count = source["two_sided_count"];
+	        this.one_sided_count = source["one_sided_count"];
+	        this.t0_edge = source["t0_edge"];
+	        this.avg_t0_edge = source["avg_t0_edge"];
+	        this.underlying_return = source["underlying_return"];
+	        this.combined_return = source["combined_return"];
+	        this.max_drawdown = source["max_drawdown"];
+	        this.summary_json = source["summary_json"];
+	        this.updated_at = source["updated_at"];
 	    }
 	}
 	export class ValidationReviewDTO {
@@ -1341,6 +1927,66 @@ export namespace market {
 	        this.avg_score = source["avg_score"];
 	        this.recommendation = source["recommendation"];
 	        this.parameter_hint = source["parameter_hint"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class LimitSignalTimeMachineSlice {
+	    signal_type: string;
+	    strategy_version: string;
+	    parameter_key: string;
+	    signal_date: string;
+	    candidate_count: number;
+	    evaluated_count: number;
+	    hit_rate: number;
+	    limit_up_hit_rate: number;
+	    avg_return_1d: number;
+	    avg_return_3d: number;
+	    avg_return_5d: number;
+	    avg_return_10d: number;
+	    avg_target_return: number;
+	    avg_max_drawdown_5d: number;
+	    avg_score: number;
+	    slice_score: number;
+	    market_heat_score: number;
+	    limit_up_count: number;
+	    limit_up_ratio: number;
+	    up_ratio: number;
+	    hot_tags_json: string;
+	    top_industries_json: string;
+	    recommendation: string;
+	    summary_json: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LimitSignalTimeMachineSlice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.signal_type = source["signal_type"];
+	        this.strategy_version = source["strategy_version"];
+	        this.parameter_key = source["parameter_key"];
+	        this.signal_date = source["signal_date"];
+	        this.candidate_count = source["candidate_count"];
+	        this.evaluated_count = source["evaluated_count"];
+	        this.hit_rate = source["hit_rate"];
+	        this.limit_up_hit_rate = source["limit_up_hit_rate"];
+	        this.avg_return_1d = source["avg_return_1d"];
+	        this.avg_return_3d = source["avg_return_3d"];
+	        this.avg_return_5d = source["avg_return_5d"];
+	        this.avg_return_10d = source["avg_return_10d"];
+	        this.avg_target_return = source["avg_target_return"];
+	        this.avg_max_drawdown_5d = source["avg_max_drawdown_5d"];
+	        this.avg_score = source["avg_score"];
+	        this.slice_score = source["slice_score"];
+	        this.market_heat_score = source["market_heat_score"];
+	        this.limit_up_count = source["limit_up_count"];
+	        this.limit_up_ratio = source["limit_up_ratio"];
+	        this.up_ratio = source["up_ratio"];
+	        this.hot_tags_json = source["hot_tags_json"];
+	        this.top_industries_json = source["top_industries_json"];
+	        this.recommendation = source["recommendation"];
+	        this.summary_json = source["summary_json"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}
@@ -2239,3 +2885,4 @@ export namespace task {
 	}
 
 }
+

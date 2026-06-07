@@ -5,7 +5,9 @@ Usage (mirrors original python invocations):
   quant_worker scripts/data_update_worker.py [args...]
   quant_worker scripts/scan_market_files.py [args...]
   quant_worker scripts/limit_breakout_worker.py [args...]
+  quant_worker scripts/limit_breakout_model_worker.py [args...]
   quant_worker scripts/limit_up_momentum_worker.py [args...]
+  quant_worker scripts/limit_up_model_worker.py [args...]
   quant_worker scripts/evaluate_strategies.py [args...]
   quant_worker scripts/crash_warning_model_worker.py [args...]
   quant_worker scripts/optimize_portfolio.py [args...]
@@ -41,7 +43,9 @@ def main() -> None:
         "scripts/data_update_worker.py": "scripts.data_update_worker",
         "scripts/scan_market_files.py": "scripts.scan_market_files",
         "scripts/limit_breakout_worker.py": "scripts.limit_breakout_worker",
+        "scripts/limit_breakout_model_worker.py": "scripts.limit_breakout_model_worker",
         "scripts/limit_up_momentum_worker.py": "scripts.limit_up_momentum_worker",
+        "scripts/limit_up_model_worker.py": "scripts.limit_up_model_worker",
         "scripts/t0_daily_worker.py": "scripts.t0_daily_worker",
         "scripts/evaluate_strategies.py": "scripts.evaluate_strategies",
         "scripts/crash_warning_model_worker.py": "scripts.crash_warning_model_worker",

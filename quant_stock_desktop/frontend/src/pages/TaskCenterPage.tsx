@@ -7,9 +7,8 @@ import { LineChart } from 'echarts/charts'
 import { CanvasRenderer } from 'echarts/renderers'
 import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getSignalPortfolioContext, getTimeMachineDetail, listTasks, listValidationEvidence, refreshTaskStatus, retryTask, startTask, type SignalPortfolioCandidate, type SignalPortfolioContext, type TaskDTO, type TimeMachineDetail, type ValidationEvidence } from '../services/app'
 import { formatDate } from '../components/format'
-import { LimitSignalEvaluationPanel } from './LimitSignalEvaluationPanel'
 
-const evaluationTaskTypes = new Set(['evaluation_time_machine', 'eval_strategy_admission', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
+const evaluationTaskTypes = new Set(['evaluation_time_machine', 'eval_strategy_admission', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment', 'limit_signal_evaluation', 't0_daily_research', 't0_daily_timemachine'])
 const evaluationHorizon = {
   fullCycleStartDate: '20100101',
   admissionYears: 5,
@@ -21,7 +20,7 @@ const evaluationHorizon = {
 echarts.use([CanvasRenderer, DataZoomComponent, GridComponent, LineChart, TitleComponent, TooltipComponent])
 
 export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
-  const [activeMode, setActiveMode] = useState<'timeMachine' | 'limitSignals' | 'portfolioAnalysis'>('timeMachine')
+  const [activeMode, setActiveMode] = useState<'timeMachine' | 'portfolioAnalysis'>('timeMachine')
   const [tasks, setTasks] = useState<TaskDTO[]>([])
   const [selectedTask, setSelectedTask] = useState<TaskDTO | null>(null)
   const [detail, setDetail] = useState<TimeMachineDetail | null>(null)
@@ -417,6 +416,17 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
         />
       )
     }
+    if (selectedTask.task_type === 'limit_signal_evaluation' || selectedTask.task_type === 't0_daily_research' || selectedTask.task_type === 't0_daily_timemachine') {
+      return (
+        <MarketEvaluationDetail
+          task={selectedTask}
+          onBack={() => { setSelectedTask(null); setDetail(null) }}
+          onRefresh={() => showDetail(selectedTask.id)}
+          onStart={() => onStart(selectedTask.id)}
+          onCancel={async () => { await cancelTask(selectedTask.id); await showDetail(selectedTask.id) }}
+        />
+      )
+    }
     return (
       <div className="emptyState">
         <h2>非评估任务</h2>
@@ -430,12 +440,9 @@ export function TaskCenterPage({ onOpenResearch }: { onOpenResearch?: (tsCode: s
     <div className="taskPage">
       <div className="taskModeTabs">
         <button className={activeMode === 'timeMachine' ? 'active' : ''} onClick={() => setActiveMode('timeMachine')}>时光机评估</button>
-        <button className={activeMode === 'limitSignals' ? 'active' : ''} onClick={() => setActiveMode('limitSignals')}>涨停模型评估</button>
         <button className={activeMode === 'portfolioAnalysis' ? 'active' : ''} onClick={() => setActiveMode('portfolioAnalysis')}>策略评估分析</button>
       </div>
-      {activeMode === 'limitSignals' ? (
-        <LimitSignalEvaluationPanel />
-      ) : activeMode === 'portfolioAnalysis' ? (
+      {activeMode === 'portfolioAnalysis' ? (
         <PortfolioAnalysisPanel />
       ) : (
         <>
@@ -569,6 +576,61 @@ function PortfolioAnalysisRow({ item }: { item: SignalPortfolioCandidate }) {
       <span>{nullableNumber(item.avg_holdings, 1)}</span>
       <span>{rebalanceLabel(item.rebalance_freq)}</span>
       <span className="portfolioWeights">{formatCandidateWeights(item.weights)}</span>
+    </div>
+  )
+}
+
+function MarketEvaluationDetail({ task, onBack, onRefresh, onStart, onCancel }: {
+  task: TaskDTO
+  onBack: () => void
+  onRefresh: () => void
+  onStart: () => void
+  onCancel: () => void
+}) {
+  useEffect(() => {
+    if (task.status !== 'running') return
+    const timer = window.setInterval(onRefresh, 1200)
+    return () => window.clearInterval(timer)
+  }, [task.status, onRefresh])
+
+  const stage = String(task.summary.stage || '')
+  const name = String(task.summary.name || '')
+  const message = String(task.summary.message || task.error_message || '')
+  const idx = numberOf(task.summary.idx, 0)
+  const total = numberOf(task.summary.total, 0)
+  const progressText = total > 0 ? `${idx}/${total}` : `${Math.round(task.progress * 100)}%`
+  const canStart = task.status === 'created' || task.status === 'queued' || task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled'
+  return (
+    <div className="taskDetailPage">
+      <button className="secondaryButton quietButton" onClick={onBack}><ArrowLeft size={15} />返回任务列表</button>
+      <section className="dashboardPanel">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">MARKET EVALUATION TASK</div>
+            <div className="dashboardPanelTitle">{task.name}</div>
+            <div className="cardHint">{taskTypeLabel(task)} · {statusText(task.status)} · {task.external_run_id || task.id}</div>
+          </div>
+          <div className="taskActions">
+            <button className="secondaryButton quietButton" onClick={onRefresh}><RefreshCw size={15} />刷新</button>
+            {canStart && <button className="primaryButton" onClick={onStart}><Play size={15} />启动</button>}
+            {task.status === 'running' && <button className="secondaryButton quietButton" onClick={onCancel}><Square size={15} />取消</button>}
+          </div>
+        </div>
+        <div className="signalProgress breakoutRefreshProgress">
+          <div className="signalProgressHeader">
+            <span>{stage || name || '等待进度'}</span>
+            <span>{progressText}</span>
+          </div>
+          <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: `${Math.round(task.progress * 100)}%` }} /></div>
+          {message && <div className={task.status === 'failed' || task.status === 'interrupted' ? 'errorText' : 'cardHint'}>{message}</div>}
+        </div>
+        <div className="metricStrip compactMetrics">
+          <Metric label="状态" value={statusText(task.status)} />
+          <Metric label="进度" value={`${Math.round(task.progress * 100)}%`} hint={progressText} />
+          <Metric label="阶段" value={stage || '—'} hint={name || undefined} />
+          <Metric label="日志" value={task.log_path ? '已写入' : '—'} hint={task.log_path || undefined} />
+        </div>
+      </section>
     </div>
   )
 }
@@ -1766,6 +1828,9 @@ function taskTypeLabel(task: TaskDTO) {
   if (task.task_type === 'parameter_experiment') return task.parent_id ? '参数子任务' : '参数实验'
   if (task.task_type === 'eval_strategy_admission') return '策略准入'
   if (task.task_type === 'evaluation_time_machine') return '时光机'
+  if (task.task_type === 'limit_signal_evaluation') return '涨停切面评估'
+  if (task.task_type === 't0_daily_research') return 'T0研究'
+  if (task.task_type === 't0_daily_timemachine') return 'T0时光机'
   return task.task_type
 }
 

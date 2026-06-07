@@ -142,7 +142,9 @@ button:active:not(:disabled) {
 
 .main > .topbar,
 .main > .content {
+  width: 100%;
   max-width: 1480px;
+  min-width: 0;
   margin-left: auto;
   margin-right: auto;
 }
@@ -178,6 +180,7 @@ h1 {
 }
 
 .content {
+  min-width: 0;
   min-height: calc(100vh - 128px);
 }
 
@@ -1909,7 +1912,9 @@ h1 {
 }
 
 .positionPage {
+  width: 100%;
   max-width: 1280px;
+  min-width: 0;
 }
 
 .pageToolbar {
@@ -1932,6 +1937,8 @@ h1 {
 .pageToolbar p {
   margin: 8px 0 0;
   color: #8f9ab3;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .sectionLabel {
@@ -2211,10 +2218,27 @@ h1 {
 
 .signalProgressHeader {
   display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 6px 12px;
   font-size: 13px;
   color: #b8c2d8;
   margin-bottom: 8px;
+}
+
+.signalProgressHeader span:first-child {
+  flex: 1 1 260px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.signalProgressHeader span:last-child {
+  flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
+  line-height: 1.45;
 }
 
 .signalProgressBar {
@@ -3734,10 +3758,11 @@ th {
 }
 
 .factorHero {
-  align-items: stretch;
+  align-items: center;
 }
 
 .factorHeroActions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -3750,6 +3775,15 @@ th {
   margin-top: 0;
   padding: 0 14px;
   gap: 8px;
+  white-space: nowrap;
+}
+
+.factorHeroActions .secondaryButton {
+  min-width: 98px;
+}
+
+.factorHeroActions .primaryButton {
+  min-width: 112px;
 }
 
 .factorHeroActions button:disabled {
@@ -4241,10 +4275,49 @@ th {
   margin-top: 8px;
 }
 
+.projectionChartWrap {
+  min-width: 920px;
+}
+
+.projectionMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0 10px;
+}
+
+.projectionMeta span {
+  padding: 6px 10px;
+  color: #dfe6f7;
+  border: 1px solid rgba(255, 176, 0, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 176, 0, 0.07);
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.projectionHint {
+  margin-bottom: 12px;
+  color: #8f9ab3;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.limitProjectionEchart {
+  width: 100%;
+  height: 440px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(8, 11, 18, 0.42);
+}
+
 .breakoutPage {
   display: grid;
-  gap: 16px;
+  gap: 0;
+  width: 100%;
   max-width: 1480px;
+  min-width: 0;
 }
 
 .breakoutHero {
@@ -4310,8 +4383,184 @@ th {
   background: rgba(13, 18, 28, 0.58);
 }
 
+.evaluationModeTabs {
+  margin-top: 18px;
+}
+
+.evaluationModeTabs button {
+  min-width: 190px;
+  padding-top: 13px;
+  padding-bottom: 12px;
+  font-size: 13px;
+}
+
+.positionTabs,
+.researchTabs,
+.taskModeTabs,
+.inlineTabs,
+.limitEvaluationTabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 34px;
+  width: 100%;
+  margin: 24px 0 22px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.taskModeTabs {
+  width: 100%;
+  margin-left: 0;
+}
+
+.positionTabs button,
+.researchTabs button,
+.taskModeTabs button,
+.inlineTabs button,
+.limitEvaluationTabs button {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  min-width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0 0 14px;
+  color: #8f9ab3;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 850;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: color 0.16s ease;
+}
+
+.inlineTabs button + button {
+  margin-left: 0;
+}
+
+.positionTabs button:not(.active),
+.researchTabs button:not(.active),
+.taskModeTabs button:not(.active),
+.inlineTabs button:not(.active),
+.limitEvaluationTabs button:not(.active) {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.positionTabs button:hover,
+.researchTabs button:hover,
+.taskModeTabs button:hover,
+.inlineTabs button:hover,
+.limitEvaluationTabs button:hover {
+  color: #dfe6f7;
+  border-color: transparent;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.positionTabs button.active,
+.researchTabs button.active,
+.taskModeTabs button.active,
+.inlineTabs button.active,
+.limitEvaluationTabs button.active {
+  color: #eef2ff;
+  border: 0;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.taskModeTabs button.active::before {
+  display: none;
+}
+
+.positionTabs button.active::after,
+.researchTabs button.active::after,
+.taskModeTabs button.active::after,
+.inlineTabs button.active::after,
+.limitEvaluationTabs button.active::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 3px;
+  border-radius: 999px;
+  background: #ffb000;
+  content: '';
+}
+
+.researchTabs button:disabled,
+.positionTabs button:disabled,
+.taskModeTabs button:disabled,
+.inlineTabs button:disabled,
+.limitEvaluationTabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.evaluationModeTabs {
+  gap: 28px;
+  margin-top: 18px;
+  margin-bottom: 18px;
+}
+
+.signalViewTabs {
+  gap: 34px;
+  margin: 24px 0 22px;
+  padding-left: 0;
+}
+
+.pageTabsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.pageTabsHeader .signalViewTabs {
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+
+.dataUpdatedPill {
+  flex: 0 0 auto;
+  color: #8f9ab3;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.breakoutPage > .signalViewTabs {
+  margin-top: 0;
+}
+
+.breakoutPage > .pageTabsHeader {
+  margin-top: 0;
+}
+
+.signalViewTabs button {
+  color: #9aa6bf;
+}
+
 .breakoutRecommendPanel {
-  padding: 18px;
+  padding: 16px 18px 18px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 18px;
   background: rgba(23, 29, 41, 0.76);
@@ -4323,7 +4572,7 @@ th {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .breakoutRecommendCount {
@@ -4339,14 +4588,16 @@ th {
 .breakoutRecommendGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .breakoutRecommendCard {
   display: grid;
-  gap: 6px;
+  grid-template-rows: auto auto auto auto;
+  gap: 5px;
   min-width: 0;
-  padding: 14px;
+  min-height: 132px;
+  padding: 13px 14px;
   color: #eef2ff;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
@@ -4372,7 +4623,7 @@ th {
 .breakoutRecommendCard b {
   overflow: hidden;
   color: #eef2ff;
-  font-size: 18px;
+  font-size: 17px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4383,6 +4634,26 @@ th {
   border-radius: 999px;
   background: rgba(255, 176, 0, 0.12);
   font-size: 12px;
+}
+
+.breakoutRecommendMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.breakoutRecommendMeta i {
+  min-width: 0;
+  overflow: hidden;
+  color: #8f9ab3;
+  font-size: 12px;
+  font-style: normal;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .breakoutRankBadge {
@@ -4402,8 +4673,447 @@ th {
   color: #ffdf7e;
 }
 
+.limitModelPanel {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(23, 29, 41, 0.72);
+  overflow: hidden;
+}
+
+.limitModelPanel > .tableHeader {
+  align-items: flex-start;
+}
+
+.limitModelPanel > * {
+  min-width: 0;
+}
+
+.limitModelPanel > .tableHeader > div:first-child {
+  min-width: 0;
+}
+
+.limitModelPanel > .tableHeader > .primaryButton {
+  align-self: flex-start;
+  min-width: 118px;
+  min-height: 42px;
+  margin-top: 0;
+  padding: 0 18px;
+  border-radius: 10px;
+}
+
+.limitModelVerdict {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(8, 11, 18, 0.34);
+}
+
+.limitModelVerdict > div,
+.limitModelEvalGrid > div,
+.limitModelColumns > div {
+  min-width: 0;
+}
+
+.limitModelVerdict span {
+  display: inline-flex;
+  margin-bottom: 10px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.limitModelVerdict b {
+  display: block;
+  color: #eef2ff;
+  font-family: JetBrains Mono, Menlo, monospace;
+  font-size: 18px;
+}
+
+.limitModelVerdict p {
+  margin: 8px 0 0;
+  color: #a8b3c7;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.limitModelMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.limitModelMetrics .miniMetric {
+  min-width: 0;
+  min-height: 90px;
+  padding: 12px;
+}
+
+.limitValidationGates {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.limitValidationGates .metricCard {
+  min-width: 0;
+}
+
+.limitModelColumns {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr 0.85fr;
+  gap: 14px;
+}
+
+.limitModelColumns.twoColumns {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.limitModelEvalGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 14px;
+}
+
+.modelEvalTableWrap {
+  width: 100%;
+  min-width: 0;
+  margin-top: 10px;
+  overflow-x: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(8, 11, 18, 0.32);
+}
+
+.modelEvalTable {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.modelEvalTable th,
+.modelEvalTable td {
+  padding: 11px 12px;
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.modelEvalTable th {
+  color: #9aa7bd;
+  background: rgba(20, 27, 39, 0.92);
+  font-weight: 900;
+}
+
+.modelEvalTable td {
+  color: #dfe6f7;
+  background: rgba(12, 17, 27, 0.5);
+}
+
+.modelEvalTable th:last-child,
+.modelEvalTable td:last-child {
+  border-right: none;
+}
+
+.modelEvalTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.limitModelList,
+.limitModelFeatureList {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.limitModelRow,
+.limitModelSliceRow {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(8, 11, 18, 0.34);
+}
+
+.limitModelRow {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.limitModelRow > span {
+  color: #ffdf7e;
+  font-family: JetBrains Mono, Menlo, monospace;
+  font-weight: 900;
+}
+
+.limitModelRow b,
+.limitModelSliceRow b {
+  display: block;
+  overflow: hidden;
+  color: #eef2ff;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.limitModelRow em,
+.limitModelSliceRow span {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: #8f9ab3;
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.limitModelRow strong {
+  color: #8ff5c3;
+  font-family: JetBrains Mono, Menlo, monospace;
+  font-size: 18px;
+}
+
+.limitModelRow.active {
+  border-color: rgba(255, 176, 0, 0.34);
+  background: rgba(255, 176, 0, 0.08);
+}
+
+.modelRecommendList {
+  margin-top: 0;
+}
+
+.modelRecommendCard {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.modelRecommendViewport {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.modelRecommendTableWrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(8, 11, 18, 0.28);
+}
+
+.modelRecommendTable {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+
+.modelRecommendTable th {
+  padding: 18px 16px;
+  color: #9aa7bd;
+  background: rgba(20, 27, 39, 0.98);
+  font-size: 13px;
+  font-weight: 900;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.modelRecommendTable th,
+.modelRecommendTable td {
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.modelRecommendTable th:last-child,
+.modelRecommendTable td:last-child {
+  border-right: none;
+}
+
+.modelRecommendTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.modelRecommendTable td {
+  padding: 18px 16px;
+  color: #dfe6f7;
+  font-size: 14px;
+  white-space: nowrap;
+  background: rgba(12, 17, 27, 0.64);
+}
+
+.modelRecommendTable tbody tr:hover td,
+.modelRecommendTable tbody tr.active td {
+  background: rgba(255, 176, 0, 0.07);
+}
+
+.modelRecommendTable .stockLink {
+  max-width: 220px;
+}
+
+.limitModelFeatureList {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.limitModelFeatureList span {
+  overflow: hidden;
+  padding: 9px 10px;
+  color: #dfe6f7;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  background: rgba(8, 11, 18, 0.34);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactEmpty {
+  padding: 14px;
+}
+
+.limitModelNote {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 14px;
+  color: #a8b3c7;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(8, 11, 18, 0.34);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.limitModelNote b {
+  color: #eef2ff;
+}
+
 .limitEvaluationPanel {
   margin-bottom: 18px;
+}
+
+.limitSliceHeader {
+  margin-top: 28px;
+}
+
+.limitSignalVerdict {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.95fr) minmax(0, 1.6fr);
+  gap: 14px;
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 12px;
+  background: rgba(8, 11, 18, 0.38);
+}
+
+.limitSignalVerdictMain {
+  min-width: 0;
+}
+
+.limitSignalVerdictMain span {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.limitSignalVerdictMain h3 {
+  margin: 14px 0 8px;
+  color: #eef2ff;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.limitSignalVerdictMain p {
+  margin: 0;
+  color: #a8b3c7;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.limitSignalVerdictMain b {
+  display: block;
+  margin-top: 14px;
+  color: #eef2ff;
+  font-size: 15px;
+}
+
+.limitSignalVerdictAction {
+  margin-top: 16px;
+}
+
+.limitSignalVerdictMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.limitSignalVerdictMetrics .miniMetric {
+  min-height: 92px;
+  padding: 12px;
+}
+
+.limitSignalVerdict-bad {
+  border-color: rgba(239, 83, 80, 0.28);
+  background: linear-gradient(180deg, rgba(65, 22, 26, 0.34), rgba(8, 11, 18, 0.38));
+}
+
+.limitSignalVerdict-bad .limitSignalVerdictMain span {
+  color: #ffd2d2;
+  background: rgba(239, 83, 80, 0.22);
+}
+
+.limitSignalVerdict-warning {
+  border-color: rgba(255, 176, 0, 0.24);
+  background: linear-gradient(180deg, rgba(71, 50, 12, 0.28), rgba(8, 11, 18, 0.38));
+}
+
+.limitSignalVerdict-warning .limitSignalVerdictMain span {
+  color: #ffdf7e;
+  background: rgba(255, 176, 0, 0.17);
+}
+
+.limitSignalVerdict-good {
+  border-color: rgba(38, 194, 129, 0.24);
+  background: linear-gradient(180deg, rgba(10, 63, 47, 0.26), rgba(8, 11, 18, 0.38));
+}
+
+.limitSignalVerdict-good .limitSignalVerdictMain span {
+  color: #8ff5c3;
+  background: rgba(38, 194, 129, 0.16);
+}
+
+.limitSignalVerdict-neutral .limitSignalVerdictMain span {
+  color: #a8b3c7;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .limitEvaluationTabs {
@@ -4421,12 +5131,31 @@ th {
   margin-top: 14px;
 }
 
+.limitSummaryGrid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.limitEvaluationEmpty {
+  grid-column: 1 / -1;
+  padding: 18px;
+  color: #8f9ab3;
+  border: 1px dashed rgba(255, 255, 255, 0.10);
+  border-radius: 8px;
+  background: rgba(8, 11, 18, 0.24);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .limitEvaluationCard {
   min-width: 0;
   padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 12px;
   background: rgba(8, 11, 18, 0.35);
+}
+
+.limitSummaryCard {
+  width: 100%;
 }
 
 .limitEvaluationTopline {
@@ -4460,6 +5189,34 @@ th {
   gap: 8px;
 }
 
+.limitSummaryCard .limitEvaluationMetrics {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.limitEvaluationMetrics .miniMetric b {
+  overflow: hidden;
+  font-size: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.limitSliceTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 10px;
+}
+
+.limitSliceTags span {
+  padding: 5px 8px;
+  color: #ffdf7e;
+  border: 1px solid rgba(255, 176, 0, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 176, 0, 0.08);
+  font-size: 12px;
+  font-weight: 760;
+}
+
 .limitEvaluationCard p {
   margin: 12px 0 8px;
   color: #a8b3c7;
@@ -4485,7 +5242,39 @@ th {
   color: #ff5f6d;
 }
 
+.marketUpText {
+  color: #ff5f6d;
+}
+
+.marketDownText {
+  color: #18d39a;
+}
+
 .warningText {
+  color: #ffdf7e;
+}
+
+.miniMetric b.positiveText,
+.miniMetric b.marketDownText,
+.modelEvalTable td.positiveText,
+.modelEvalTable td.marketDownText,
+.limitModelRow strong.positiveText,
+.limitModelRow strong.marketDownText {
+  color: #18d39a;
+}
+
+.miniMetric b.negativeText,
+.miniMetric b.marketUpText,
+.modelEvalTable td.negativeText,
+.modelEvalTable td.marketUpText,
+.limitModelRow strong.negativeText,
+.limitModelRow strong.marketUpText {
+  color: #ff5f6d;
+}
+
+.miniMetric b.warningText,
+.modelEvalTable td.warningText,
+.limitModelRow strong.warningText {
   color: #ffdf7e;
 }
 
@@ -5128,11 +5917,11 @@ th {
   }
 
   .dashboardBottomGrid,
-  .breakoutLayout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .breakoutRecommendGrid {
+  .breakoutLayout,
+  .limitModelVerdict,
+  .limitModelEvalGrid,
+  .limitModelColumns,
+  .limitSignalVerdict {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -5205,6 +5994,11 @@ th {
   .governanceSummaryGrid,
   .assetGrid,
   .returnMetricGrid,
+  .breakoutRecommendGrid,
+  .limitModelMetrics,
+  .limitModelFeatureList,
+  .limitSignalVerdictMetrics,
+  .limitSummaryCard .limitEvaluationMetrics,
   .breakoutMetricGrid,
   .breakoutDecision,
   .breakoutNarrative {

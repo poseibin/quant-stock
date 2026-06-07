@@ -1,11 +1,9 @@
-"""Shared desktop database access with SQLite/MySQL backend selection."""
+"""Shared desktop database access for the MySQL-backed desktop runtime."""
 from __future__ import annotations
 
 import json
 import os
 import re
-import sqlite3
-import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -18,12 +16,11 @@ DEFAULT_MYSQL_DSN = "quant_stock:quant_stock@tcp(127.0.0.1:3306)/quant_stock?par
 
 
 def db_backend() -> str:
-    backend = os.getenv("DESKTOP_DB_BACKEND", "").strip().lower()
-    return backend or "sqlite"
+    return "mysql"
 
 
 def is_mysql() -> bool:
-    return db_backend() == "mysql"
+    return True
 
 
 def desktop_db_path() -> Path:
@@ -119,6 +116,8 @@ def normalize_mysql_sql(sql: str) -> str:
     out = sql.replace("datetime('now')", "CURRENT_TIMESTAMP")
     out = re.sub(r"\bTEXT\s+NOT\s+NULL\s+DEFAULT\s+'[^']*'", "LONGTEXT NOT NULL", out, flags=re.IGNORECASE)
     out = re.sub(r"\bTEXT\s+DEFAULT\s+'[^']*'", "LONGTEXT", out, flags=re.IGNORECASE)
+    out = re.sub(r"\b([a-zA-Z_][a-zA-Z0-9_]*_json)\s+LONGTEXT\s+NOT\s+NULL\s+DEFAULT\s+'[^']*'", r"\1 LONGTEXT NOT NULL", out, flags=re.IGNORECASE)
+    out = re.sub(r"(?<!`)\brank\b(?!`)", "`rank`", out, flags=re.IGNORECASE)
     return out
 
 
@@ -152,31 +151,19 @@ def open_db() -> ConnectionAdapter:
     return connect_db()
 
 
-def configure_connection(conn: sqlite3.Connection) -> sqlite3.Connection:
-    conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
-
-
 def connect_db(path: str | Path | None = None, *, isolation_level: str | None = None) -> ConnectionAdapter:
-    if is_mysql():
-        try:
-            import pymysql
-        except ImportError as exc:
-            raise RuntimeError("MySQL backend requires pymysql; install quant_stock_core requirements") from exc
-        kwargs = _mysql_dsn_to_kwargs(desktop_db_dsn())
-        kwargs.setdefault("charset", "utf8mb4")
-        conn = pymysql.connect(
-            **kwargs,
-            autocommit=isolation_level is None,
-            cursorclass=pymysql.cursors.Cursor,
-        )
-        return ConnectionAdapter(conn, "mysql")
-    db_path = Path(path).expanduser().resolve() if path else desktop_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), timeout=30.0, isolation_level=isolation_level)
-    return ConnectionAdapter(configure_connection(conn), "sqlite")
+    try:
+        import pymysql
+    except ImportError as exc:
+        raise RuntimeError("MySQL backend requires pymysql; install quant_stock_core requirements") from exc
+    kwargs = _mysql_dsn_to_kwargs(desktop_db_dsn())
+    kwargs.setdefault("charset", "utf8mb4")
+    conn = pymysql.connect(
+        **kwargs,
+        autocommit=isolation_level is None,
+        cursorclass=pymysql.cursors.Cursor,
+    )
+    return ConnectionAdapter(conn, "mysql")
 
 
 def _mysql_dsn_to_kwargs(dsn: str) -> dict[str, Any]:
@@ -218,66 +205,32 @@ def write_transaction(
     retries: int = 5,
     retry_delay: float = 0.25,
 ) -> Iterator[ConnectionAdapter]:
-    if is_mysql():
-        conn = connect_db(path, isolation_level="")
-        try:
-            conn.execute("START TRANSACTION")
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-        return
-
-    conn: ConnectionAdapter | None = None
-    for attempt in range(retries + 1):
-        candidate = connect_db(path, isolation_level=None)
-        try:
-            candidate.execute("BEGIN IMMEDIATE")
-            conn = candidate
-            break
-        except sqlite3.OperationalError as exc:
-            candidate.close()
-            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
-                raise
-            if attempt >= retries:
-                raise
-            time.sleep(retry_delay * (attempt + 1))
-    if conn is None:
-        raise sqlite3.OperationalError("failed to begin sqlite write transaction")
+    conn = connect_db(path, isolation_level="")
     try:
+        conn.execute("START TRANSACTION")
         yield conn
-        conn.execute("COMMIT")
+        conn.commit()
     except Exception:
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass
+        conn.rollback()
         raise
     finally:
         conn.close()
 
 
 def table_exists(conn: ConnectionAdapter, table: str) -> bool:
-    if conn.backend == "mysql":
-        row = conn.execute(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
-            (table,),
-        ).fetchone()
-        return bool(row and int(row[0]) > 0)
-    return conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() is not None
+    row = conn.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
+        (table,),
+    ).fetchone()
+    return bool(row and int(row[0]) > 0)
 
 
 def table_columns(conn: ConnectionAdapter, table: str) -> set[str]:
-    if conn.backend == "mysql":
-        rows = conn.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?",
-            (table,),
-        ).fetchall()
-        return {str(row[0]).lower() for row in rows}
-    return {str(row[1]).lower() for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    rows = conn.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?",
+        (table,),
+    ).fetchall()
+    return {str(row[0]).lower() for row in rows}
 
 
 def add_column(conn: ConnectionAdapter, table: str, name: str, ddl: str) -> None:
@@ -285,12 +238,10 @@ def add_column(conn: ConnectionAdapter, table: str, name: str, ddl: str) -> None
 
 
 def to_backend_ddl(ddl: str, backend: str | None = None) -> str:
-    backend = backend or db_backend()
-    if backend != "mysql":
-        return ddl
     out = ddl.replace("INTEGER", "BIGINT").replace("REAL", "DOUBLE").replace("TEXT", "VARCHAR(255)")
-    if "payload_json" in ddl or "config_json" in ddl or "summary_json" in ddl:
+    if "_json" in ddl or "payload_json" in ddl or "config_json" in ddl or "summary_json" in ddl:
         out = out.replace("VARCHAR(255)", "LONGTEXT")
+        out = re.sub(r"\s+DEFAULT\s+'[^']*'", "", out, flags=re.IGNORECASE)
     return out
 
 
@@ -298,32 +249,24 @@ def upsert_sql(table: str, columns: list[str], conflict_columns: list[str], upda
     placeholders = ", ".join("?" for _ in columns)
     table_sql = quote_ident(table)
     column_sql = ", ".join(quote_ident(col) for col in columns)
-    if is_mysql():
-        assignments = ", ".join(f"{quote_ident(col)}=VALUES({quote_ident(col)})" for col in update_columns)
-        return f"INSERT INTO {table_sql} ({column_sql}) VALUES ({placeholders}) ON DUPLICATE KEY UPDATE {assignments}"
-    assignments = ", ".join(f"{quote_ident(col)}=excluded.{quote_ident(col)}" for col in update_columns)
-    conflict_sql = ", ".join(quote_ident(col) for col in conflict_columns)
-    return f"INSERT INTO {table_sql} ({column_sql}) VALUES ({placeholders}) ON CONFLICT({conflict_sql}) DO UPDATE SET {assignments}"
+    assignments = ", ".join(f"{quote_ident(col)}=VALUES({quote_ident(col)})" for col in update_columns)
+    return f"INSERT INTO {table_sql} ({column_sql}) VALUES ({placeholders}) ON DUPLICATE KEY UPDATE {assignments}"
 
 
 def replace_sql(table: str, columns: list[str], conflict_columns: list[str]) -> str:
-    if is_mysql():
-        update_columns = [col for col in columns if col not in conflict_columns]
-        return upsert_sql(table, columns, conflict_columns, update_columns)
-    placeholders = ", ".join("?" for _ in columns)
-    return f"INSERT OR REPLACE INTO {quote_ident(table)} ({', '.join(quote_ident(col) for col in columns)}) VALUES ({placeholders})"
+    update_columns = [col for col in columns if col not in conflict_columns]
+    return upsert_sql(table, columns, conflict_columns, update_columns)
 
 
 def insert_ignore_sql(table: str, columns: list[str]) -> str:
     placeholders = ", ".join("?" for _ in columns)
     table_sql = quote_ident(table)
     column_sql = ", ".join(quote_ident(col) for col in columns)
-    prefix = "INSERT IGNORE INTO" if is_mysql() else "INSERT OR IGNORE INTO"
-    return f"{prefix} {table_sql} ({column_sql}) VALUES ({placeholders})"
+    return f"INSERT IGNORE INTO {table_sql} ({column_sql}) VALUES ({placeholders})"
 
 
 def current_timestamp_sql() -> str:
-    return "CURRENT_TIMESTAMP" if is_mysql() else "datetime('now')"
+    return "CURRENT_TIMESTAMP"
 
 
 def quote_ident(value: str) -> str:

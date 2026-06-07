@@ -420,7 +420,7 @@ func (service *Service) quantCoreEnv(dataPath string, req GenerateSignalRequest)
 		backend = string(service.db.Backend())
 	}
 	if backend == "" {
-		backend = "sqlite"
+		backend = "mysql"
 	}
 	env := []string{
 		"DATA_ROOT=" + dataPath,

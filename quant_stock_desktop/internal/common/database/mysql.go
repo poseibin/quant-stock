@@ -152,6 +152,7 @@ func mysqlColumnLine(line string) string {
 	if mysqlType == "LONGTEXT" {
 		line = strings.ReplaceAll(line, " NOT NULL DEFAULT ''", " NOT NULL")
 		line = strings.ReplaceAll(line, " NOT NULL DEFAULT '{}'", " NOT NULL")
+		line = strings.ReplaceAll(line, " NOT NULL DEFAULT '[]'", " NOT NULL")
 	}
 	return line
 }

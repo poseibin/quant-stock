@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import * as echarts from 'echarts/core'
-import { LineChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { CandlestickChart, LineChart } from 'echarts/charts'
+import { GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { getStockValuation, listDailyBars, listFinancialIndicators, listStockBasic, type DailyBar, type FinancialIndicator, type StockBasic, type StockValuation } from '../services/app'
 import { KLineChart } from '../features/data/KLineChart'
 
-echarts.use([CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
+echarts.use([CanvasRenderer, CandlestickChart, GridComponent, LegendComponent, LineChart, MarkLineComponent, TooltipComponent])
 
 const periods = [
   { label: '3M', days: 60 },
@@ -16,7 +16,7 @@ const periods = [
   { label: 'ALL', days: 5000 }
 ]
 
-export function StockResearchPage({ initialTsCode = '', returnLabel = '', onBack }: { initialTsCode?: string; returnLabel?: string; onBack?: () => void }) {
+export function StockResearchPage({ initialTsCode = '', returnLabel = '', showLimitProjection = false, onBack }: { initialTsCode?: string; returnLabel?: string; showLimitProjection?: boolean; onBack?: () => void }) {
   const [stocks, setStocks] = useState<StockBasic[]>([])
   const [stockKeyword, setStockKeyword] = useState('')
   const [selectedCode, setSelectedCode] = useState('')
@@ -160,11 +160,15 @@ export function StockResearchPage({ initialTsCode = '', returnLabel = '', onBack
       <div className="researchChartCard">
         <div className="sectionHeader">
           <div>
-            <b>价格走势</b>
-            <span>{period} · K线 / 成交量</span>
+            <b>{showLimitProjection ? '涨停路径推演' : '价格走势'}</b>
+            <span>{showLimitProjection ? '历史K线 + 未来10日连续涨停投影' : `${period} · K线 / 成交量`}</span>
           </div>
         </div>
-        <KLineChart bars={visibleBars} showVolume={showVolume} />
+        {showLimitProjection ? (
+          <LimitProjectionChart bars={visibleBars} stock={selectedStock} />
+        ) : (
+          <KLineChart bars={visibleBars} showVolume={showVolume} />
+        )}
       </div>
 
       <div className="researchTabs">
@@ -239,6 +243,107 @@ function MetricCard({ label, value, hint, tone }: { label: string; value: string
   )
 }
 
+type ProjectionBar = DailyBar & { projected?: boolean }
+
+function LimitProjectionChart({ bars, stock }: { bars: DailyBar[]; stock: StockBasic }) {
+  const chartRef = useRef<HTMLDivElement | null>(null)
+  const projectedBars = useMemo(() => buildLimitProjectionBars(bars, stock), [bars, stock])
+  const latestActual = bars[bars.length - 1]
+  const target = projectedBars[projectedBars.length - 1]
+  const projectionStart = projectedBars.find((bar) => bar.projected)?.trade_date || ''
+
+  useEffect(() => {
+    if (!chartRef.current || projectedBars.length === 0) return
+    const chart = echarts.init(chartRef.current, 'dark')
+    const dates = projectedBars.map((bar) => projectionDateLabel(bar.trade_date))
+    chart.setOption({
+      backgroundColor: 'transparent',
+      animationDuration: 360,
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(10, 15, 24, 0.96)',
+        borderColor: 'rgba(255, 176, 0, 0.35)',
+        textStyle: { color: '#eef2ff', fontFamily: 'JetBrains Mono, Menlo, monospace' },
+        axisPointer: { type: 'cross', lineStyle: { color: 'rgba(255, 176, 0, 0.45)' } },
+        formatter: (params: unknown) => {
+          const rows = Array.isArray(params) ? params as Array<{ dataIndex: number }> : []
+          const bar = projectedBars[rows[0]?.dataIndex ?? 0]
+          if (!bar) return ''
+          return [
+            `<b>${projectionDateLabel(bar.trade_date)}${bar.projected ? ' · 涨停投影' : ''}</b>`,
+            `开 ${bar.open.toFixed(2)}　高 ${bar.high.toFixed(2)}`,
+            `低 ${bar.low.toFixed(2)}　收 ${bar.close.toFixed(2)}`,
+            `涨跌 ${bar.pct_chg.toFixed(2)}%`
+          ].join('<br/>')
+        }
+      },
+      grid: { left: 58, right: 24, top: 24, bottom: 42 },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        boundaryGap: true,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.16)' } },
+        axisTick: { show: false },
+        axisLabel: { color: '#8f9ab3', hideOverlap: true }
+      },
+      yAxis: {
+        scale: true,
+        axisLabel: { color: '#8f9ab3' },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.07)' } }
+      },
+      series: [
+        {
+          type: 'candlestick',
+          name: '历史K线 + 涨停投影',
+          data: projectedBars.map((bar) => ({
+            value: [bar.open, bar.close, bar.low, bar.high],
+            itemStyle: bar.projected
+              ? { color: '#ff5f6d', borderColor: '#ffdf7e', borderWidth: 2 }
+              : undefined
+          })),
+          itemStyle: {
+            color: '#ef5350',
+            color0: '#26c281',
+            borderColor: '#ef5350',
+            borderColor0: '#26c281'
+          },
+          markLine: {
+            symbol: 'none',
+            lineStyle: { color: 'rgba(255, 176, 0, 0.62)', type: 'dashed' },
+            label: { color: '#ffdf7e', formatter: '投影起点' },
+            data: projectionStart ? [{ xAxis: projectionDateLabel(projectionStart) }] : []
+          }
+        }
+      ]
+    })
+
+    const resize = () => chart.resize()
+    const observer = new ResizeObserver(resize)
+    observer.observe(chartRef.current)
+    return () => {
+      observer.disconnect()
+      chart.dispose()
+    }
+  }, [projectedBars, projectionStart])
+
+  if (bars.length === 0) {
+    return <div className="emptyState">暂无日线行情，无法生成涨停投影</div>
+  }
+
+  return (
+    <div className="projectionChartWrap">
+      <div className="projectionMeta">
+        <span>当前收盘 {latestActual.close.toFixed(2)}</span>
+        <span>10板价 {target.close.toFixed(2)}</span>
+        <span>投影收益 {signedPercent((target.close - latestActual.close) / latestActual.close)}</span>
+        <span>制度上限 {formatPercent(limitRateForStock(stock))}</span>
+      </div>
+      <div className="projectionHint">按当前交易制度连续涨停模拟价格路径，用来观察空间和卖出分批区间，不代表预测一定发生。</div>
+      <div ref={chartRef} className="limitProjectionEchart" />
+    </div>
+  )
+}
+
 function ValuationPanel({ valuation }: { valuation: StockValuation | null }) {
   if (!valuation || !valuation.trade_date) {
     return (
@@ -287,6 +392,64 @@ function MiniMetric({ label, value, hint }: { label: string; value: string; hint
       <em>{hint}</em>
     </div>
   )
+}
+
+function buildLimitProjectionBars(bars: DailyBar[], stock: StockBasic): ProjectionBar[] {
+  const actual: ProjectionBar[] = bars.slice(-120).map((bar) => ({ ...bar, projected: false }))
+  const latest = actual[actual.length - 1]
+  if (!latest) return []
+  const rate = limitRateForStock(stock)
+  let prevClose = latest.close
+  let date = latest.trade_date
+  const projected: ProjectionBar[] = []
+  for (let i = 0; i < 10; i++) {
+    date = nextTradeDate(date)
+    const close = roundPrice(prevClose * (1 + rate))
+    projected.push({
+      ts_code: stock.ts_code,
+      trade_date: date,
+      open: prevClose,
+      high: close,
+      low: prevClose,
+      close,
+      pre_close: prevClose,
+      change: close - prevClose,
+      pct_chg: rate * 100,
+      vol: 0,
+      amount: 0,
+      projected: true
+    })
+    prevClose = close
+  }
+  return [...actual, ...projected]
+}
+
+function limitRateForStock(stock: StockBasic) {
+  const name = (stock.name || '').toUpperCase()
+  const code = stock.ts_code || ''
+  if (name.includes('ST')) return 0.05
+  if (code.startsWith('688') || code.startsWith('300')) return 0.20
+  if (code.startsWith('8') || code.startsWith('4') || code.includes('.BJ')) return 0.30
+  return 0.10
+}
+
+function nextTradeDate(value: string) {
+  const date = /^\d{8}$/.test(value)
+    ? new Date(Number(value.slice(0, 4)), Number(value.slice(4, 6)) - 1, Number(value.slice(6, 8)))
+    : new Date()
+  date.setDate(date.getDate() + 1)
+  while (date.getDay() === 0 || date.getDay() === 6) {
+    date.setDate(date.getDate() + 1)
+  }
+  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`
+}
+
+function roundPrice(value: number) {
+  return Math.round(value * 100) / 100
+}
+
+function projectionDateLabel(value: string) {
+  return /^\d{8}$/.test(value) ? `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}` : value
 }
 
 function matchStocks(stocks: StockBasic[], keyword: string) {

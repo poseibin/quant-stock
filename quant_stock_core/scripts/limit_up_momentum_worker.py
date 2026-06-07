@@ -491,7 +491,7 @@ def write_cache(db_path: Path, cache_key: str, items: list[MomentumCandidate]) -
             prediction_rows.append((
                 pred_id, SIGNAL_TYPE, STRATEGY_VERSION, cache_key, cache_key, idx,
                 item.ts_code, item.name, item.industry, item.trade_date, item.close, item.score,
-                item.recommendation, payload, ts, ts,
+                item.recommendation, payload, "{}", "", ts, ts,
             ))
         conn.executemany(
             upsert_sql(
@@ -499,12 +499,13 @@ def write_cache(db_path: Path, cache_key: str, items: list[MomentumCandidate]) -
                 [
                     "id", "signal_type", "strategy_version", "parameter_key", "cache_key",
                     "rank", "ts_code", "name", "industry", "signal_date", "signal_price",
-                    "score", "recommendation", "payload_json", "created_at", "updated_at",
+                    "score", "recommendation", "payload_json", "outcome_json", "evaluated_at",
+                    "created_at", "updated_at",
                 ],
                 ["signal_type", "parameter_key", "ts_code", "signal_date"],
                 [
                     "rank", "name", "industry", "signal_price", "score",
-                    "recommendation", "payload_json", "updated_at",
+                    "recommendation", "payload_json", "outcome_json", "evaluated_at", "updated_at",
                 ],
             ),
             prediction_rows,

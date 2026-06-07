@@ -49,6 +49,7 @@ declare global {
           RunLimitSignalEvaluation: () => Promise<void>
           GetLimitSignalEvaluationRunStatus: () => Promise<RunStatus>
           ListLimitSignalEvaluationSummary: () => Promise<LimitSignalEvaluationSummary[]>
+          ListLimitSignalTimeMachineSlices: (limit: number) => Promise<LimitSignalTimeMachineSlice[]>
           ListFactorResearchRuns: (limit: number) => Promise<FactorResearchRunSummary[]>
           ListFactorICResults: (runID: string, limit: number) => Promise<FactorICResult[]>
           ListFactorStateICResults: (runID: string, limit: number) => Promise<FactorStateICResult[]>
@@ -61,9 +62,22 @@ declare global {
           ListFactorAdmissionComparisons: (limit: number) => Promise<FactorAdmissionComparison[]>
           ListCrashWarningRuns: (limit: number) => Promise<CrashWarningRunSummary[]>
           ListCrashWarningFeatures: (runID: string, limit: number) => Promise<CrashWarningFeature[]>
+          RunLimitUpModelTraining: () => Promise<void>
+          GetLimitUpModelRunStatus: () => Promise<RunStatus>
+          ListLimitUpModelRuns: (limit: number) => Promise<LimitUpModelRunSummary[]>
+          ListLimitUpModelFeatures: (runID: string, limit: number) => Promise<LimitUpModelFeature[]>
+          ListLimitUpModelPredictions: (runID: string, limit: number) => Promise<LimitUpModelPrediction[]>
+          ListLimitUpModelTimeMachineSlices: (runID: string, limit: number) => Promise<LimitUpModelTimeMachineSlice[]>
+          RunLimitBreakoutModelTraining: () => Promise<void>
+          GetLimitBreakoutModelRunStatus: () => Promise<RunStatus>
+          ListLimitBreakoutModelRuns: (limit: number) => Promise<LimitUpModelRunSummary[]>
+          ListLimitBreakoutModelFeatures: (runID: string, limit: number) => Promise<LimitUpModelFeature[]>
+          ListLimitBreakoutModelPredictions: (runID: string, limit: number) => Promise<LimitUpModelPrediction[]>
+          ListLimitBreakoutModelTimeMachineSlices: (runID: string, limit: number) => Promise<LimitUpModelTimeMachineSlice[]>
           GetPositionSummary: () => Promise<PositionSummary>
           ListT0Recommendations: (limit: number) => Promise<T0Recommendation[]>
           ListT0DataPullCandidates: (limit: number) => Promise<T0DataPullCandidate[]>
+          ListT0DailyRuns: (limit: number) => Promise<T0DailyRunSummary[]>
           ListT0DailyBacktests: (limit: number) => Promise<T0DailyBacktest[]>
           ListT0TimeMachineResults: (limit: number) => Promise<T0TimeMachineResult[]>
           RunT0DailyResearch: () => Promise<void>
@@ -556,6 +570,74 @@ export interface CrashWarningFeature {
   rank_no: number
 }
 
+export interface LimitUpModelRunSummary {
+  run_id: string
+  start_date: string
+  end_date: string
+  horizon: number
+  model_type: string
+  feature_count: number
+  status: string
+  model_path: string
+  rows: number
+  candidate_rows: number
+  latest_date: string
+  latest_count: number
+  positive_rate: number
+  baseline_return: number
+  top_return: number
+  top_excess_return: number
+  top_hit_rate: number
+  top_limit_up_rate: number
+  top_drawdown: number
+  rank_ic: number
+  summary_json: string
+  updated_at: string
+}
+
+export interface LimitUpModelFeature {
+  run_id: string
+  feature: string
+  importance: number
+  rank_no: number
+}
+
+export interface LimitUpModelPrediction {
+  run_id: string
+  trade_date: string
+  ts_code: string
+  name: string
+  industry: string
+  price: number
+  high: number
+  low: number
+  today_pct: number
+  prob: number
+  model_score: number
+  label: number
+  fwd5_return: number
+  fwd5_max_return: number
+  max_drawdown_5d: number
+  hit_limit_up_5d: number
+  is_latest: boolean
+  summary_json: string
+  updated_at: string
+}
+
+export interface LimitUpModelTimeMachineSlice {
+  run_id: string
+  trade_date: string
+  candidate_count: number
+  top_count: number
+  avg_return: number
+  avg_max_return: number
+  hit_rate: number
+  limit_up_hit_rate: number
+  avg_drawdown: number
+  rank_ic: number
+  updated_at: string
+}
+
 export interface TimeMachineSnapshot {
   date: string
   cash: number
@@ -798,6 +880,34 @@ export interface LimitSignalEvaluationSummary {
   updated_at: string
 }
 
+export interface LimitSignalTimeMachineSlice {
+  signal_type: string
+  strategy_version: string
+  parameter_key: string
+  signal_date: string
+  candidate_count: number
+  evaluated_count: number
+  hit_rate: number
+  limit_up_hit_rate: number
+  avg_return_1d: number
+  avg_return_3d: number
+  avg_return_5d: number
+  avg_return_10d: number
+  avg_target_return: number
+  avg_max_drawdown_5d: number
+  avg_score: number
+  slice_score: number
+  market_heat_score: number
+  limit_up_count: number
+  limit_up_ratio: number
+  up_ratio: number
+  hot_tags_json: string
+  top_industries_json: string
+  recommendation: string
+  summary_json: string
+  updated_at: string
+}
+
 export interface T0Recommendation {
   ts_code: string
   name: string
@@ -807,6 +917,8 @@ export interface T0Recommendation {
   recommendation: string
   score: number
   state: string
+  setup: string
+  first_action: string
   shares: number
   max_t0_shares: number
   price: number
@@ -821,7 +933,9 @@ export interface T0Recommendation {
   buy_back_price: number
   reduce_price: number
   stop_price: number
+  t_ratio: number
   expected_edge: number
+  plan_json: string
   reasons: string[]
   risks: string[]
   generated_at: string
@@ -835,7 +949,13 @@ export interface T0DataPullCandidate {
   action: string
   score: number
   state: string
+  setup: string
+  first_action: string
   price: number
+  reduce_price: number
+  buy_price: number
+  stop_price: number
+  t_ratio: number
   today_pct: number
   return_5d: number
   return_20d: number
@@ -846,6 +966,7 @@ export interface T0DataPullCandidate {
   expected_edge: number
   target_freq: string
   lookback_days: number
+  plan_json: string
   reasons: string[]
   risks: string[]
   generated_at: string
@@ -865,6 +986,17 @@ export interface T0DailyBacktest {
   avg_next_range: number
   score: number
   summary_json: string
+  updated_at: string
+}
+
+export interface T0DailyRunSummary {
+  run_id: string
+  trade_date: string
+  status: string
+  candidate_count: number
+  backtest_count: number
+  summary_json: string
+  created_at: string
   updated_at: string
 }
 
@@ -1245,6 +1377,88 @@ export async function listCrashWarningFeatures(runID = '', limit = 20): Promise<
   return []
 }
 
+export async function runLimitUpModelTraining(): Promise<void> {
+  if (window.go?.main?.App?.RunLimitUpModelTraining) {
+    return window.go.main.App.RunLimitUpModelTraining()
+  }
+}
+
+export async function getLimitUpModelRunStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetLimitUpModelRunStatus) {
+    return window.go.main.App.GetLimitUpModelRunStatus()
+  }
+  return emptyRunStatus('limit_up_model')
+}
+
+export async function listLimitUpModelRuns(limit = 20): Promise<LimitUpModelRunSummary[]> {
+  if (window.go?.main?.App?.ListLimitUpModelRuns) {
+    return (await window.go.main.App.ListLimitUpModelRuns(limit)) || []
+  }
+  return []
+}
+
+export async function listLimitUpModelFeatures(runID = '', limit = 20): Promise<LimitUpModelFeature[]> {
+  if (window.go?.main?.App?.ListLimitUpModelFeatures) {
+    return (await window.go.main.App.ListLimitUpModelFeatures(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listLimitUpModelPredictions(runID = '', limit = 20): Promise<LimitUpModelPrediction[]> {
+  if (window.go?.main?.App?.ListLimitUpModelPredictions) {
+    return (await window.go.main.App.ListLimitUpModelPredictions(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listLimitUpModelTimeMachineSlices(runID = '', limit = 80): Promise<LimitUpModelTimeMachineSlice[]> {
+  if (window.go?.main?.App?.ListLimitUpModelTimeMachineSlices) {
+    return (await window.go.main.App.ListLimitUpModelTimeMachineSlices(runID, limit)) || []
+  }
+  return []
+}
+
+export async function runLimitBreakoutModelTraining(): Promise<void> {
+  if (window.go?.main?.App?.RunLimitBreakoutModelTraining) {
+    return window.go.main.App.RunLimitBreakoutModelTraining()
+  }
+}
+
+export async function getLimitBreakoutModelRunStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetLimitBreakoutModelRunStatus) {
+    return window.go.main.App.GetLimitBreakoutModelRunStatus()
+  }
+  return emptyRunStatus('limit_breakout_model')
+}
+
+export async function listLimitBreakoutModelRuns(limit = 20): Promise<LimitUpModelRunSummary[]> {
+  if (window.go?.main?.App?.ListLimitBreakoutModelRuns) {
+    return (await window.go.main.App.ListLimitBreakoutModelRuns(limit)) || []
+  }
+  return []
+}
+
+export async function listLimitBreakoutModelFeatures(runID = '', limit = 20): Promise<LimitUpModelFeature[]> {
+  if (window.go?.main?.App?.ListLimitBreakoutModelFeatures) {
+    return (await window.go.main.App.ListLimitBreakoutModelFeatures(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listLimitBreakoutModelPredictions(runID = '', limit = 20): Promise<LimitUpModelPrediction[]> {
+  if (window.go?.main?.App?.ListLimitBreakoutModelPredictions) {
+    return (await window.go.main.App.ListLimitBreakoutModelPredictions(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listLimitBreakoutModelTimeMachineSlices(runID = '', limit = 80): Promise<LimitUpModelTimeMachineSlice[]> {
+  if (window.go?.main?.App?.ListLimitBreakoutModelTimeMachineSlices) {
+    return (await window.go.main.App.ListLimitBreakoutModelTimeMachineSlices(runID, limit)) || []
+  }
+  return []
+}
+
 export async function refreshTaskStatus(id: string): Promise<TaskDTO> {
   if (window.go?.main?.App?.RefreshTaskStatus) {
     return window.go.main.App.RefreshTaskStatus(id)
@@ -1611,6 +1825,13 @@ export async function listT0DataPullCandidates(limit = 100): Promise<T0DataPullC
   return []
 }
 
+export async function listT0DailyRuns(limit = 10): Promise<T0DailyRunSummary[]> {
+  if (window.go?.main?.App?.ListT0DailyRuns) {
+    return (await window.go.main.App.ListT0DailyRuns(limit)) || []
+  }
+  return []
+}
+
 export async function listT0DailyBacktests(limit = 100): Promise<T0DailyBacktest[]> {
   if (window.go?.main?.App?.ListT0DailyBacktests) {
     return (await window.go.main.App.ListT0DailyBacktests(limit)) || []
@@ -1626,15 +1847,21 @@ export async function listT0TimeMachineResults(limit = 100): Promise<T0TimeMachi
 }
 
 export async function runT0DailyResearch(): Promise<void> {
-  if (window.go?.main?.App?.RunT0DailyResearch) {
-    await window.go.main.App.RunT0DailyResearch()
-  }
+  const task = await createTask({
+    name: '日线做T研究',
+    task_type: 't0_daily_research',
+    params: {}
+  })
+  await startTask(task.id)
 }
 
-export async function runT0TimeMachine(): Promise<void> {
-  if (window.go?.main?.App?.RunT0TimeMachine) {
-    await window.go.main.App.RunT0TimeMachine()
-  }
+export async function runT0TimeMachine(mode: 'quick' | 'deep' = 'quick'): Promise<void> {
+  const task = await createTask({
+    name: mode === 'quick' ? '做T快速时光机' : '做T深度时光机',
+    task_type: 't0_daily_timemachine',
+    params: { mode }
+  })
+  await startTask(task.id)
 }
 
 export async function getT0DailyResearchStatus(): Promise<RunStatus> {
@@ -1699,9 +1926,26 @@ export async function clearLimitUpMomentumCandidates(): Promise<void> {
 }
 
 export async function runLimitSignalEvaluation(): Promise<void> {
-  if (window.go?.main?.App?.RunLimitSignalEvaluation) {
-    return window.go.main.App.RunLimitSignalEvaluation()
+  const runtimeApp = window.go?.main?.App as any
+  const legacyRun = runtimeApp?.RunLimitSignalEvaluation as (() => Promise<void>) | undefined
+  if (runtimeApp?.CreateTask && runtimeApp?.StartTask) {
+    try {
+      const task = await createTask({
+        name: '涨停预警历史切面评估',
+        task_type: 'limit_signal_evaluation',
+        params: {}
+      })
+      await startTask(task.id)
+      return
+    } catch (err) {
+      if (!legacyRun) throw err
+    }
   }
+  if (legacyRun) {
+    await legacyRun()
+    return
+  }
+  throw new Error('当前桌面运行时缺少涨停评估接口，请重启应用后再试')
 }
 
 export async function getLimitSignalEvaluationRunStatus(): Promise<RunStatus> {
@@ -1714,6 +1958,13 @@ export async function getLimitSignalEvaluationRunStatus(): Promise<RunStatus> {
 export async function listLimitSignalEvaluationSummary(): Promise<LimitSignalEvaluationSummary[]> {
   if (window.go?.main?.App?.ListLimitSignalEvaluationSummary) {
     return (await window.go.main.App.ListLimitSignalEvaluationSummary()) || []
+  }
+  return []
+}
+
+export async function listLimitSignalTimeMachineSlices(limit = 80): Promise<LimitSignalTimeMachineSlice[]> {
+  if (window.go?.main?.App?.ListLimitSignalTimeMachineSlices) {
+    return (await window.go.main.App.ListLimitSignalTimeMachineSlices(limit)) || []
   }
   return []
 }

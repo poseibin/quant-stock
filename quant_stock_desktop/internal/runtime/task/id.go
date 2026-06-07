@@ -29,6 +29,12 @@ func NewRunID(req CreateRequest) string {
 		prefix = "px"
 	} else if req.TaskType == TypeFactorResearch {
 		prefix = "fr"
+	} else if req.TaskType == TypeLimitSignalEvaluation {
+		prefix = "lse"
+	} else if req.TaskType == TypeT0DailyResearch {
+		prefix = "t0r"
+	} else if req.TaskType == TypeT0TimeMachine {
+		prefix = "t0tm"
 	}
 	return fmt.Sprintf("%s_%s_%s_%s_%s", prefix, strategies, start, end, time.Now().Format("150405"))
 }

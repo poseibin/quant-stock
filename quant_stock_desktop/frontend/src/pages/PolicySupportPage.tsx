@@ -139,7 +139,7 @@ export function PolicySupportPage({ onOpenResearch }: { onOpenResearch?: (tsCode
               <span>{item.industry || '—'}</span>
               <span><i>{item.candidate_type || '—'}</i></span>
               <span>{item.score.toFixed(1)}</span>
-              <span className={item.pct_chg >= 0 ? 'positiveText' : 'negativeText'}>{item.pct_chg.toFixed(2)}%</span>
+              <span className={item.pct_chg >= 0 ? 'positive' : 'negative'}>{signedPct(item.pct_chg)}</span>
               <span>{item.amount_ratio.toFixed(2)}x</span>
               <span>{formatMoney(item.institution_net_buy)}</span>
               <span>{item.reason || '—'}</span>
@@ -207,6 +207,11 @@ function parseEvidence(raw?: string): Record<string, number> {
 function fmt(value: unknown) {
   const num = typeof value === 'number' ? value : Number(value || 0)
   return Number.isFinite(num) ? num.toFixed(2) : '0.00'
+}
+
+function signedPct(value: number) {
+  if (!Number.isFinite(value)) return '—'
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
 function formatMoney(value: number) {

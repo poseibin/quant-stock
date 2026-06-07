@@ -3,12 +3,8 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 type DB struct {
@@ -19,9 +15,10 @@ type DB struct {
 type Backend string
 
 const (
-	BackendSQLite Backend = "sqlite"
-	BackendMySQL  Backend = "mysql"
+	BackendMySQL Backend = "mysql"
 )
+
+const defaultLocalMySQLDSN = "quant_stock:quant_stock@tcp(127.0.0.1:3306)/quant_stock?parseTime=true&charset=utf8mb4&loc=Local"
 
 type Config struct {
 	Backend        string
@@ -41,49 +38,23 @@ func Wrap(conn *sql.DB, backend Backend) *DB {
 }
 
 func OpenConfigured(cfg Config) (*DB, error) {
-	switch normalizeBackend(cfg.Backend) {
-	case BackendMySQL:
-		if cfg.MySQLBootstrap != nil {
-			if err := BootstrapMySQL(*cfg.MySQLBootstrap); err != nil {
-				if db, openErr := OpenMySQL(cfg.MySQLDSN); openErr == nil {
-					return db, nil
-				}
-				return nil, err
-			}
-		}
-		return OpenMySQL(cfg.MySQLDSN)
-	default:
-		return Open(cfg.SQLitePath)
+	cfg.Backend = string(BackendMySQL)
+	if strings.TrimSpace(cfg.MySQLDSN) == "" {
+		cfg.MySQLDSN = defaultLocalMySQLDSN
 	}
+	if cfg.MySQLBootstrap != nil {
+		if err := BootstrapMySQL(*cfg.MySQLBootstrap); err != nil {
+			if db, openErr := OpenMySQL(cfg.MySQLDSN); openErr == nil {
+				return db, nil
+			}
+			return nil, err
+		}
+	}
+	return OpenMySQL(cfg.MySQLDSN)
 }
 
 func Open(path string) (*DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	conn, err := sql.Open("sqlite", path)
-	if err != nil {
-		return nil, err
-	}
-	conn.SetMaxOpenConns(1)
-	conn.SetMaxIdleConns(1)
-	conn.SetConnMaxLifetime(0)
-	for _, pragma := range []string{
-		"PRAGMA busy_timeout=30000",
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-	} {
-		if _, err := conn.Exec(pragma); err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("%s: %w", pragma, err)
-		}
-	}
-	db := &DB{conn: conn, backend: BackendSQLite}
-	if err := db.Migrate(); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	return db, nil
+	return OpenMySQL(defaultLocalMySQLDSN)
 }
 
 func OpenMySQL(dsn string) (*DB, error) {
@@ -111,7 +82,7 @@ func (db *DB) Conn() *sql.DB {
 
 func (db *DB) Backend() Backend {
 	if db == nil || db.backend == "" {
-		return BackendSQLite
+		return BackendMySQL
 	}
 	return db.backend
 }
@@ -121,49 +92,32 @@ func (db *DB) IsMySQL() bool {
 }
 
 func (db *DB) CurrentTimestampSQL() string {
-	if db.IsMySQL() {
-		return "CURRENT_TIMESTAMP"
-	}
-	return "datetime('now')"
+	return "CURRENT_TIMESTAMP"
 }
 
 func (db *DB) UpsertSQL(table string, columns []string, conflictColumns []string, updateColumns []string) string {
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(columns)), ",")
 	columnSQL := quoteIdents(db.Backend(), columns)
-	if db.IsMySQL() {
-		assignments := make([]string, 0, len(updateColumns))
-		for _, column := range updateColumns {
-			quoted := quoteIdent(db.Backend(), column)
-			assignments = append(assignments, fmt.Sprintf("%s = VALUES(%s)", quoted, quoted))
-		}
-		return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s",
-			quoteIdent(db.Backend(), table), columnSQL, placeholders, strings.Join(assignments, ", "))
-	}
 	assignments := make([]string, 0, len(updateColumns))
 	for _, column := range updateColumns {
-		assignments = append(assignments, fmt.Sprintf("%s = excluded.%s", quoteIdent(db.Backend(), column), quoteIdent(db.Backend(), column)))
+		quoted := quoteIdent(db.Backend(), column)
+		assignments = append(assignments, fmt.Sprintf("%s = VALUES(%s)", quoted, quoted))
 	}
-	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT(%s) DO UPDATE SET %s",
-		quoteIdent(db.Backend(), table), columnSQL, placeholders, quoteIdents(db.Backend(), conflictColumns), strings.Join(assignments, ", "))
+	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s",
+		quoteIdent(db.Backend(), table), columnSQL, placeholders, strings.Join(assignments, ", "))
 }
 
 func (db *DB) InsertIgnoreSQL(table string, columns []string) string {
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(columns)), ",")
-	prefix := "INSERT OR IGNORE INTO"
-	if db.IsMySQL() {
-		prefix = "INSERT IGNORE INTO"
-	}
-	return fmt.Sprintf("%s %s (%s) VALUES (%s)", prefix, quoteIdent(db.Backend(), table), quoteIdents(db.Backend(), columns), placeholders)
+	return fmt.Sprintf("INSERT IGNORE INTO %s (%s) VALUES (%s)", quoteIdent(db.Backend(), table), quoteIdents(db.Backend(), columns), placeholders)
 }
 
 func (db *DB) ExecSchemaStatement(statement string) error {
-	if db.IsMySQL() {
-		converted, ok := sqliteStatementToMySQL(statement)
-		if !ok {
-			return nil
-		}
-		statement = converted
+	converted, ok := sqliteStatementToMySQL(statement)
+	if !ok {
+		return nil
 	}
+	statement = converted
 	_, err := db.conn.Exec(statement)
 	return err
 }
@@ -176,10 +130,7 @@ func (db *DB) Close() error {
 }
 
 func normalizeBackend(value string) Backend {
-	if strings.EqualFold(strings.TrimSpace(value), string(BackendMySQL)) {
-		return BackendMySQL
-	}
-	return BackendSQLite
+	return BackendMySQL
 }
 
 func quoteIdents(backend Backend, values []string) string {
@@ -191,10 +142,7 @@ func quoteIdents(backend Backend, values []string) string {
 }
 
 func quoteIdent(backend Backend, value string) string {
-	quote := `"`
-	if backend == BackendMySQL {
-		quote = "`"
-	}
+	quote := "`"
 	return quote + strings.ReplaceAll(value, quote, quote+quote) + quote
 }
 
@@ -475,7 +423,13 @@ func sqliteBaseSchemaStatements() []string {
 			action TEXT NOT NULL,
 			score REAL NOT NULL DEFAULT 0,
 			state TEXT NOT NULL DEFAULT '',
+			setup TEXT NOT NULL DEFAULT '',
+			first_action TEXT NOT NULL DEFAULT '',
 			price REAL NOT NULL DEFAULT 0,
+			reduce_price REAL NOT NULL DEFAULT 0,
+			buy_price REAL NOT NULL DEFAULT 0,
+			stop_price REAL NOT NULL DEFAULT 0,
+			t_ratio REAL NOT NULL DEFAULT 0,
 			today_pct REAL NOT NULL DEFAULT 0,
 			return_5d REAL NOT NULL DEFAULT 0,
 			return_20d REAL NOT NULL DEFAULT 0,
@@ -486,6 +440,7 @@ func sqliteBaseSchemaStatements() []string {
 			expected_edge REAL NOT NULL DEFAULT 0,
 			target_freq TEXT NOT NULL DEFAULT 'daily',
 			lookback_days INTEGER NOT NULL DEFAULT 0,
+			plan_json LONGTEXT NOT NULL,
 			reasons_json TEXT NOT NULL,
 			risks_json TEXT NOT NULL,
 			generated_at TEXT NOT NULL,
@@ -1061,6 +1016,8 @@ func (db *DB) isMigrationAlreadyApplied(version int) bool {
 		return db.columnsExist("task_run_status", "worker_pid")
 	case 8:
 		return db.columnsExist("task_run_status", "task_type")
+	case 12:
+		return db.columnsExist("t0_daily_candidates", "setup", "first_action", "reduce_price", "buy_price", "stop_price", "t_ratio", "plan_json")
 	default:
 		return false
 	}
@@ -1196,6 +1153,17 @@ func (db *DB) schemaMigrations() []migration {
 			}
 			_, err := db.conn.Exec(`DELETE FROM cfg_schema_comments WHERE table_name IN ('monitor_state_team_holder_changes', 'monitor_state_team_holder_snapshots', 'state_team_holder_changes', 'state_team_holder_snapshots')`)
 			return err
+		}},
+		{version: 12, name: "t0_trader_plan_columns", up: func(db *DB) error {
+			return db.addColumnsIfMissing([]columnMigration{
+				{table: "t0_daily_candidates", name: "setup", ddl: "TEXT NOT NULL DEFAULT ''"},
+				{table: "t0_daily_candidates", name: "first_action", ddl: "TEXT NOT NULL DEFAULT ''"},
+				{table: "t0_daily_candidates", name: "reduce_price", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "t0_daily_candidates", name: "buy_price", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "t0_daily_candidates", name: "stop_price", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "t0_daily_candidates", name: "t_ratio", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "t0_daily_candidates", name: "plan_json", ddl: "LONGTEXT NOT NULL"},
+			})
 		}},
 	}
 }

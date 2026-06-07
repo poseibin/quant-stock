@@ -87,6 +87,8 @@ type T0Recommendation struct {
 	Recommendation string   `json:"recommendation"`
 	Score          float64  `json:"score"`
 	State          string   `json:"state"`
+	Setup          string   `json:"setup"`
+	FirstAction    string   `json:"first_action"`
 	Shares         int      `json:"shares"`
 	MaxT0Shares    int      `json:"max_t0_shares"`
 	Price          float64  `json:"price"`
@@ -101,7 +103,9 @@ type T0Recommendation struct {
 	BuyBackPrice   float64  `json:"buy_back_price"`
 	ReducePrice    float64  `json:"reduce_price"`
 	StopPrice      float64  `json:"stop_price"`
+	TRatio         float64  `json:"t_ratio"`
 	ExpectedEdge   float64  `json:"expected_edge"`
+	PlanJSON       string   `json:"plan_json"`
 	Reasons        []string `json:"reasons"`
 	Risks          []string `json:"risks"`
 	GeneratedAt    string   `json:"generated_at"`
@@ -115,7 +119,13 @@ type T0DataPullCandidate struct {
 	Action       string   `json:"action"`
 	Score        float64  `json:"score"`
 	State        string   `json:"state"`
+	Setup        string   `json:"setup"`
+	FirstAction  string   `json:"first_action"`
 	Price        float64  `json:"price"`
+	ReducePrice  float64  `json:"reduce_price"`
+	BuyPrice     float64  `json:"buy_price"`
+	StopPrice    float64  `json:"stop_price"`
+	TRatio       float64  `json:"t_ratio"`
 	TodayPct     float64  `json:"today_pct"`
 	Return5      float64  `json:"return_5d"`
 	Return20     float64  `json:"return_20d"`
@@ -126,6 +136,7 @@ type T0DataPullCandidate struct {
 	ExpectedEdge float64  `json:"expected_edge"`
 	TargetFreq   string   `json:"target_freq"`
 	LookbackDays int      `json:"lookback_days"`
+	PlanJSON     string   `json:"plan_json"`
 	Reasons      []string `json:"reasons"`
 	Risks        []string `json:"risks"`
 	GeneratedAt  string   `json:"generated_at"`
@@ -146,6 +157,17 @@ type T0DailyBacktest struct {
 	Score        float64 `json:"score"`
 	SummaryJSON  string  `json:"summary_json"`
 	UpdatedAt    string  `json:"updated_at"`
+}
+
+type T0DailyRunSummary struct {
+	RunID          string `json:"run_id"`
+	TradeDate      string `json:"trade_date"`
+	Status         string `json:"status"`
+	CandidateCount int    `json:"candidate_count"`
+	BacktestCount  int    `json:"backtest_count"`
+	SummaryJSON    string `json:"summary_json"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 type T0TimeMachineResult struct {
@@ -334,6 +356,74 @@ type CrashWarningFeature struct {
 	Feature    string  `json:"feature"`
 	Importance float64 `json:"importance"`
 	RankNo     int     `json:"rank_no"`
+}
+
+type LimitUpModelRunSummary struct {
+	RunID           string  `json:"run_id"`
+	StartDate       string  `json:"start_date"`
+	EndDate         string  `json:"end_date"`
+	Horizon         int     `json:"horizon"`
+	ModelType       string  `json:"model_type"`
+	FeatureCount    int     `json:"feature_count"`
+	Status          string  `json:"status"`
+	ModelPath       string  `json:"model_path"`
+	Rows            int     `json:"rows"`
+	CandidateRows   int     `json:"candidate_rows"`
+	LatestDate      string  `json:"latest_date"`
+	LatestCount     int     `json:"latest_count"`
+	PositiveRate    float64 `json:"positive_rate"`
+	BaselineReturn  float64 `json:"baseline_return"`
+	TopReturn       float64 `json:"top_return"`
+	TopExcessReturn float64 `json:"top_excess_return"`
+	TopHitRate      float64 `json:"top_hit_rate"`
+	TopLimitUpRate  float64 `json:"top_limit_up_rate"`
+	TopDrawdown     float64 `json:"top_drawdown"`
+	RankIC          float64 `json:"rank_ic"`
+	SummaryJSON     string  `json:"summary_json"`
+	UpdatedAt       string  `json:"updated_at"`
+}
+
+type LimitUpModelFeature struct {
+	RunID      string  `json:"run_id"`
+	Feature    string  `json:"feature"`
+	Importance float64 `json:"importance"`
+	RankNo     int     `json:"rank_no"`
+}
+
+type LimitUpModelPrediction struct {
+	RunID         string  `json:"run_id"`
+	TradeDate     string  `json:"trade_date"`
+	TSCode        string  `json:"ts_code"`
+	Name          string  `json:"name"`
+	Industry      string  `json:"industry"`
+	Price         float64 `json:"price"`
+	High          float64 `json:"high"`
+	Low           float64 `json:"low"`
+	TodayPct      float64 `json:"today_pct"`
+	Prob          float64 `json:"prob"`
+	ModelScore    float64 `json:"model_score"`
+	Label         int     `json:"label"`
+	Fwd5Return    float64 `json:"fwd5_return"`
+	Fwd5MaxReturn float64 `json:"fwd5_max_return"`
+	MaxDrawdown5D float64 `json:"max_drawdown_5d"`
+	HitLimitUp5D  int     `json:"hit_limit_up_5d"`
+	IsLatest      bool    `json:"is_latest"`
+	SummaryJSON   string  `json:"summary_json"`
+	UpdatedAt     string  `json:"updated_at"`
+}
+
+type LimitUpModelTimeMachineSlice struct {
+	RunID          string  `json:"run_id"`
+	TradeDate      string  `json:"trade_date"`
+	CandidateCount int     `json:"candidate_count"`
+	TopCount       int     `json:"top_count"`
+	AvgReturn      float64 `json:"avg_return"`
+	AvgMaxReturn   float64 `json:"avg_max_return"`
+	HitRate        float64 `json:"hit_rate"`
+	LimitUpHitRate float64 `json:"limit_up_hit_rate"`
+	AvgDrawdown    float64 `json:"avg_drawdown"`
+	RankIC         float64 `json:"rank_ic"`
+	UpdatedAt      string  `json:"updated_at"`
 }
 
 type SettingsResponse struct {
@@ -954,12 +1044,12 @@ func (app *App) activePortfolioCandidate() (*activePortfolioCandidateRecord, err
 }
 
 func (app *App) listSignalPortfolioCandidates(active *activePortfolioCandidateRecord) ([]SignalPortfolioCandidateDTO, error) {
-	rows, err := app.database.Conn().Query(`SELECT run_id, candidate_id, rank, name, objective, status, score,
+	rows, err := app.database.Conn().Query(`SELECT run_id, candidate_id, ` + "`rank`" + `, name, objective, status, score,
 		strategies, weights_json, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings,
 		rebalance_freq, COALESCE(validation_status,''), COALESCE(reason,''), COALESCE(updated_at,'')
 		FROM eval_portfolio_candidates
 		WHERE status = 'ok'
-		ORDER BY CASE WHEN rank > 0 THEN 0 ELSE 1 END, rank ASC, score DESC, updated_at DESC
+		ORDER BY CASE WHEN ` + "`rank`" + ` > 0 THEN 0 ELSE 1 END, ` + "`rank`" + ` ASC, score DESC, updated_at DESC
 		LIMIT 30`)
 	if err != nil {
 		return nil, err
@@ -1250,6 +1340,36 @@ func (app *App) markPythonStatusTaskError(taskName string, message string) {
 	app.ensureRunStatusTaskType(taskName)
 }
 
+func (app *App) markGenericPythonWorkerStarted(taskName string, taskType string, pid int, logPath string) {
+	if app.database == nil {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "task_type", "state", "idx", "total", "stage", "name", "message", "worker_pid", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"task_type", "state", "idx", "total", "stage", "name", "message", "worker_pid", "updated_at", "finished_at"},
+		),
+		taskName, taskType, "running", 0, 5, "prepare", "启动训练进程", "日志: "+logPath, pid, now, now, "",
+	)
+}
+
+func (app *App) waitGenericPythonWorker(cmd *exec.Cmd, logFile *os.File, taskName string, logPath string) {
+	err := cmd.Wait()
+	_ = logFile.Close()
+	if err == nil || app.database == nil {
+		return
+	}
+	if app.positionService != nil {
+		if status, statusErr := app.positionService.GetRunStatus(taskName); statusErr == nil && status.State != "running" {
+			return
+		}
+	}
+	app.markPythonStatusTaskError(taskName, "训练进程已退出: "+err.Error()+"，日志: "+logPath)
+}
+
 func (app *App) ensureRunStatusTaskType(taskName string) {
 	if app.database == nil {
 		return
@@ -1271,6 +1391,10 @@ func runStatusTaskType(taskName string) string {
 		return "evaluation"
 	case "limit_breakout", "limit_up_momentum", "t0_daily_research", "t0_daily_timemachine":
 		return "market_scan"
+	case "limit_up_model":
+		return "model_training"
+	case "limit_breakout_model":
+		return "model_training"
 	case "policy_support_analysis":
 		return "analysis"
 	default:
@@ -1461,6 +1585,13 @@ func (app *App) ListLimitSignalEvaluationSummary() ([]market.LimitSignalEvaluati
 		return []market.LimitSignalEvaluationSummary{}, err
 	}
 	return app.marketService.ListLimitSignalEvaluationSummary()
+}
+
+func (app *App) ListLimitSignalTimeMachineSlices(limit int) ([]market.LimitSignalTimeMachineSlice, error) {
+	if err := app.ensureMarketService(); err != nil {
+		return []market.LimitSignalTimeMachineSlice{}, err
+	}
+	return app.marketService.ListLimitSignalTimeMachineSlices(limit)
 }
 
 func (app *App) ListFactorResearchRuns(limit int) ([]FactorResearchRunSummary, error) {
@@ -1949,6 +2080,453 @@ func (app *App) ListCrashWarningFeatures(runID string, limit int) ([]CrashWarnin
 	return out, rows.Err()
 }
 
+func (app *App) RunLimitUpModelTraining() error {
+	if err := app.ensureDatabase(); err != nil {
+		return err
+	}
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return errors.New("数据路径未设置")
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(dataPath, "meta.db")
+	logDir := filepath.Join(dataPath, "logs", "limit_up_model")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	runID := "lum_" + time.Now().Format("20060102_150405")
+	logPath := filepath.Join(logDir, runID+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	args := []string{
+		"scripts/limit_up_model_worker.py",
+		"--run-id", runID,
+		"--data-path", dataPath,
+		"--db-path", dbPath,
+		"--start", "20150101",
+		"--end", time.Now().Format("20060102"),
+		"--min-test-year", "2020",
+		"--threads", "4",
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		app.markPythonStatusTaskError("limit_up_model", "涨停模型训练启动失败: "+err.Error()+"，日志: "+logPath)
+		return err
+	}
+	app.markGenericPythonWorkerStarted("limit_up_model", "model_training", cmd.Process.Pid, logPath)
+	go app.waitGenericPythonWorker(cmd, logFile, "limit_up_model", logPath)
+	return nil
+}
+
+func (app *App) GetLimitUpModelRunStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("limit_up_model")
+}
+
+func (app *App) RunLimitBreakoutModelTraining() error {
+	if err := app.ensureDatabase(); err != nil {
+		return err
+	}
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return errors.New("数据路径未设置")
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(dataPath, "meta.db")
+	logDir := filepath.Join(dataPath, "logs", "limit_breakout_model")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	runID := "lbm_" + time.Now().Format("20060102_150405")
+	logPath := filepath.Join(logDir, runID+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	args := []string{
+		"scripts/limit_breakout_model_worker.py",
+		"--run-id", runID,
+		"--data-path", dataPath,
+		"--db-path", dbPath,
+		"--start", "20150101",
+		"--end", time.Now().Format("20060102"),
+		"--min-test-year", "2020",
+		"--top-k", "3",
+		"--threads", "4",
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		app.markPythonStatusTaskError("limit_breakout_model", "横盘预警模型训练启动失败: "+err.Error()+"，日志: "+logPath)
+		return err
+	}
+	app.markGenericPythonWorkerStarted("limit_breakout_model", "model_training", cmd.Process.Pid, logPath)
+	go app.waitGenericPythonWorker(cmd, logFile, "limit_breakout_model", logPath)
+	return nil
+}
+
+func (app *App) GetLimitBreakoutModelRunStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("limit_breakout_model")
+}
+
+func (app *App) ListLimitUpModelRuns(limit int) ([]LimitUpModelRunSummary, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []LimitUpModelRunSummary{}, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, start_date, end_date, COALESCE(horizon, 0), model_type,
+		       COALESCE(feature_count, 0), status, COALESCE(model_path, ''),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.rows') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.candidate_rows') + 0, 0),
+		       COALESCE(JSON_UNQUOTE(JSON_EXTRACT(summary_json, '$.latest_date')), ''),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.latest_count') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.positive_rate') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.baseline_return') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_return') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_excess_return') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_hit_rate') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_limit_up_rate') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_drawdown') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.rank_ic') + 0, 0),
+		       COALESCE(summary_json, ''), updated_at
+		FROM limit_up_model_runs
+		ORDER BY updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return []LimitUpModelRunSummary{}, nil
+	}
+	defer rows.Close()
+	out := []LimitUpModelRunSummary{}
+	for rows.Next() {
+		var item LimitUpModelRunSummary
+		if err := rows.Scan(
+			&item.RunID, &item.StartDate, &item.EndDate, &item.Horizon, &item.ModelType,
+			&item.FeatureCount, &item.Status, &item.ModelPath, &item.Rows, &item.CandidateRows,
+			&item.LatestDate, &item.LatestCount, &item.PositiveRate, &item.BaselineReturn,
+			&item.TopReturn, &item.TopExcessReturn, &item.TopHitRate, &item.TopLimitUpRate,
+			&item.TopDrawdown, &item.RankIC, &item.SummaryJSON, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListLimitUpModelFeatures(runID string, limit int) ([]LimitUpModelFeature, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []LimitUpModelFeature{}, err
+	}
+	runID = app.resolveLatestLimitUpModelRunID(runID)
+	if runID == "" {
+		return []LimitUpModelFeature{}, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, feature, COALESCE(importance, 0), COALESCE(rank_no, 0)
+		FROM limit_up_model_features
+		WHERE run_id = ?
+		ORDER BY rank_no ASC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []LimitUpModelFeature{}, nil
+	}
+	defer rows.Close()
+	out := []LimitUpModelFeature{}
+	for rows.Next() {
+		var item LimitUpModelFeature
+		if err := rows.Scan(&item.RunID, &item.Feature, &item.Importance, &item.RankNo); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListLimitUpModelPredictions(runID string, limit int) ([]LimitUpModelPrediction, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []LimitUpModelPrediction{}, err
+	}
+	runID = app.resolveLatestLimitUpModelRunID(runID)
+	if runID == "" {
+		return []LimitUpModelPrediction{}, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT p.run_id, p.trade_date, p.ts_code, p.name, p.industry,
+		       COALESCE(d.close, 0), COALESCE(d.high, 0), COALESCE(d.low, 0), COALESCE(d.pct_chg, 0),
+		       COALESCE(p.prob, 0), COALESCE(p.model_score, 0),
+		       COALESCE(p.label, 0), COALESCE(p.fwd5_return, 0), COALESCE(p.fwd5_max_return, 0),
+		       COALESCE(p.max_drawdown_5d, 0), COALESCE(p.hit_limit_up_5d, 0), COALESCE(p.is_latest, 0),
+		       COALESCE(p.summary_json, ''), p.updated_at
+		FROM limit_up_model_predictions p
+		LEFT JOIN data_daily_bars d ON d.ts_code = p.ts_code AND d.trade_date = p.trade_date
+		WHERE p.run_id = ? AND p.is_latest = 1
+		ORDER BY p.model_score DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []LimitUpModelPrediction{}, nil
+	}
+	defer rows.Close()
+	out := []LimitUpModelPrediction{}
+	for rows.Next() {
+		var item LimitUpModelPrediction
+		var latest int
+		if err := rows.Scan(
+			&item.RunID, &item.TradeDate, &item.TSCode, &item.Name, &item.Industry,
+			&item.Price, &item.High, &item.Low, &item.TodayPct, &item.Prob,
+			&item.ModelScore, &item.Label, &item.Fwd5Return, &item.Fwd5MaxReturn, &item.MaxDrawdown5D,
+			&item.HitLimitUp5D, &latest, &item.SummaryJSON, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		item.IsLatest = latest != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListLimitUpModelTimeMachineSlices(runID string, limit int) ([]LimitUpModelTimeMachineSlice, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []LimitUpModelTimeMachineSlice{}, err
+	}
+	runID = app.resolveLatestLimitUpModelRunID(runID)
+	if runID == "" {
+		return []LimitUpModelTimeMachineSlice{}, nil
+	}
+	if limit <= 0 || limit > 300 {
+		limit = 80
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, trade_date, COALESCE(candidate_count, 0), COALESCE(top_count, 0),
+		       COALESCE(avg_return, 0), COALESCE(avg_max_return, 0), COALESCE(hit_rate, 0),
+		       COALESCE(limit_up_hit_rate, 0), COALESCE(avg_drawdown, 0), COALESCE(rank_ic, 0), updated_at
+		FROM limit_up_model_tm_slices
+		WHERE run_id = ?
+		ORDER BY trade_date DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []LimitUpModelTimeMachineSlice{}, nil
+	}
+	defer rows.Close()
+	out := []LimitUpModelTimeMachineSlice{}
+	for rows.Next() {
+		var item LimitUpModelTimeMachineSlice
+		if err := rows.Scan(
+			&item.RunID, &item.TradeDate, &item.CandidateCount, &item.TopCount, &item.AvgReturn,
+			&item.AvgMaxReturn, &item.HitRate, &item.LimitUpHitRate, &item.AvgDrawdown, &item.RankIC, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) resolveLatestLimitUpModelRunID(runID string) string {
+	runID = strings.TrimSpace(runID)
+	if runID != "" || app.database == nil {
+		return runID
+	}
+	_ = app.database.Conn().QueryRow(`SELECT run_id FROM limit_up_model_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	return runID
+}
+
+func (app *App) ListLimitBreakoutModelRuns(limit int) ([]LimitUpModelRunSummary, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []LimitUpModelRunSummary{}, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, start_date, end_date, COALESCE(horizon, 0), model_type,
+		       COALESCE(feature_count, 0), status, COALESCE(model_path, ''),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.rows') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.candidate_rows') + 0, 0),
+		       COALESCE(JSON_UNQUOTE(JSON_EXTRACT(summary_json, '$.latest_date')), ''),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.latest_count') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.positive_rate') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.baseline_return') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_return') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_excess_return') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_hit_rate') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_limit_up_rate') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.top_drawdown') + 0, 0),
+		       COALESCE(JSON_EXTRACT(summary_json, '$.rank_ic') + 0, 0),
+		       COALESCE(summary_json, ''), updated_at
+		FROM limit_breakout_model_runs
+		ORDER BY updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return []LimitUpModelRunSummary{}, nil
+	}
+	defer rows.Close()
+	out := []LimitUpModelRunSummary{}
+	for rows.Next() {
+		var item LimitUpModelRunSummary
+		if err := rows.Scan(
+			&item.RunID, &item.StartDate, &item.EndDate, &item.Horizon, &item.ModelType,
+			&item.FeatureCount, &item.Status, &item.ModelPath, &item.Rows, &item.CandidateRows,
+			&item.LatestDate, &item.LatestCount, &item.PositiveRate, &item.BaselineReturn,
+			&item.TopReturn, &item.TopExcessReturn, &item.TopHitRate, &item.TopLimitUpRate,
+			&item.TopDrawdown, &item.RankIC, &item.SummaryJSON, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListLimitBreakoutModelFeatures(runID string, limit int) ([]LimitUpModelFeature, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []LimitUpModelFeature{}, err
+	}
+	runID = app.resolveLatestLimitBreakoutModelRunID(runID)
+	if runID == "" {
+		return []LimitUpModelFeature{}, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, feature, COALESCE(importance, 0), COALESCE(rank_no, 0)
+		FROM limit_breakout_model_features
+		WHERE run_id = ?
+		ORDER BY rank_no ASC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []LimitUpModelFeature{}, nil
+	}
+	defer rows.Close()
+	out := []LimitUpModelFeature{}
+	for rows.Next() {
+		var item LimitUpModelFeature
+		if err := rows.Scan(&item.RunID, &item.Feature, &item.Importance, &item.RankNo); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListLimitBreakoutModelPredictions(runID string, limit int) ([]LimitUpModelPrediction, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []LimitUpModelPrediction{}, err
+	}
+	runID = app.resolveLatestLimitBreakoutModelRunID(runID)
+	if runID == "" {
+		return []LimitUpModelPrediction{}, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT p.run_id, p.trade_date, p.ts_code, p.name, p.industry,
+		       COALESCE(d.close, 0), COALESCE(d.high, 0), COALESCE(d.low, 0), COALESCE(d.pct_chg, 0),
+		       COALESCE(p.prob, 0), COALESCE(p.model_score, 0),
+		       COALESCE(p.label, 0), COALESCE(p.fwd5_return, 0), COALESCE(p.fwd5_max_return, 0),
+		       COALESCE(p.max_drawdown_5d, 0), COALESCE(p.hit_limit_up_5d, 0), COALESCE(p.is_latest, 0),
+		       COALESCE(p.summary_json, ''), p.updated_at
+		FROM limit_breakout_model_predictions p
+		LEFT JOIN data_daily_bars d ON d.ts_code = p.ts_code AND d.trade_date = p.trade_date
+		WHERE p.run_id = ? AND p.is_latest = 1
+		ORDER BY p.model_score DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []LimitUpModelPrediction{}, nil
+	}
+	defer rows.Close()
+	out := []LimitUpModelPrediction{}
+	for rows.Next() {
+		var item LimitUpModelPrediction
+		var latest int
+		if err := rows.Scan(
+			&item.RunID, &item.TradeDate, &item.TSCode, &item.Name, &item.Industry,
+			&item.Price, &item.High, &item.Low, &item.TodayPct, &item.Prob,
+			&item.ModelScore, &item.Label, &item.Fwd5Return, &item.Fwd5MaxReturn, &item.MaxDrawdown5D,
+			&item.HitLimitUp5D, &latest, &item.SummaryJSON, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		item.IsLatest = latest != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListLimitBreakoutModelTimeMachineSlices(runID string, limit int) ([]LimitUpModelTimeMachineSlice, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []LimitUpModelTimeMachineSlice{}, err
+	}
+	runID = app.resolveLatestLimitBreakoutModelRunID(runID)
+	if runID == "" {
+		return []LimitUpModelTimeMachineSlice{}, nil
+	}
+	if limit <= 0 || limit > 300 {
+		limit = 80
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, trade_date, COALESCE(candidate_count, 0), COALESCE(top_count, 0),
+		       COALESCE(avg_return, 0), COALESCE(avg_max_return, 0), COALESCE(hit_rate, 0),
+		       COALESCE(limit_up_hit_rate, 0), COALESCE(avg_drawdown, 0), COALESCE(rank_ic, 0), updated_at
+		FROM limit_breakout_model_tm_slices
+		WHERE run_id = ?
+		ORDER BY trade_date DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []LimitUpModelTimeMachineSlice{}, nil
+	}
+	defer rows.Close()
+	out := []LimitUpModelTimeMachineSlice{}
+	for rows.Next() {
+		var item LimitUpModelTimeMachineSlice
+		if err := rows.Scan(
+			&item.RunID, &item.TradeDate, &item.CandidateCount, &item.TopCount, &item.AvgReturn,
+			&item.AvgMaxReturn, &item.HitRate, &item.LimitUpHitRate, &item.AvgDrawdown, &item.RankIC, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) resolveLatestLimitBreakoutModelRunID(runID string) string {
+	runID = strings.TrimSpace(runID)
+	if runID != "" || app.database == nil {
+		return runID
+	}
+	_ = app.database.Conn().QueryRow(`SELECT run_id FROM limit_breakout_model_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	return runID
+}
+
 func (app *App) latestFactorRunID() (string, error) {
 	row := app.database.Conn().QueryRow(`SELECT run_id FROM factor_research_runs ORDER BY updated_at DESC LIMIT 1`)
 	var runID string
@@ -2079,9 +2657,11 @@ func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
 		SELECT h.ts_code, COALESCE(NULLIF(h.name,''), c.name, ''), COALESCE(NULLIF(h.industry,''), c.industry, ''),
 		       h.shares, h.avg_cost, h.last_price, h.weight,
 		       COALESCE(c.trade_date,''), COALESCE(c.action,''), COALESCE(c.score,0), COALESCE(c.state,''),
-		       COALESCE(c.price, h.last_price), COALESCE(c.today_pct,0), COALESCE(c.return_5d,0), COALESCE(c.return_20d,0),
+		       COALESCE(c.setup,''), COALESCE(c.first_action,''), COALESCE(c.price, h.last_price),
+		       COALESCE(c.reduce_price,0), COALESCE(c.buy_price,0), COALESCE(c.stop_price,0), COALESCE(c.t_ratio,0),
+		       COALESCE(c.today_pct,0), COALESCE(c.return_5d,0), COALESCE(c.return_20d,0),
 		       COALESCE(c.avg_range_20d,0), COALESCE(c.drawdown_20d,0), COALESCE(c.amount,0),
-		       COALESCE(c.expected_edge,0), COALESCE(c.reasons_json,'[]'), COALESCE(c.risks_json,'[]'), COALESCE(c.generated_at,'')
+		       COALESCE(c.expected_edge,0), COALESCE(c.plan_json,''), COALESCE(c.reasons_json,'[]'), COALESCE(c.risks_json,'[]'), COALESCE(c.generated_at,'')
 		FROM portfolio_pool_holdings h
 		LEFT JOIN t0_daily_candidates c ON c.ts_code = h.ts_code
 			AND c.run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
@@ -2099,16 +2679,23 @@ func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
 		var risksJSON string
 		if err := rows.Scan(
 			&item.TSCode, &item.Name, &item.Industry, &item.Shares, &item.AvgCost, &item.Price, &item.PositionWeight,
-			&item.TradeDate, &item.Action, &item.Score, &item.State, &item.Price, &item.TodayPct, &item.Return5, &item.Return20,
-			&item.AvgRange20, &item.Drawdown20, &item.Amount, &item.ExpectedEdge, &reasonsJSON, &risksJSON, &item.GeneratedAt,
+			&item.TradeDate, &item.Action, &item.Score, &item.State, &item.Setup, &item.FirstAction, &item.Price,
+			&item.ReducePrice, &item.BuyBackPrice, &item.StopPrice, &item.TRatio, &item.TodayPct, &item.Return5, &item.Return20,
+			&item.AvgRange20, &item.Drawdown20, &item.Amount, &item.ExpectedEdge, &item.PlanJSON, &reasonsJSON, &risksJSON, &item.GeneratedAt,
 		); err != nil {
 			return nil, err
 		}
 		item.MaxT0Shares = (int(float64(item.Shares)*0.3) / 100) * 100
 		band := clamp(item.AvgRange20*0.55, 0.008, 0.035)
-		item.ReducePrice = roundPrice(item.Price * (1 + band))
-		item.BuyBackPrice = roundPrice(item.Price * (1 - band))
-		item.StopPrice = roundPrice(item.Price * (1 - clamp(item.AvgRange20*0.9, 0.018, 0.06)))
+		if item.ReducePrice <= 0 {
+			item.ReducePrice = roundPrice(item.Price * (1 + band))
+		}
+		if item.BuyBackPrice <= 0 {
+			item.BuyBackPrice = roundPrice(item.Price * (1 - band))
+		}
+		if item.StopPrice <= 0 {
+			item.StopPrice = roundPrice(item.Price * (1 - clamp(item.AvgRange20*0.9, 0.018, 0.06)))
+		}
 		if item.Action == "" {
 			item.Action = "待评估"
 			item.Recommendation = "请先运行日线做T评估"
@@ -2143,9 +2730,10 @@ func (app *App) ListT0DataPullCandidates(limit int) ([]T0DataPullCandidate, erro
 		limit = 100
 	}
 	rows, err := app.database.Conn().Query(`
-		SELECT ts_code, name, industry, trade_date, action, score, state, price, today_pct, return_5d, return_20d,
+		SELECT ts_code, name, industry, trade_date, action, score, state, setup, first_action,
+		       price, reduce_price, buy_price, stop_price, t_ratio, today_pct, return_5d, return_20d,
 		       avg_range_20d, drawdown_20d, amount, avg_amount_20d, expected_edge, target_freq, lookback_days,
-		       reasons_json, risks_json, generated_at
+		       plan_json, reasons_json, risks_json, generated_at
 		FROM t0_daily_candidates
 		WHERE run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
 		ORDER BY score DESC, avg_amount_20d DESC
@@ -2161,14 +2749,55 @@ func (app *App) ListT0DataPullCandidates(limit int) ([]T0DataPullCandidate, erro
 		var risksJSON string
 		if err := rows.Scan(
 			&item.TSCode, &item.Name, &item.Industry, &item.TradeDate, &item.Action, &item.Score, &item.State,
-			&item.Price, &item.TodayPct, &item.Return5, &item.Return20, &item.AvgRange20, &item.Drawdown20,
+			&item.Setup, &item.FirstAction, &item.Price, &item.ReducePrice, &item.BuyPrice, &item.StopPrice,
+			&item.TRatio, &item.TodayPct, &item.Return5, &item.Return20, &item.AvgRange20, &item.Drawdown20,
 			&item.Amount, &item.AvgAmount20, &item.ExpectedEdge, &item.TargetFreq, &item.LookbackDays,
-			&reasonsJSON, &risksJSON, &item.GeneratedAt,
+			&item.PlanJSON, &reasonsJSON, &risksJSON, &item.GeneratedAt,
 		); err != nil {
 			return nil, err
 		}
+		band := clamp(item.AvgRange20*0.55, 0.008, 0.04)
+		if item.ReducePrice <= 0 {
+			item.ReducePrice = roundPrice(item.Price * (1 + band))
+		}
+		if item.BuyPrice <= 0 {
+			item.BuyPrice = roundPrice(item.Price * (1 - band))
+		}
+		if item.StopPrice <= 0 {
+			item.StopPrice = roundPrice(item.Price * (1 - clamp(item.AvgRange20*0.9, 0.018, 0.06)))
+		}
 		item.Reasons = parseJSONStringList(reasonsJSON)
 		item.Risks = parseJSONStringList(risksJSON)
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (app *App) ListT0DailyRuns(limit int) ([]T0DailyRunSummary, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, trade_date, status, candidate_count, backtest_count, summary_json, created_at, updated_at
+		FROM t0_daily_runs
+		ORDER BY updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]T0DailyRunSummary, 0)
+	for rows.Next() {
+		var item T0DailyRunSummary
+		if err := rows.Scan(&item.RunID, &item.TradeDate, &item.Status, &item.CandidateCount, &item.BacktestCount, &item.SummaryJSON, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -2797,7 +3426,7 @@ func (app *App) prepareSignalPortfolioCandidate(req *position.GenerateSignalRequ
 }
 
 func (app *App) signalPortfolioCandidate(runID string, candidateID string) (*SignalPortfolioCandidateDTO, error) {
-	row := app.database.Conn().QueryRow(`SELECT run_id, candidate_id, rank, name, objective, status, score,
+	row := app.database.Conn().QueryRow(`SELECT run_id, candidate_id, `+"`rank`"+`, name, objective, status, score,
 		strategies, weights_json, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings,
 		rebalance_freq, COALESCE(validation_status,''), COALESCE(reason,''), COALESCE(updated_at,'')
 		FROM eval_portfolio_candidates
@@ -3251,8 +3880,8 @@ func readPortfolioOptimizationSummaryFromDB(db *sql.DB, runID string) string {
 	if err := json.Unmarshal([]byte(summaryJSON), &payload); err != nil {
 		payload = map[string]any{}
 	}
-	rows, err := db.Query(`SELECT rank, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json FROM eval_portfolio_candidates
-		WHERE run_id = ? ORDER BY CASE WHEN rank > 0 THEN 0 ELSE 1 END, rank, score DESC`, runID)
+	rows, err := db.Query(`SELECT `+"`rank`"+`, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json FROM eval_portfolio_candidates
+		WHERE run_id = ? ORDER BY CASE WHEN `+"`rank`"+` > 0 THEN 0 ELSE 1 END, `+"`rank`"+`, score DESC`, runID)
 	if err != nil {
 		return ""
 	}
@@ -6303,10 +6932,10 @@ func (app *App) buildPortfolioAnalysisContext(parent task.Task, children []task.
 	}
 	rows := make([]map[string]any, 0)
 	if app.database != nil && runID != "" {
-		dbRows, err := app.database.Conn().Query(`SELECT rank, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json
+		dbRows, err := app.database.Conn().Query(`SELECT `+"`rank`"+`, score, annual_return, max_drawdown, sharpe, calmar, avg_turnover, avg_holdings, avg_total_mv, avg_amount, payload_json
 			FROM eval_portfolio_candidates
 			WHERE run_id = ?
-			ORDER BY CASE WHEN rank > 0 THEN rank ELSE 999999 END ASC, score DESC
+			ORDER BY CASE WHEN `+"`rank`"+` > 0 THEN `+"`rank`"+` ELSE 999999 END ASC, score DESC
 			LIMIT ?`, runID, analysisLimit)
 		if err != nil {
 			return nil, err
@@ -7162,7 +7791,7 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	if t.Status != task.StatusCreated && t.Status != task.StatusQueued && t.Status != task.StatusInterrupted && t.Status != task.StatusFailed && t.Status != task.StatusCancelled {
 		return task.DTO{}, errors.New("task cannot be started in current status")
 	}
-	if t.TaskType != task.TypeEvaluationTimeMachine && t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypeFactorResearch {
+	if t.TaskType != task.TypeEvaluationTimeMachine && t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypeFactorResearch && t.TaskType != task.TypeLimitSignalEvaluation && t.TaskType != task.TypeT0DailyResearch && t.TaskType != task.TypeT0TimeMachine {
 		return task.DTO{}, errors.New("only evaluation tasks can be started")
 	}
 	if err := app.ensureDataQualityForEvaluation(); err != nil {
@@ -7190,6 +7819,9 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	}
 	if t.TaskType == task.TypeFactorResearch {
 		return app.startFactorResearchTask(t)
+	}
+	if t.TaskType == task.TypeLimitSignalEvaluation || t.TaskType == task.TypeT0DailyResearch || t.TaskType == task.TypeT0TimeMachine {
+		return app.startMarketEvaluationTask(t)
 	}
 	runID := t.ExternalRunID
 	if runID == "" {
@@ -7234,6 +7866,252 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	return task.ToDTO(t), nil
 }
 
+func (app *App) startMarketEvaluationTask(t task.Task) (task.DTO, error) {
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return task.DTO{}, errors.New("数据路径未设置")
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(dataPath, "meta.db")
+	statusTask, args, err := marketEvaluationTaskCommand(t.TaskType, dataPath, dbPath, task.ToDTO(t).Params)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	runID := strings.TrimSpace(t.ExternalRunID)
+	if runID == "" {
+		runID = strings.ReplaceAll(t.ID, "-", "")
+	}
+	runPath := filepath.Join(dataPath, "logs", statusTask, runID)
+	if err := os.MkdirAll(runPath, 0o755); err != nil {
+		return task.DTO{}, err
+	}
+	logPath := filepath.Join(runPath, "worker.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	nowText := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "task_type", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"task_type", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+		),
+		statusTask, runStatusTaskType(statusTask), "running", 1, 100, "prepare", "启动评估任务", "", nowText, nowText, "",
+	)
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		finishedAt := time.Now().Format(time.RFC3339)
+		_, _ = app.database.Conn().Exec(
+			`UPDATE task_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task=?`,
+			err.Error(), finishedAt, finishedAt, statusTask,
+		)
+		return task.DTO{}, err
+	}
+	now := time.Now()
+	t.Status = task.StatusRunning
+	t.Progress = 0.02
+	t.ResultPath = runPath
+	t.LogPath = logPath
+	t.WorkerPID = cmd.Process.Pid
+	t.ExternalRunID = runID
+	t.ErrorMessage = ""
+	t.StartedAt = now
+	t.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
+		_ = worker.NewManager().Cancel(cmd.Process.Pid)
+		_ = logFile.Close()
+		return task.DTO{}, err
+	}
+	go app.syncMarketEvaluationTask(t.ID, statusTask, cmd, logFile)
+	return task.ToDTO(t), nil
+}
+
+func marketEvaluationTaskCommand(taskType task.Type, dataPath string, dbPath string, params map[string]any) (string, []string, error) {
+	switch taskType {
+	case task.TypeLimitSignalEvaluation:
+		return "limit_signal_evaluation", []string{
+			"scripts/evaluate_limit_signals.py",
+			"--data-path", dataPath,
+			"--db-path", dbPath,
+		}, nil
+	case task.TypeT0DailyResearch:
+		return "t0_daily_research", []string{
+			"scripts/t0_daily_worker.py",
+			"--data-path", dataPath,
+			"--db-path", dbPath,
+			"--lookback", "120",
+			"--history-days", "760",
+			"--model-history-days", "2200",
+			"--limit", "120",
+			"--backtest-limit", "120",
+		}, nil
+	case task.TypeT0TimeMachine:
+		mode := strings.TrimSpace(fmt.Sprint(params["mode"]))
+		if mode == "quick" {
+			return "t0_daily_timemachine", []string{
+				"scripts/t0_daily_worker.py",
+				"--mode", "time_machine",
+				"--data-path", dataPath,
+				"--db-path", dbPath,
+				"--lookback-grid", "80",
+				"--eval-days-grid", "20",
+				"--anchor-count", "1",
+				"--anchor-step", "20",
+				"--model-history-days", "1600",
+				"--limit", "80",
+			}, nil
+		}
+		return "t0_daily_timemachine", []string{
+			"scripts/t0_daily_worker.py",
+			"--mode", "time_machine",
+			"--data-path", dataPath,
+			"--db-path", dbPath,
+			"--lookback-grid", "40,60,80,120",
+			"--eval-days-grid", "10,20,40",
+			"--anchor-count", "4",
+			"--anchor-step", "20",
+			"--model-history-days", "2200",
+			"--limit", "80",
+		}, nil
+	default:
+		return "", nil, errors.New("unsupported market evaluation task")
+	}
+}
+
+func (app *App) syncMarketEvaluationTask(taskID string, statusTask string, cmd *exec.Cmd, logFile *os.File) {
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+		_ = logFile.Close()
+	}()
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	var waitErr error
+	for {
+		select {
+		case waitErr = <-done:
+			app.updateTaskFromRunStatus(taskID, statusTask, waitErr, true)
+			return
+		case <-ticker.C:
+			app.updateTaskFromRunStatus(taskID, statusTask, nil, false)
+		}
+	}
+}
+
+func (app *App) updateTaskFromRunStatus(taskID string, statusTask string, waitErr error, finished bool) {
+	if app.taskService == nil || app.database == nil {
+		return
+	}
+	t, err := app.taskService.Repository().Get(taskID)
+	if err != nil {
+		return
+	}
+	s, err := app.readRunStatusRow(statusTask)
+	if err != nil {
+		if finished && waitErr != nil {
+			t.Status = task.StatusFailed
+			t.Progress = 1
+			t.ErrorMessage = waitErr.Error()
+			t.WorkerPID = 0
+			t.FinishedAt = time.Now()
+			t.UpdatedAt = time.Now()
+			_ = app.taskService.Repository().UpdateStatus(t)
+			_ = app.taskService.Repository().UpdateRuntime(t)
+		}
+		return
+	}
+	progress := 0.05
+	if s.Total > 0 {
+		progress = math.Max(0.02, math.Min(0.98, float64(s.Idx)/float64(s.Total)))
+	}
+	summary := map[string]any{
+		"status_task": s.Task,
+		"stage":       s.Stage,
+		"name":        s.Name,
+		"message":     s.Message,
+		"idx":         s.Idx,
+		"total":       s.Total,
+		"updated_at":  s.UpdatedAt,
+	}
+	payload, _ := json.Marshal(summary)
+	t.SummaryJSON = string(payload)
+	t.Progress = progress
+	t.UpdatedAt = time.Now()
+	switch s.State {
+	case "done", "success":
+		t.Status = task.StatusSuccess
+		t.Progress = 1
+		t.WorkerPID = 0
+		t.FinishedAt = time.Now()
+	case "error", "failed":
+		t.Status = task.StatusFailed
+		t.Progress = 1
+		t.WorkerPID = 0
+		t.ErrorMessage = s.Message
+		t.FinishedAt = time.Now()
+	default:
+		if finished {
+			if waitErr != nil {
+				t.Status = task.StatusFailed
+				t.ErrorMessage = waitErr.Error()
+				finishedAt := time.Now().Format(time.RFC3339)
+				_, _ = app.database.Conn().Exec(
+					`UPDATE task_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task=?`,
+					waitErr.Error(), finishedAt, finishedAt, statusTask,
+				)
+			} else {
+				t.Status = task.StatusSuccess
+				t.Progress = 1
+				finishedAt := time.Now().Format(time.RFC3339)
+				message := s.Message
+				if strings.TrimSpace(message) == "" {
+					message = "评估任务已结束；如果没有切面结果，请先刷新推荐生成预测快照"
+				}
+				_, _ = app.database.Conn().Exec(
+					`UPDATE task_run_status SET state='done', idx=100, total=100, stage='done', name='评估完成', message=?, updated_at=?, finished_at=? WHERE task=? AND state NOT IN ('done','success','error','failed')`,
+					message, finishedAt, finishedAt, statusTask,
+				)
+			}
+			t.WorkerPID = 0
+			t.FinishedAt = time.Now()
+		} else {
+			t.Status = task.StatusRunning
+		}
+	}
+	_ = app.taskService.Repository().UpdateStatus(t)
+	_ = app.taskService.Repository().UpdateRuntime(t)
+}
+
+type runStatusRow struct {
+	Task      string
+	State     string
+	Idx       int
+	Total     int
+	Stage     string
+	Name      string
+	Message   string
+	UpdatedAt string
+}
+
+func (app *App) readRunStatusRow(statusTask string) (runStatusRow, error) {
+	row := app.database.Conn().QueryRow(
+		`SELECT task, state, idx, total, COALESCE(stage,''), COALESCE(name,''), COALESCE(message,''), updated_at
+		FROM task_run_status WHERE task = ?`,
+		statusTask,
+	)
+	var out runStatusRow
+	err := row.Scan(&out.Task, &out.State, &out.Idx, &out.Total, &out.Stage, &out.Name, &out.Message, &out.UpdatedAt)
+	return out, err
+}
+
 func (app *App) RetryTask(id string) (task.DTO, error) {
 	if err := app.ensureTaskService(); err != nil {
 		return task.DTO{}, err
@@ -7248,7 +8126,7 @@ func (app *App) RetryTask(id string) (task.DTO, error) {
 	if t.Status == task.StatusRunning {
 		return task.ToDTO(t), nil
 	}
-	if t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeFactorResearch {
+	if t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeFactorResearch && t.TaskType != task.TypeLimitSignalEvaluation && t.TaskType != task.TypeT0DailyResearch && t.TaskType != task.TypeT0TimeMachine {
 		return task.DTO{}, errors.New("task cannot be retried")
 	}
 	if err := app.ensureDataQualityForEvaluation(); err != nil {
@@ -8348,7 +9226,7 @@ func (app *App) reconcileStaleEvaluationLocks(maxIdle time.Duration) {
 
 func isEvaluationRuntimeType(taskType task.Type) bool {
 	switch taskType {
-	case task.TypeEvaluationTimeMachine, task.TypeStrategyEvaluation, task.TypePortfolioOptimization, task.TypeWalkForwardEvaluation, task.TypeParameterExperiment, task.TypeFactorResearch:
+	case task.TypeEvaluationTimeMachine, task.TypeStrategyEvaluation, task.TypePortfolioOptimization, task.TypeWalkForwardEvaluation, task.TypeParameterExperiment, task.TypeFactorResearch, task.TypeLimitSignalEvaluation, task.TypeT0DailyResearch, task.TypeT0TimeMachine:
 		return true
 	default:
 		return false
@@ -8712,7 +9590,7 @@ func (app *App) reRankPortfolioCandidates(runID string) error {
 		return err
 	}
 	for idx, item := range items {
-		if _, err := app.database.Conn().Exec(fmt.Sprintf(`UPDATE eval_portfolio_candidates SET rank = ?, updated_at = %s WHERE run_id = ? AND candidate_id = ?`, app.database.CurrentTimestampSQL()), idx+1, runID, item.ID); err != nil {
+		if _, err := app.database.Conn().Exec(fmt.Sprintf(`UPDATE eval_portfolio_candidates SET `+"`rank`"+` = ?, updated_at = %s WHERE run_id = ? AND candidate_id = ?`, app.database.CurrentTimestampSQL()), idx+1, runID, item.ID); err != nil {
 			return err
 		}
 	}
@@ -8988,12 +9866,14 @@ func (app *App) ensureDatabase() error {
 	var bootstrap *database.MySQLBootstrapConfig
 	if app.settings.DatabaseBackend == "mysql" {
 		mysqlCfg := config.PackagedMySQLBootstrapConfig(app.settings.MySQLDSN)
-		bootstrap = &database.MySQLBootstrapConfig{
-			AdminDSN: mysqlCfg.AdminDSN,
-			Database: mysqlCfg.Database,
-			User:     mysqlCfg.User,
-			Password: mysqlCfg.Password,
-			AppDSN:   mysqlCfg.AppDSN,
+		if strings.TrimSpace(mysqlCfg.AdminDSN) != "" {
+			bootstrap = &database.MySQLBootstrapConfig{
+				AdminDSN: mysqlCfg.AdminDSN,
+				Database: mysqlCfg.Database,
+				User:     mysqlCfg.User,
+				Password: mysqlCfg.Password,
+				AppDSN:   mysqlCfg.AppDSN,
+			}
 		}
 	} else if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return err

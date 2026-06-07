@@ -66,12 +66,20 @@ export function GetLatestPolicySupportSignal() {
   return window['go']['main']['App']['GetLatestPolicySupportSignal']();
 }
 
+export function GetLimitBreakoutModelRunStatus() {
+  return window['go']['main']['App']['GetLimitBreakoutModelRunStatus']();
+}
+
 export function GetLimitBreakoutRunStatus() {
   return window['go']['main']['App']['GetLimitBreakoutRunStatus']();
 }
 
 export function GetLimitSignalEvaluationRunStatus() {
   return window['go']['main']['App']['GetLimitSignalEvaluationRunStatus']();
+}
+
+export function GetLimitUpModelRunStatus() {
+  return window['go']['main']['App']['GetLimitUpModelRunStatus']();
 }
 
 export function GetLimitUpMomentumRunStatus() {
@@ -114,6 +122,14 @@ export function GetStockValuation(arg1) {
   return window['go']['main']['App']['GetStockValuation'](arg1);
 }
 
+export function GetT0DailyResearchStatus() {
+  return window['go']['main']['App']['GetT0DailyResearchStatus']();
+}
+
+export function GetT0TimeMachineStatus() {
+  return window['go']['main']['App']['GetT0TimeMachineStatus']();
+}
+
 export function GetTask(arg1) {
   return window['go']['main']['App']['GetTask'](arg1);
 }
@@ -126,6 +142,14 @@ export function GetTimeMachineDetail(arg1) {
   return window['go']['main']['App']['GetTimeMachineDetail'](arg1);
 }
 
+export function ListCrashWarningFeatures(arg1, arg2) {
+  return window['go']['main']['App']['ListCrashWarningFeatures'](arg1, arg2);
+}
+
+export function ListCrashWarningRuns(arg1) {
+  return window['go']['main']['App']['ListCrashWarningRuns'](arg1);
+}
+
 export function ListDailyBars(arg1) {
   return window['go']['main']['App']['ListDailyBars'](arg1);
 }
@@ -134,20 +158,36 @@ export function ListDatasetUpdateStatus() {
   return window['go']['main']['App']['ListDatasetUpdateStatus']();
 }
 
-export function ListFactorICResults(arg1, arg2) {
-  return window['go']['main']['App']['ListFactorICResults'](arg1, arg2);
+export function ListFactorAdmissionComparisons(arg1) {
+  return window['go']['main']['App']['ListFactorAdmissionComparisons'](arg1);
 }
 
 export function ListFactorCorrelationResults(arg1, arg2) {
   return window['go']['main']['App']['ListFactorCorrelationResults'](arg1, arg2);
 }
 
+export function ListFactorICResults(arg1, arg2) {
+  return window['go']['main']['App']['ListFactorICResults'](arg1, arg2);
+}
+
 export function ListFactorLatestPredictions(arg1, arg2) {
   return window['go']['main']['App']['ListFactorLatestPredictions'](arg1, arg2);
 }
 
+export function ListFactorModelFeatures(arg1, arg2) {
+  return window['go']['main']['App']['ListFactorModelFeatures'](arg1, arg2);
+}
+
+export function ListFactorModelPredictions(arg1, arg2) {
+  return window['go']['main']['App']['ListFactorModelPredictions'](arg1, arg2);
+}
+
 export function ListFactorResearchRuns(arg1) {
   return window['go']['main']['App']['ListFactorResearchRuns'](arg1);
+}
+
+export function ListFactorStateICResults(arg1, arg2) {
+  return window['go']['main']['App']['ListFactorStateICResults'](arg1, arg2);
 }
 
 export function ListFactorStressResults(arg1, arg2) {
@@ -166,8 +206,44 @@ export function ListLimitBreakoutCandidates(arg1) {
   return window['go']['main']['App']['ListLimitBreakoutCandidates'](arg1);
 }
 
+export function ListLimitBreakoutModelFeatures(arg1, arg2) {
+  return window['go']['main']['App']['ListLimitBreakoutModelFeatures'](arg1, arg2);
+}
+
+export function ListLimitBreakoutModelPredictions(arg1, arg2) {
+  return window['go']['main']['App']['ListLimitBreakoutModelPredictions'](arg1, arg2);
+}
+
+export function ListLimitBreakoutModelRuns(arg1) {
+  return window['go']['main']['App']['ListLimitBreakoutModelRuns'](arg1);
+}
+
+export function ListLimitBreakoutModelTimeMachineSlices(arg1, arg2) {
+  return window['go']['main']['App']['ListLimitBreakoutModelTimeMachineSlices'](arg1, arg2);
+}
+
 export function ListLimitSignalEvaluationSummary() {
   return window['go']['main']['App']['ListLimitSignalEvaluationSummary']();
+}
+
+export function ListLimitSignalTimeMachineSlices(arg1) {
+  return window['go']['main']['App']['ListLimitSignalTimeMachineSlices'](arg1);
+}
+
+export function ListLimitUpModelFeatures(arg1, arg2) {
+  return window['go']['main']['App']['ListLimitUpModelFeatures'](arg1, arg2);
+}
+
+export function ListLimitUpModelPredictions(arg1, arg2) {
+  return window['go']['main']['App']['ListLimitUpModelPredictions'](arg1, arg2);
+}
+
+export function ListLimitUpModelRuns(arg1) {
+  return window['go']['main']['App']['ListLimitUpModelRuns'](arg1);
+}
+
+export function ListLimitUpModelTimeMachineSlices(arg1, arg2) {
+  return window['go']['main']['App']['ListLimitUpModelTimeMachineSlices'](arg1, arg2);
 }
 
 export function ListLimitUpMomentumCandidates(arg1) {
@@ -192,6 +268,26 @@ export function ListStockBasic(arg1) {
 
 export function ListStrategyVersions(arg1) {
   return window['go']['main']['App']['ListStrategyVersions'](arg1);
+}
+
+export function ListT0DailyBacktests(arg1) {
+  return window['go']['main']['App']['ListT0DailyBacktests'](arg1);
+}
+
+export function ListT0DailyRuns(arg1) {
+  return window['go']['main']['App']['ListT0DailyRuns'](arg1);
+}
+
+export function ListT0DataPullCandidates(arg1) {
+  return window['go']['main']['App']['ListT0DataPullCandidates'](arg1);
+}
+
+export function ListT0Recommendations(arg1) {
+  return window['go']['main']['App']['ListT0Recommendations'](arg1);
+}
+
+export function ListT0TimeMachineResults(arg1) {
+  return window['go']['main']['App']['ListT0TimeMachineResults'](arg1);
 }
 
 export function ListTasks(arg1) {
@@ -234,12 +330,28 @@ export function RunDataUpdate(arg1) {
   return window['go']['main']['App']['RunDataUpdate'](arg1);
 }
 
+export function RunLimitBreakoutModelTraining() {
+  return window['go']['main']['App']['RunLimitBreakoutModelTraining']();
+}
+
 export function RunLimitSignalEvaluation() {
   return window['go']['main']['App']['RunLimitSignalEvaluation']();
 }
 
+export function RunLimitUpModelTraining() {
+  return window['go']['main']['App']['RunLimitUpModelTraining']();
+}
+
 export function RunPolicySupportAnalysis() {
   return window['go']['main']['App']['RunPolicySupportAnalysis']();
+}
+
+export function RunT0DailyResearch() {
+  return window['go']['main']['App']['RunT0DailyResearch']();
+}
+
+export function RunT0TimeMachine() {
+  return window['go']['main']['App']['RunT0TimeMachine']();
 }
 
 export function SaveSettings(arg1) {

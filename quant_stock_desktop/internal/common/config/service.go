@@ -21,7 +21,7 @@ func NewService() *Service {
 }
 
 func (service *Service) WithDB(db *sql.DB) *Service {
-	service.db = database.Wrap(db, database.BackendSQLite)
+	service.db = database.Wrap(db, database.BackendMySQL)
 	return service
 }
 
@@ -223,13 +223,12 @@ func (service *Service) Validate(settings Settings) []ValidationIssue {
 	settings = applyPackagedDatabaseConfig(settings)
 	checkDir("data_path", settings.DataPath)
 	switch settings.DatabaseBackend {
-	case "sqlite":
 	case "mysql":
 		if strings.TrimSpace(settings.MySQLDSN) == "" {
 			issues = append(issues, ValidationIssue{Field: "mysql_dsn", Message: "MySQL DSN 不能为空"})
 		}
 	default:
-		issues = append(issues, ValidationIssue{Field: "database_backend", Message: "数据库类型必须是 sqlite 或 mysql"})
+		issues = append(issues, ValidationIssue{Field: "database_backend", Message: "数据库类型必须是 mysql"})
 	}
 
 	if settings.DefaultInitialCash <= 0 {
@@ -262,7 +261,10 @@ func normalize(settings Settings) Settings {
 	}
 	settings.DatabaseBackend = strings.ToLower(strings.TrimSpace(settings.DatabaseBackend))
 	if settings.DatabaseBackend == "" {
-		settings.DatabaseBackend = "sqlite"
+		settings.DatabaseBackend = "mysql"
+	}
+	if settings.DatabaseBackend != "mysql" {
+		settings.DatabaseBackend = "mysql"
 	}
 	settings.MySQLDSN = strings.TrimSpace(settings.MySQLDSN)
 	settings = applyPackagedDatabaseConfig(settings)

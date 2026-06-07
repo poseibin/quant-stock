@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.infra import status as run_status
-from common.infra.db import connect_db, upsert_sql, write_transaction
+from common.infra.db import add_column, connect_db, table_columns, upsert_sql, write_transaction
 
 
 TASK_NAME = "limit_signal_evaluation"
@@ -31,6 +31,7 @@ class Prediction:
     parameter_key: str
     ts_code: str
     name: str
+    industry: str
     signal_date: str
     signal_price: float
     score: float
@@ -113,13 +114,56 @@ def ensure_tables(conn) -> None:
             PRIMARY KEY(signal_type, strategy_version, parameter_key)
         )"""
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS market_limit_signal_tm_slices (
+            signal_type TEXT NOT NULL,
+            strategy_version TEXT NOT NULL DEFAULT 'v1',
+            parameter_key TEXT NOT NULL,
+            signal_date TEXT NOT NULL,
+            candidate_count INTEGER NOT NULL DEFAULT 0,
+            evaluated_count INTEGER NOT NULL DEFAULT 0,
+            hit_rate REAL NOT NULL DEFAULT 0,
+            limit_up_hit_rate REAL NOT NULL DEFAULT 0,
+            avg_return_1d REAL NOT NULL DEFAULT 0,
+            avg_return_3d REAL NOT NULL DEFAULT 0,
+            avg_return_5d REAL NOT NULL DEFAULT 0,
+            avg_return_10d REAL NOT NULL DEFAULT 0,
+            avg_target_return REAL NOT NULL DEFAULT 0,
+            avg_max_drawdown_5d REAL NOT NULL DEFAULT 0,
+            avg_score REAL NOT NULL DEFAULT 0,
+            slice_score REAL NOT NULL DEFAULT 0,
+            market_heat_score REAL NOT NULL DEFAULT 0,
+            limit_up_count INTEGER NOT NULL DEFAULT 0,
+            limit_up_ratio REAL NOT NULL DEFAULT 0,
+            up_ratio REAL NOT NULL DEFAULT 0,
+            hot_tags_json TEXT NOT NULL DEFAULT '[]',
+            top_industries_json TEXT NOT NULL DEFAULT '[]',
+            recommendation TEXT NOT NULL DEFAULT '',
+            summary_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(signal_type, strategy_version, parameter_key, signal_date)
+        )"""
+    )
+    slice_columns = table_columns(conn, "market_limit_signal_tm_slices")
+    json_ddl = "TEXT NOT NULL" if conn.backend == "mysql" else "TEXT NOT NULL DEFAULT '[]'"
+    additions = {
+        "market_heat_score": "REAL NOT NULL DEFAULT 0",
+        "limit_up_count": "INTEGER NOT NULL DEFAULT 0",
+        "limit_up_ratio": "REAL NOT NULL DEFAULT 0",
+        "up_ratio": "REAL NOT NULL DEFAULT 0",
+        "hot_tags_json": json_ddl,
+        "top_industries_json": json_ddl,
+    }
+    for name, ddl in additions.items():
+        if name not in slice_columns:
+            add_column(conn, "market_limit_signal_tm_slices", name, ddl)
 
 
 def load_predictions(db_path: Path, limit: int) -> list[Prediction]:
     with connect_db(db_path) as conn:
         ensure_tables(conn)
         rows = conn.execute(
-            """SELECT id, signal_type, strategy_version, parameter_key, ts_code, name,
+            """SELECT id, signal_type, strategy_version, parameter_key, ts_code, name, industry,
                       signal_date, signal_price, score
                FROM market_limit_signal_predictions
                ORDER BY signal_date DESC, rank ASC
@@ -134,9 +178,10 @@ def load_predictions(db_path: Path, limit: int) -> list[Prediction]:
             parameter_key=str(row[3]),
             ts_code=str(row[4]),
             name=str(row[5]),
-            signal_date=str(row[6]),
-            signal_price=safe_float(row[7]),
-            score=safe_float(row[8]),
+            industry=str(row[6] or ""),
+            signal_date=str(row[7]),
+            signal_price=safe_float(row[8]),
+            score=safe_float(row[9]),
         )
         for row in rows
     ]
@@ -161,6 +206,153 @@ def load_daily(data_path: Path, predictions: list[Prediction]) -> pd.DataFrame:
         ).fetch_df()
     finally:
         con.close()
+
+
+def heat_score(limit_up_count: int, limit_up_ratio: float, up_ratio: float, avg_pct: float) -> float:
+    return max(
+        0.0,
+        min(
+            100.0,
+            min(1.0, limit_up_count / 120.0) * 35.0
+            + min(1.0, limit_up_ratio / 0.05) * 25.0
+            + min(1.0, up_ratio / 0.65) * 20.0
+            + min(1.0, max(0.0, avg_pct) / 2.5) * 20.0,
+        ),
+    )
+
+
+def load_market_context(data_path: Path, dates: list[str]) -> dict[str, dict[str, object]]:
+    dates = sorted({str(date) for date in dates if str(date)})
+    if not dates:
+        return {}
+    raw = data_path / "raw"
+    escaped = ",".join("'" + date.replace("'", "''") + "'" for date in dates)
+    con = duckdb.connect()
+    try:
+        daily = con.execute(
+            f"""
+            SELECT d.ts_code, d.trade_date, d.pct_chg,
+                   COALESCE(s.name, '') AS name,
+                   COALESCE(s.industry, '') AS industry
+            FROM read_parquet('{raw / "daily" / "*.parquet"}') d
+            LEFT JOIN read_parquet('{raw / "stock_basic" / "data.parquet"}') s
+              ON d.ts_code = s.ts_code
+            WHERE d.trade_date IN ({escaped})
+              AND d.pct_chg IS NOT NULL
+            """
+        ).fetch_df()
+    finally:
+        con.close()
+    if daily.empty:
+        return {}
+    daily["trade_date"] = daily["trade_date"].astype(str)
+    daily["pct_chg"] = pd.to_numeric(daily["pct_chg"], errors="coerce")
+    daily = daily.dropna(subset=["pct_chg"])
+    daily["industry"] = daily["industry"].fillna("").astype(str).replace("", "未分类")
+    daily["is_up"] = daily["pct_chg"] > 0
+    daily["is_limit_up"] = daily.apply(
+        lambda row: safe_float(row.get("pct_chg")) >= limit_threshold(str(row.get("ts_code") or ""), str(row.get("name") or "")),
+        axis=1,
+    )
+    contexts: dict[str, dict[str, object]] = {}
+    for trade_date, day in daily.groupby("trade_date", sort=False):
+        universe_count = int(day["ts_code"].nunique())
+        limit_up_count = int(day["is_limit_up"].sum())
+        limit_up_ratio = limit_up_count / universe_count if universe_count else 0.0
+        up_ratio = float(day["is_up"].mean()) if universe_count else 0.0
+        avg_pct = safe_float(day["pct_chg"].mean())
+        industries = []
+        grouped = day.groupby("industry", sort=False)
+        for industry, group in grouped:
+            count = int(group["ts_code"].nunique())
+            industry_limit_up_count = int(group["is_limit_up"].sum())
+            industry_up_ratio = float(group["is_up"].mean()) if count else 0.0
+            industry_limit_up_ratio = industry_limit_up_count / count if count else 0.0
+            industry_avg_pct = safe_float(group["pct_chg"].mean())
+            industries.append(
+                {
+                    "industry": str(industry or "未分类"),
+                    "count": count,
+                    "limit_up_count": industry_limit_up_count,
+                    "limit_up_ratio": industry_limit_up_ratio,
+                    "up_ratio": industry_up_ratio,
+                    "avg_pct": industry_avg_pct,
+                    "heat_score": heat_score(industry_limit_up_count, industry_limit_up_ratio, industry_up_ratio, industry_avg_pct),
+                }
+            )
+        industries.sort(key=lambda item: (safe_float(item["heat_score"]), int(item["limit_up_count"]), int(item["count"])), reverse=True)
+        contexts[str(trade_date)] = {
+            "market_heat_score": heat_score(limit_up_count, limit_up_ratio, up_ratio, avg_pct),
+            "universe_count": universe_count,
+            "limit_up_count": limit_up_count,
+            "limit_up_ratio": limit_up_ratio,
+            "up_ratio": up_ratio,
+            "avg_pct": avg_pct,
+            "industries": industries[:20],
+        }
+    return contexts
+
+
+def slice_hot_context(predictions: list[Prediction], market: dict[str, object]) -> dict[str, object]:
+    candidate_count = len(predictions)
+    market_heat = safe_float(market.get("market_heat_score") if market else 0)
+    limit_up_count = int(market.get("limit_up_count") or 0) if market else 0
+    limit_up_ratio = safe_float(market.get("limit_up_ratio") if market else 0)
+    up_ratio = safe_float(market.get("up_ratio") if market else 0)
+    market_industries = {
+        str(item.get("industry") or "未分类"): item
+        for item in (market.get("industries") or [])
+        if isinstance(item, dict)
+    }
+    counts: dict[str, int] = {}
+    for pred in predictions:
+        industry = pred.industry or "未分类"
+        counts[industry] = counts.get(industry, 0) + 1
+    top_industries = []
+    for industry, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:5]:
+        base = market_industries.get(industry, {})
+        top_industries.append(
+            {
+                "industry": industry,
+                "candidate_count": count,
+                "candidate_weight": count / candidate_count if candidate_count else 0.0,
+                "market_limit_up_count": int(base.get("limit_up_count") or 0),
+                "market_limit_up_ratio": safe_float(base.get("limit_up_ratio")),
+                "market_up_ratio": safe_float(base.get("up_ratio")),
+                "market_avg_pct": safe_float(base.get("avg_pct")),
+                "heat_score": safe_float(base.get("heat_score")),
+            }
+        )
+    tags: list[str] = []
+    if market_heat >= 70:
+        tags.append("市场热度高")
+    elif market_heat >= 45:
+        tags.append("市场热度中")
+    else:
+        tags.append("市场热度低")
+    if limit_up_count >= 80 or limit_up_ratio >= 0.03:
+        tags.append("涨停扩散强")
+    elif limit_up_count >= 35 or limit_up_ratio >= 0.012:
+        tags.append("涨停扩散中")
+    if up_ratio >= 0.65:
+        tags.append("赚钱效应强")
+    elif up_ratio <= 0.40:
+        tags.append("赚钱效应弱")
+    if candidate_count >= 30:
+        tags.append("候选密集")
+    if top_industries:
+        leader = top_industries[0]
+        if safe_float(leader.get("candidate_weight")) >= 0.35:
+            tags.append(f"热点集中:{leader['industry']}")
+        tags.append("题材:" + "/".join(str(item["industry"]) for item in top_industries[:3]))
+    return {
+        "market_heat_score": market_heat,
+        "limit_up_count": limit_up_count,
+        "limit_up_ratio": limit_up_ratio,
+        "up_ratio": up_ratio,
+        "hot_tags": tags,
+        "top_industries": top_industries,
+    }
 
 
 def evaluate_one(pred: Prediction, bars: pd.DataFrame) -> dict[str, object] | None:
@@ -223,9 +415,39 @@ def recommendation_for(signal_type: str, sample_count: int, hit_rate: float, avg
     return "tighten", "突破延续不足，建议提高箱体质量和突破量能阈值"
 
 
-def write_results(db_path: Path, predictions: list[Prediction], results: dict[str, dict[str, object]]) -> tuple[int, int]:
+def slice_recommendation(evaluated_count: int, hit_rate: float, avg_target_return: float, avg_drawdown: float) -> str:
+    if evaluated_count < 5:
+        return "collecting"
+    if hit_rate >= 0.55 and avg_target_return >= 0.04 and avg_drawdown > -0.10:
+        return "keep"
+    if hit_rate >= 0.40 and avg_target_return > 0:
+        return "tune"
+    return "tighten"
+
+
+def slice_score(hit_rate: float, limit_up_hit_rate: float, avg_target_return: float, avg_drawdown: float, avg_score: float) -> float:
+    drawdown_score = max(0.0, min(1.0, (avg_drawdown + 0.16) / 0.16))
+    return max(
+        0.0,
+        min(
+            100.0,
+            hit_rate * 34.0
+            + limit_up_hit_rate * 18.0
+            + max(-0.10, min(0.12, avg_target_return)) / 0.12 * 26.0
+            + drawdown_score * 12.0
+            + max(0.0, min(100.0, avg_score)) / 100.0 * 10.0,
+        ),
+    )
+
+
+def write_results(db_path: Path, data_path: Path, predictions: list[Prediction], results: dict[str, dict[str, object]]) -> tuple[int, int]:
     ts = now_text()
     evaluated = 0
+    slice_predictions: dict[tuple[str, str, str, str], list[Prediction]] = {}
+    for pred in predictions:
+        key = (pred.signal_type, pred.strategy_version, pred.parameter_key, pred.signal_date)
+        slice_predictions.setdefault(key, []).append(pred)
+    market_context = load_market_context(data_path, sorted({p.signal_date for p in predictions if p.signal_date}))
     with write_transaction(db_path) as conn:
         ensure_tables(conn)
         for pred in predictions:
@@ -318,6 +540,93 @@ def write_results(db_path: Path, predictions: list[Prediction], results: dict[st
                     ts,
                 ),
             )
+        slice_rows = conn.execute(
+            """SELECT signal_type, strategy_version, parameter_key, signal_date,
+                      COUNT(*) AS candidate_count,
+                      SUM(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN 1 ELSE 0 END) AS evaluated_count,
+                      AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN target_hit END) AS hit_rate,
+                      AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN hit_limit_up_5d END) AS limit_up_hit_rate,
+                      AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN ret_1d END) AS avg_return_1d,
+                      AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN ret_3d END) AS avg_return_3d,
+                      AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN ret_5d END) AS avg_return_5d,
+                      AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN ret_10d END) AS avg_return_10d,
+                      AVG(CASE WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN max_drawdown_5d END) AS avg_max_drawdown_5d,
+                      AVG(score) AS avg_score
+               FROM market_limit_signal_predictions
+               GROUP BY signal_type, strategy_version, parameter_key, signal_date"""
+        ).fetchall()
+        for row in slice_rows:
+            signal_type = str(row[0])
+            strategy_version = str(row[1])
+            parameter_key = str(row[2])
+            signal_date = str(row[3])
+            candidate_count = int(row[4] or 0)
+            evaluated_count = int(row[5] or 0)
+            hit_rate = safe_float(row[6])
+            limit_up_hit_rate = safe_float(row[7])
+            avg_return_1d = safe_float(row[8])
+            avg_return_3d = safe_float(row[9])
+            avg_return_5d = safe_float(row[10])
+            avg_return_10d = safe_float(row[11])
+            avg_max_drawdown_5d = safe_float(row[12])
+            avg_score = safe_float(row[13])
+            avg_target_return = avg_return_5d if signal_type == "limit_up_momentum" else avg_return_10d
+            score = slice_score(hit_rate, limit_up_hit_rate, avg_target_return, avg_max_drawdown_5d, avg_score)
+            rec = slice_recommendation(evaluated_count, hit_rate, avg_target_return, avg_max_drawdown_5d)
+            hot_context = slice_hot_context(
+                slice_predictions.get((signal_type, strategy_version, parameter_key, signal_date), []),
+                market_context.get(signal_date, {}),
+            )
+            hot_tags = hot_context["hot_tags"]
+            top_industries = hot_context["top_industries"]
+            summary = {
+                "target_horizon": 5 if signal_type == "limit_up_momentum" else 10,
+                "target_rule": "avg target return, target_hit rate, limit-up hit rate, drawdown",
+                "market_context": {
+                    "market_heat_score": hot_context["market_heat_score"],
+                    "limit_up_count": hot_context["limit_up_count"],
+                    "limit_up_ratio": hot_context["limit_up_ratio"],
+                    "up_ratio": hot_context["up_ratio"],
+                    "hot_tags": hot_tags,
+                    "top_industries": top_industries,
+                },
+            }
+            conn.execute(
+                upsert_sql(
+                    "market_limit_signal_tm_slices",
+                    [
+                        "signal_type", "strategy_version", "parameter_key", "signal_date",
+                        "candidate_count", "evaluated_count", "hit_rate", "limit_up_hit_rate",
+                        "avg_return_1d", "avg_return_3d", "avg_return_5d", "avg_return_10d",
+                        "avg_target_return", "avg_max_drawdown_5d", "avg_score", "slice_score",
+                        "market_heat_score", "limit_up_count", "limit_up_ratio", "up_ratio",
+                        "hot_tags_json", "top_industries_json",
+                        "recommendation", "summary_json", "updated_at",
+                    ],
+                    ["signal_type", "strategy_version", "parameter_key", "signal_date"],
+                    [
+                        "candidate_count", "evaluated_count", "hit_rate", "limit_up_hit_rate",
+                        "avg_return_1d", "avg_return_3d", "avg_return_5d", "avg_return_10d",
+                        "avg_target_return", "avg_max_drawdown_5d", "avg_score", "slice_score",
+                        "market_heat_score", "limit_up_count", "limit_up_ratio", "up_ratio",
+                        "hot_tags_json", "top_industries_json",
+                        "recommendation", "summary_json", "updated_at",
+                    ],
+                ),
+                (
+                    signal_type, strategy_version, parameter_key, signal_date,
+                    candidate_count, evaluated_count, hit_rate, limit_up_hit_rate,
+                    avg_return_1d, avg_return_3d, avg_return_5d, avg_return_10d,
+                    avg_target_return, avg_max_drawdown_5d, avg_score, score,
+                    hot_context["market_heat_score"],
+                    hot_context["limit_up_count"],
+                    hot_context["limit_up_ratio"],
+                    hot_context["up_ratio"],
+                    json.dumps(hot_tags, ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(top_industries, ensure_ascii=False, separators=(",", ":")),
+                    rec, json.dumps(summary, ensure_ascii=False, separators=(",", ":")), ts,
+                ),
+            )
     return evaluated, len(predictions) - evaluated
 
 
@@ -350,7 +659,7 @@ def main() -> int:
                 progress = 12 + int(idx / total * 76)
                 run_status.progress(TASK_NAME, progress, 100, "evaluate", f"回看预测 {idx}/{total}")
         run_status.progress(TASK_NAME, 92, 100, "persist", "写入回看指标和参数建议")
-        evaluated, pending = write_results(db_path, predictions, results)
+        evaluated, pending = write_results(db_path, data_path, predictions, results)
         run_status.progress(TASK_NAME, 100, 100, "done", "刷新评估摘要")
         run_status.done(TASK_NAME, f"已回看 {evaluated} 条预测，待样本成熟 {pending} 条")
         print(json.dumps({"evaluated": evaluated, "pending": pending}, ensure_ascii=False), flush=True)

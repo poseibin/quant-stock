@@ -218,8 +218,8 @@ export function FactorResearchPage() {
     <div className="factorResearchPage">
       <div className="pageToolbar factorHero">
         <div>
-          <div className="sectionLabel">FACTOR RESEARCH CENTER</div>
-          <h2>因子研究中心</h2>
+          <div className="sectionLabel">QUANT RESEARCH CENTER</div>
+          <h2>量化研究中心</h2>
           <p>从 10-15 年历史数据里自动生成因子、检验稳定性，再训练 LightGBM 预测未来 20 日相对收益。</p>
         </div>
         <div className="factorHeroActions">
@@ -247,7 +247,7 @@ export function FactorResearchPage() {
         <div className="metricCard"><span>模型状态</span><b>{model?.status || '-'}</b><em>{model?.model_type || '等待训练'}</em></div>
       </div>
 
-      <div className="inlineTabs" role="tablist" aria-label="因子研究页签">
+      <div className="inlineTabs" role="tablist" aria-label="量化研究中心页签">
         {researchTabs.map((tab) => (
           <button key={tab.key} className={activeTab === tab.key ? 'active' : ''} onClick={() => setActiveTab(tab.key)}>
             {tab.label}
