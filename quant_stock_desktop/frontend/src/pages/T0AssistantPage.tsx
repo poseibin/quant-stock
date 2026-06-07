@@ -350,7 +350,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           <div>
             <div className="sectionLabel">ACTION LIST</div>
             <h2>今日 Top10 做T观察票</h2>
-            <p className="recommendationMeta">只适合已有底仓做T观察；触达卖出计划再卖，回落到接回计划再买回，不追价、不自动下单。</p>
+            <p className="recommendationMeta">只适合已有底仓做T观察；卖出计划只卖T仓，不是清仓；跌破全出/停手线才考虑全出或停止做T。</p>
           </div>
         </div>
         <div className="tableWrap">
@@ -364,7 +364,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 <th>资金 / 砸盘</th>
                 <th>卖出计划</th>
                 <th>接回计划</th>
-                <th>止损观察</th>
+                <th>全出 / 停手线</th>
                 <th>T仓建议</th>
                 <th>风险</th>
               </tr>
@@ -416,8 +416,9 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                     </td>
                     <td className="negative">
                       <strong>¥{money(plan.stop)}</strong>
-                      <div className="recommendationMeta">风险触发价</div>
-                      <div className="recommendationMeta">破位先停手</div>
+                      <div className="recommendationMeta">跌破风险线</div>
+                      <div className="recommendationMeta">考虑全出/停手</div>
+                      <div className="recommendationMeta">未跌破不清仓</div>
                     </td>
                     <td>
                       <strong>{plan.tRatio}</strong>
