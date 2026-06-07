@@ -63,6 +63,7 @@ declare global {
           ListCrashWarningFeatures: (runID: string, limit: number) => Promise<CrashWarningFeature[]>
           GetPositionSummary: () => Promise<PositionSummary>
           ListT0Recommendations: (limit: number) => Promise<T0Recommendation[]>
+          ListT0DataPullCandidates: (limit: number) => Promise<T0DataPullCandidate[]>
           GetPositionHistory: () => Promise<PositionHistoryPoint[]>
           GetPositionHoldings: () => Promise<PositionItem[]>
           GetPositionRecommendation: () => Promise<PositionRecommendation>
@@ -820,6 +821,30 @@ export interface T0Recommendation {
   generated_at: string
 }
 
+export interface T0DataPullCandidate {
+  ts_code: string
+  name: string
+  industry: string
+  trade_date: string
+  action: string
+  score: number
+  state: string
+  price: number
+  today_pct: number
+  return_5d: number
+  return_20d: number
+  avg_range_20d: number
+  drawdown_20d: number
+  amount: number
+  avg_amount_20d: number
+  expected_edge: number
+  target_freq: string
+  lookback_days: number
+  reasons: string[]
+  risks: string[]
+  generated_at: string
+}
+
 export async function getAppInfo(): Promise<AppInfo> {
   if (window.go?.main?.App?.GetAppInfo) {
     return window.go.main.App.GetAppInfo()
@@ -1531,6 +1556,13 @@ export async function getPositionRecommendation(): Promise<PositionRecommendatio
 export async function listT0Recommendations(limit = 50): Promise<T0Recommendation[]> {
   if (window.go?.main?.App?.ListT0Recommendations) {
     return (await window.go.main.App.ListT0Recommendations(limit)) || []
+  }
+  return []
+}
+
+export async function listT0DataPullCandidates(limit = 100): Promise<T0DataPullCandidate[]> {
+  if (window.go?.main?.App?.ListT0DataPullCandidates) {
+    return (await window.go.main.App.ListT0DataPullCandidates(limit)) || []
   }
   return []
 }

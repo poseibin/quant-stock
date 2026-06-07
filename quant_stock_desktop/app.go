@@ -107,6 +107,30 @@ type T0Recommendation struct {
 	GeneratedAt    string   `json:"generated_at"`
 }
 
+type T0DataPullCandidate struct {
+	TSCode       string   `json:"ts_code"`
+	Name         string   `json:"name"`
+	Industry     string   `json:"industry"`
+	TradeDate    string   `json:"trade_date"`
+	Action       string   `json:"action"`
+	Score        float64  `json:"score"`
+	State        string   `json:"state"`
+	Price        float64  `json:"price"`
+	TodayPct     float64  `json:"today_pct"`
+	Return5      float64  `json:"return_5d"`
+	Return20     float64  `json:"return_20d"`
+	AvgRange20   float64  `json:"avg_range_20d"`
+	Drawdown20   float64  `json:"drawdown_20d"`
+	Amount       float64  `json:"amount"`
+	AvgAmount20  float64  `json:"avg_amount_20d"`
+	ExpectedEdge float64  `json:"expected_edge"`
+	TargetFreq   string   `json:"target_freq"`
+	LookbackDays int      `json:"lookback_days"`
+	Reasons      []string `json:"reasons"`
+	Risks        []string `json:"risks"`
+	GeneratedAt  string   `json:"generated_at"`
+}
+
 type FactorResearchRunSummary struct {
 	RunID       string  `json:"run_id"`
 	StartDate   string  `json:"start_date"`
@@ -2049,6 +2073,79 @@ func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
 	return out, nil
 }
 
+func (app *App) ListT0DataPullCandidates(limit int) ([]T0DataPullCandidate, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 300 {
+		limit = 100
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT d.ts_code, COALESCE(s.name, ''), COALESCE(s.industry, ''),
+		       d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount
+		FROM data_daily_bars d
+		LEFT JOIN data_stock_basic s ON s.ts_code = d.ts_code
+		WHERE d.trade_date IN (
+			SELECT trade_date FROM (
+				SELECT DISTINCT trade_date
+				FROM data_daily_bars
+				ORDER BY trade_date DESC
+				LIMIT 60
+			) recent_dates
+		)
+		ORDER BY d.ts_code, d.trade_date DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []T0DataPullCandidate
+	currentCode := ""
+	currentName := ""
+	currentIndustry := ""
+	bars := make([]t0DailyBar, 0, 60)
+	flush := func() {
+		if currentCode == "" || len(bars) < 20 {
+			return
+		}
+		item := buildT0DataPullCandidate(currentCode, currentName, currentIndustry, bars)
+		if item.Score >= 52 {
+			out = append(out, item)
+		}
+	}
+	for rows.Next() {
+		var code string
+		var name string
+		var industry string
+		var bar t0DailyBar
+		if err := rows.Scan(&code, &name, &industry, &bar.TradeDate, &bar.Open, &bar.High, &bar.Low, &bar.Close, &bar.PreClose, &bar.PctChg, &bar.Amount); err != nil {
+			return nil, err
+		}
+		if currentCode != "" && code != currentCode {
+			flush()
+			bars = bars[:0]
+		}
+		currentCode = code
+		currentName = name
+		currentIndustry = industry
+		bars = append(bars, bar)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	flush()
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].AvgAmount20 > out[j].AvgAmount20
+		}
+		return out[i].Score > out[j].Score
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 type t0DailyBar struct {
 	TradeDate string
 	Open      float64
@@ -2058,6 +2155,77 @@ type t0DailyBar struct {
 	PreClose  float64
 	PctChg    float64
 	Amount    float64
+}
+
+func buildT0DataPullCandidate(tsCode string, name string, industry string, bars []t0DailyBar) T0DataPullCandidate {
+	latest := bars[0]
+	item := T0DataPullCandidate{
+		TSCode:       tsCode,
+		Name:         name,
+		Industry:     industry,
+		TradeDate:    latest.TradeDate,
+		Price:        latest.Close,
+		TodayPct:     latest.PctChg / 100,
+		Amount:       latest.Amount,
+		Return5:      windowReturn(bars, 5),
+		Return20:     windowReturn(bars, 20),
+		AvgRange20:   averageRange(bars, 20),
+		Drawdown20:   drawdownFromHigh(bars, 20),
+		AvgAmount20:  averageAmount(bars, 20),
+		TargetFreq:   "5min",
+		LookbackDays: 260,
+		GeneratedAt:  time.Now().Format(time.RFC3339),
+	}
+	ma5 := averageClose(bars, 5)
+	ma20 := averageClose(bars, 20)
+	volScore := clamp((item.AvgRange20-0.018)/0.04, 0, 1) * 38
+	liquidityScore := clamp((math.Log10(math.Max(item.AvgAmount20, 1))-4.8)/2.3, 0, 1) * 30
+	reversionScore := clamp((math.Abs(item.TodayPct)-0.004)/0.035, 0, 1) * 14
+	trendPenalty := clamp((math.Abs(item.Return20)-0.08)/0.18, 0, 1) * 16
+	score := 22 + volScore + liquidityScore + reversionScore - trendPenalty
+	reasons := []string{}
+	risks := []string{}
+	if item.AvgRange20 >= 0.03 {
+		reasons = append(reasons, fmt.Sprintf("20日平均振幅 %.2f%%，有分钟线验证价值", item.AvgRange20*100))
+	} else {
+		risks = append(risks, fmt.Sprintf("20日平均振幅 %.2f%%，日内空间一般", item.AvgRange20*100))
+	}
+	if item.AvgAmount20 > 0 {
+		reasons = append(reasons, fmt.Sprintf("20日平均成交额 %.0f，流动性满足粗筛", item.AvgAmount20))
+	}
+	if latest.Close > ma5 && ma5 > ma20 && item.Return20 > 0.08 {
+		item.State = "趋势偏强"
+		risks = append(risks, "强趋势票做T容易卖飞，分钟线只用于触发价验证")
+	} else if latest.Close < ma5 && ma5 < ma20 && item.Return20 < -0.08 {
+		item.State = "趋势偏弱"
+		risks = append(risks, "弱趋势票低吸风险较高，需要分钟线确认止损")
+	} else if item.AvgRange20 >= 0.045 {
+		item.State = "高波震荡"
+		reasons = append(reasons, "高波震荡优先拉取分钟线")
+	} else {
+		item.State = "普通震荡"
+	}
+	if item.Drawdown20 < -0.18 {
+		risks = append(risks, fmt.Sprintf("距20日高点回撤 %.2f%%，先按观察候选处理", item.Drawdown20*100))
+		score -= 6
+	}
+	band := clamp(item.AvgRange20*0.55, 0.008, 0.04)
+	item.ExpectedEdge = band*2 - 0.004
+	if item.ExpectedEdge <= 0.01 {
+		risks = append(risks, "扣成本后价差偏薄，优先级下调")
+		score -= 8
+	}
+	item.Score = math.Round(clamp(score, 0, 100)*10) / 10
+	if item.Score >= 72 {
+		item.Action = "优先拉取"
+	} else if item.Score >= 58 {
+		item.Action = "候选观察"
+	} else {
+		item.Action = "暂缓"
+	}
+	item.Reasons = reasons
+	item.Risks = risks
+	return item
 }
 
 func (app *App) buildT0Recommendation(base T0Recommendation) (T0Recommendation, error) {
@@ -2227,6 +2395,26 @@ func averageClose(bars []t0DailyBar, window int) float64 {
 		sum += bars[i].Close
 	}
 	return sum / float64(n)
+}
+
+func averageAmount(bars []t0DailyBar, window int) float64 {
+	n := minInt(len(bars), window)
+	if n <= 0 {
+		return 0
+	}
+	sum := 0.0
+	count := 0
+	for i := 0; i < n; i++ {
+		if bars[i].Amount <= 0 {
+			continue
+		}
+		sum += bars[i].Amount
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
 }
 
 func drawdownFromHigh(bars []t0DailyBar, window int) float64 {
