@@ -350,7 +350,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           <div>
             <div className="sectionLabel">ACTION LIST</div>
             <h2>今日 Top10 做T观察票</h2>
-            <p className="recommendationMeta">只适合已有底仓做T观察；高抛、低吸、止损都是日线计划价，实盘要等盘中价格触发，不追价。</p>
+            <p className="recommendationMeta">只适合已有底仓做T观察；触达卖出计划再卖，回落到接回计划再买回，不追价、不自动下单。</p>
           </div>
         </div>
         <div className="tableWrap">
@@ -362,8 +362,8 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 <th>评分 / 状态</th>
                 <th>近2月做T收益</th>
                 <th>资金 / 砸盘</th>
-                <th>高抛价</th>
-                <th>低吸价</th>
+                <th>卖出计划</th>
+                <th>接回计划</th>
                 <th>止损观察</th>
                 <th>T仓建议</th>
                 <th>风险</th>
@@ -402,10 +402,12 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                     </td>
                     <td>
                       <strong>{money(plan.reduce)}</strong>
-                      <div className="recommendationMeta">现价上方 {percent((plan.reduce / row.price) - 1)}</div>
+                      <div className="recommendationMeta">盘中触达卖 {plan.tRatio}</div>
+                      <div className="recommendationMeta">未触达不追卖</div>
                     </td>
                     <td>
                       <strong>{money(plan.buy)}</strong>
+                      <div className="recommendationMeta">卖出后回落接回</div>
                       <div className="recommendationMeta">现价下方 {percent(1 - (plan.buy / row.price))}</div>
                     </td>
                     <td className="negative">
