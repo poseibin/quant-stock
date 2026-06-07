@@ -301,7 +301,7 @@ func inferRunStatusTaskType(task string) string {
 		return "signal"
 	case "limit_signal_evaluation":
 		return "evaluation"
-	case "limit_breakout", "limit_up_momentum":
+	case "limit_breakout", "limit_up_momentum", "t0_daily_research":
 		return "market_scan"
 	case "policy_support_analysis":
 		return "analysis"

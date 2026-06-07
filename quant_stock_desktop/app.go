@@ -131,6 +131,23 @@ type T0DataPullCandidate struct {
 	GeneratedAt  string   `json:"generated_at"`
 }
 
+type T0DailyBacktest struct {
+	RunID        string  `json:"run_id"`
+	TSCode       string  `json:"ts_code"`
+	Name         string  `json:"name"`
+	Industry     string  `json:"industry"`
+	NDays        int     `json:"n_days"`
+	NCandidates  int     `json:"n_candidates"`
+	TwoSidedRate float64 `json:"two_sided_rate"`
+	OneSidedRate float64 `json:"one_sided_rate"`
+	AvgEdge      float64 `json:"avg_edge"`
+	TotalEdge    float64 `json:"total_edge"`
+	AvgNextRange float64 `json:"avg_next_range"`
+	Score        float64 `json:"score"`
+	SummaryJSON  string  `json:"summary_json"`
+	UpdatedAt    string  `json:"updated_at"`
+}
+
 type FactorResearchRunSummary struct {
 	RunID       string  `json:"run_id"`
 	StartDate   string  `json:"start_date"`
@@ -1231,7 +1248,7 @@ func runStatusTaskType(taskName string) string {
 		return "signal"
 	case "limit_signal_evaluation":
 		return "evaluation"
-	case "limit_breakout", "limit_up_momentum":
+	case "limit_breakout", "limit_up_momentum", "t0_daily_research":
 		return "market_scan"
 	case "policy_support_analysis":
 		return "analysis"
@@ -2038,12 +2055,17 @@ func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
 		limit = 50
 	}
 	rows, err := app.database.Conn().Query(`
-		SELECT h.ts_code, COALESCE(NULLIF(h.name,''), COALESCE(s.name,'')), COALESCE(NULLIF(h.industry,''), COALESCE(s.industry,'')),
-		       h.shares, h.avg_cost, h.last_price, h.weight
+		SELECT h.ts_code, COALESCE(NULLIF(h.name,''), c.name, ''), COALESCE(NULLIF(h.industry,''), c.industry, ''),
+		       h.shares, h.avg_cost, h.last_price, h.weight,
+		       COALESCE(c.trade_date,''), COALESCE(c.action,''), COALESCE(c.score,0), COALESCE(c.state,''),
+		       COALESCE(c.price, h.last_price), COALESCE(c.today_pct,0), COALESCE(c.return_5d,0), COALESCE(c.return_20d,0),
+		       COALESCE(c.avg_range_20d,0), COALESCE(c.drawdown_20d,0), COALESCE(c.amount,0),
+		       COALESCE(c.expected_edge,0), COALESCE(c.reasons_json,'[]'), COALESCE(c.risks_json,'[]'), COALESCE(c.generated_at,'')
 		FROM portfolio_pool_holdings h
-		LEFT JOIN data_stock_basic s ON s.ts_code = h.ts_code
+		LEFT JOIN t0_daily_candidates c ON c.ts_code = h.ts_code
+			AND c.run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
 		WHERE h.shares > 0
-		ORDER BY h.weight DESC, h.market_value DESC
+		ORDER BY COALESCE(c.score,0) DESC, h.weight DESC, h.market_value DESC
 		LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -2052,24 +2074,43 @@ func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
 	out := make([]T0Recommendation, 0)
 	for rows.Next() {
 		var item T0Recommendation
-		if err := rows.Scan(&item.TSCode, &item.Name, &item.Industry, &item.Shares, &item.AvgCost, &item.Price, &item.PositionWeight); err != nil {
+		var reasonsJSON string
+		var risksJSON string
+		if err := rows.Scan(
+			&item.TSCode, &item.Name, &item.Industry, &item.Shares, &item.AvgCost, &item.Price, &item.PositionWeight,
+			&item.TradeDate, &item.Action, &item.Score, &item.State, &item.Price, &item.TodayPct, &item.Return5, &item.Return20,
+			&item.AvgRange20, &item.Drawdown20, &item.Amount, &item.ExpectedEdge, &reasonsJSON, &risksJSON, &item.GeneratedAt,
+		); err != nil {
 			return nil, err
 		}
-		enriched, err := app.buildT0Recommendation(item)
-		if err != nil {
-			return nil, err
+		item.MaxT0Shares = (int(float64(item.Shares)*0.3) / 100) * 100
+		band := clamp(item.AvgRange20*0.55, 0.008, 0.035)
+		item.ReducePrice = roundPrice(item.Price * (1 + band))
+		item.BuyBackPrice = roundPrice(item.Price * (1 - band))
+		item.StopPrice = roundPrice(item.Price * (1 - clamp(item.AvgRange20*0.9, 0.018, 0.06)))
+		if item.Action == "" {
+			item.Action = "待评估"
+			item.Recommendation = "请先运行日线做T评估"
+		} else if item.Score >= 70 && item.MaxT0Shares >= 100 && item.ExpectedEdge > 0 {
+			item.Action = "适合做T"
+			item.Recommendation = "按日线计划等待高抛/低吸区间"
+		} else if item.Score >= 52 && item.MaxT0Shares >= 100 {
+			item.Action = "观察"
+			item.Recommendation = "仅做小仓位观察，不强行触发"
+		} else {
+			item.Action = "不建议"
+			item.Recommendation = "日线空间或底仓不足"
 		}
-		out = append(out, enriched)
+		item.Reasons = parseJSONStringList(reasonsJSON)
+		item.Risks = parseJSONStringList(risksJSON)
+		if item.MaxT0Shares < 100 {
+			item.Risks = append(item.Risks, "底仓不足 100 股整数，不适合机械做T")
+		}
+		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Score == out[j].Score {
-			return out[i].PositionWeight > out[j].PositionWeight
-		}
-		return out[i].Score > out[j].Score
-	})
 	return out, nil
 }
 
@@ -2081,368 +2122,175 @@ func (app *App) ListT0DataPullCandidates(limit int) ([]T0DataPullCandidate, erro
 		limit = 100
 	}
 	rows, err := app.database.Conn().Query(`
-		SELECT d.ts_code, COALESCE(s.name, ''), COALESCE(s.industry, ''),
-		       d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount
-		FROM data_daily_bars d
-		LEFT JOIN data_stock_basic s ON s.ts_code = d.ts_code
-		WHERE d.trade_date IN (
-			SELECT trade_date FROM (
-				SELECT DISTINCT trade_date
-				FROM data_daily_bars
-				ORDER BY trade_date DESC
-				LIMIT 60
-			) recent_dates
-		)
-		ORDER BY d.ts_code, d.trade_date DESC`)
+		SELECT ts_code, name, industry, trade_date, action, score, state, price, today_pct, return_5d, return_20d,
+		       avg_range_20d, drawdown_20d, amount, avg_amount_20d, expected_edge, target_freq, lookback_days,
+		       reasons_json, risks_json, generated_at
+		FROM t0_daily_candidates
+		WHERE run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
+		ORDER BY score DESC, avg_amount_20d DESC
+		LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var out []T0DataPullCandidate
-	currentCode := ""
-	currentName := ""
-	currentIndustry := ""
-	bars := make([]t0DailyBar, 0, 60)
-	flush := func() {
-		if currentCode == "" || len(bars) < 20 {
-			return
-		}
-		item := buildT0DataPullCandidate(currentCode, currentName, currentIndustry, bars)
-		if item.Score >= 52 {
-			out = append(out, item)
-		}
-	}
+	out := make([]T0DataPullCandidate, 0)
 	for rows.Next() {
-		var code string
-		var name string
-		var industry string
-		var bar t0DailyBar
-		if err := rows.Scan(&code, &name, &industry, &bar.TradeDate, &bar.Open, &bar.High, &bar.Low, &bar.Close, &bar.PreClose, &bar.PctChg, &bar.Amount); err != nil {
+		var item T0DataPullCandidate
+		var reasonsJSON string
+		var risksJSON string
+		if err := rows.Scan(
+			&item.TSCode, &item.Name, &item.Industry, &item.TradeDate, &item.Action, &item.Score, &item.State,
+			&item.Price, &item.TodayPct, &item.Return5, &item.Return20, &item.AvgRange20, &item.Drawdown20,
+			&item.Amount, &item.AvgAmount20, &item.ExpectedEdge, &item.TargetFreq, &item.LookbackDays,
+			&reasonsJSON, &risksJSON, &item.GeneratedAt,
+		); err != nil {
 			return nil, err
 		}
-		if currentCode != "" && code != currentCode {
-			flush()
-			bars = bars[:0]
-		}
-		currentCode = code
-		currentName = name
-		currentIndustry = industry
-		bars = append(bars, bar)
+		item.Reasons = parseJSONStringList(reasonsJSON)
+		item.Risks = parseJSONStringList(risksJSON)
+		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	flush()
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Score == out[j].Score {
-			return out[i].AvgAmount20 > out[j].AvgAmount20
-		}
-		return out[i].Score > out[j].Score
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
 	return out, nil
 }
 
-type t0DailyBar struct {
-	TradeDate string
-	Open      float64
-	High      float64
-	Low       float64
-	Close     float64
-	PreClose  float64
-	PctChg    float64
-	Amount    float64
-}
-
-func buildT0DataPullCandidate(tsCode string, name string, industry string, bars []t0DailyBar) T0DataPullCandidate {
-	latest := bars[0]
-	item := T0DataPullCandidate{
-		TSCode:       tsCode,
-		Name:         name,
-		Industry:     industry,
-		TradeDate:    latest.TradeDate,
-		Price:        latest.Close,
-		TodayPct:     latest.PctChg / 100,
-		Amount:       latest.Amount,
-		Return5:      windowReturn(bars, 5),
-		Return20:     windowReturn(bars, 20),
-		AvgRange20:   averageRange(bars, 20),
-		Drawdown20:   drawdownFromHigh(bars, 20),
-		AvgAmount20:  averageAmount(bars, 20),
-		TargetFreq:   "5min",
-		LookbackDays: 260,
-		GeneratedAt:  time.Now().Format(time.RFC3339),
+func (app *App) ListT0DailyBacktests(limit int) ([]T0DailyBacktest, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return nil, err
 	}
-	ma5 := averageClose(bars, 5)
-	ma20 := averageClose(bars, 20)
-	volScore := clamp((item.AvgRange20-0.018)/0.04, 0, 1) * 38
-	liquidityScore := clamp((math.Log10(math.Max(item.AvgAmount20, 1))-4.8)/2.3, 0, 1) * 30
-	reversionScore := clamp((math.Abs(item.TodayPct)-0.004)/0.035, 0, 1) * 14
-	trendPenalty := clamp((math.Abs(item.Return20)-0.08)/0.18, 0, 1) * 16
-	score := 22 + volScore + liquidityScore + reversionScore - trendPenalty
-	reasons := []string{}
-	risks := []string{}
-	if item.AvgRange20 >= 0.03 {
-		reasons = append(reasons, fmt.Sprintf("20日平均振幅 %.2f%%，有分钟线验证价值", item.AvgRange20*100))
-	} else {
-		risks = append(risks, fmt.Sprintf("20日平均振幅 %.2f%%，日内空间一般", item.AvgRange20*100))
+	if limit <= 0 || limit > 300 {
+		limit = 100
 	}
-	if item.AvgAmount20 > 0 {
-		reasons = append(reasons, fmt.Sprintf("20日平均成交额 %.0f，流动性满足粗筛", item.AvgAmount20))
-	}
-	if latest.Close > ma5 && ma5 > ma20 && item.Return20 > 0.08 {
-		item.State = "趋势偏强"
-		risks = append(risks, "强趋势票做T容易卖飞，分钟线只用于触发价验证")
-	} else if latest.Close < ma5 && ma5 < ma20 && item.Return20 < -0.08 {
-		item.State = "趋势偏弱"
-		risks = append(risks, "弱趋势票低吸风险较高，需要分钟线确认止损")
-	} else if item.AvgRange20 >= 0.045 {
-		item.State = "高波震荡"
-		reasons = append(reasons, "高波震荡优先拉取分钟线")
-	} else {
-		item.State = "普通震荡"
-	}
-	if item.Drawdown20 < -0.18 {
-		risks = append(risks, fmt.Sprintf("距20日高点回撤 %.2f%%，先按观察候选处理", item.Drawdown20*100))
-		score -= 6
-	}
-	band := clamp(item.AvgRange20*0.55, 0.008, 0.04)
-	item.ExpectedEdge = band*2 - 0.004
-	if item.ExpectedEdge <= 0.01 {
-		risks = append(risks, "扣成本后价差偏薄，优先级下调")
-		score -= 8
-	}
-	item.Score = math.Round(clamp(score, 0, 100)*10) / 10
-	if item.Score >= 72 {
-		item.Action = "优先拉取"
-	} else if item.Score >= 58 {
-		item.Action = "候选观察"
-	} else {
-		item.Action = "暂缓"
-	}
-	item.Reasons = reasons
-	item.Risks = risks
-	return item
-}
-
-func (app *App) buildT0Recommendation(base T0Recommendation) (T0Recommendation, error) {
-	bars, err := app.listT0DailyBars(base.TSCode, 60)
-	if err != nil {
-		return base, err
-	}
-	base.GeneratedAt = time.Now().Format(time.RFC3339)
-	base.MaxT0Shares = (int(float64(base.Shares)*0.3) / 100) * 100
-	if len(bars) == 0 {
-		base.Action = "不建议"
-		base.Recommendation = "缺少行情数据"
-		base.State = "无数据"
-		base.Risks = []string{"没有最近日线，无法评估波动和流动性"}
-		return base, nil
-	}
-	latest := bars[0]
-	base.TradeDate = latest.TradeDate
-	base.Price = latest.Close
-	base.TodayPct = latest.PctChg / 100
-	base.Amount = latest.Amount
-	base.Return5 = windowReturn(bars, 5)
-	base.Return20 = windowReturn(bars, 20)
-	base.AvgRange20 = averageRange(bars, 20)
-	base.Drawdown20 = drawdownFromHigh(bars, 20)
-
-	ma5 := averageClose(bars, 5)
-	ma20 := averageClose(bars, 20)
-	dayPosition := 0.5
-	if latest.High > latest.Low {
-		dayPosition = (latest.Close - latest.Low) / (latest.High - latest.Low)
-	}
-
-	volScore := clamp((base.AvgRange20-0.015)/0.035, 0, 1) * 32
-	liquidityScore := clamp((math.Log10(math.Max(base.Amount, 1))-4.8)/2.2, 0, 1) * 24
-	rangeScore := clamp((math.Abs(base.Return20)-0.02)/0.18, 0, 1) * -10
-	reversionScore := clamp((math.Abs(base.TodayPct)-0.005)/0.035, 0, 1) * 18
-	holdingScore := 0.0
-	if base.MaxT0Shares >= 100 {
-		holdingScore = 16
-	}
-	score := 20 + volScore + liquidityScore + reversionScore + holdingScore + rangeScore
-
-	reasons := []string{}
-	risks := []string{}
-	if base.AvgRange20 >= 0.025 {
-		reasons = append(reasons, fmt.Sprintf("20日平均振幅 %.2f%%，有日内价差空间", base.AvgRange20*100))
-	} else {
-		risks = append(risks, fmt.Sprintf("20日平均振幅仅 %.2f%%，做T空间偏窄", base.AvgRange20*100))
-	}
-	if base.Amount > 0 {
-		reasons = append(reasons, fmt.Sprintf("最近成交额 %.0f，流动性用于粗筛", base.Amount))
-	}
-	if base.MaxT0Shares < 100 {
-		risks = append(risks, "底仓不足 100 股整数，不适合机械做T")
-	}
-	if latest.Close > ma5 && ma5 > ma20 && base.Return20 > 0.06 {
-		base.State = "上行趋势"
-		risks = append(risks, "偏趋势日时逆势高抛可能卖飞")
-		score -= 8
-	} else if latest.Close < ma5 && ma5 < ma20 && base.Return20 < -0.06 {
-		base.State = "下行趋势"
-		risks = append(risks, "偏下行趋势，低吸后可能继续走弱")
-		score -= 12
-	} else if base.AvgRange20 >= 0.04 {
-		base.State = "高波震荡"
-		reasons = append(reasons, "高波震荡更适合小仓位分批做T")
-	} else {
-		base.State = "普通震荡"
-	}
-	if base.Drawdown20 < -0.12 {
-		risks = append(risks, fmt.Sprintf("距20日高点回撤 %.2f%%，注意弱势延续", base.Drawdown20*100))
-		score -= 5
-	}
-
-	band := clamp(base.AvgRange20*0.55, 0.008, 0.035)
-	base.ReducePrice = roundPrice(latest.Close * (1 + band))
-	base.BuyBackPrice = roundPrice(latest.Close * (1 - band))
-	base.StopPrice = roundPrice(latest.Close * (1 - clamp(base.AvgRange20*0.9, 0.018, 0.06)))
-	base.ExpectedEdge = band*2 - 0.004
-	if base.ExpectedEdge <= 0 {
-		risks = append(risks, "扣除滑点和交易成本后预期价差不足")
-		score -= 10
-	}
-
-	if dayPosition >= 0.68 || base.TodayPct >= 0.018 {
-		base.Recommendation = "先减后接"
-		reasons = append(reasons, "当前价位靠近日内上沿，优先高抛再回补")
-	} else if dayPosition <= 0.32 || base.TodayPct <= -0.018 {
-		base.Recommendation = "先接后减"
-		reasons = append(reasons, "当前价位靠近日内下沿，优先低吸再卖出等量底仓")
-	} else {
-		base.Recommendation = "等区间触发"
-		reasons = append(reasons, "当前在区间中部，等待上沿减仓或下沿回补")
-	}
-
-	score = clamp(score, 0, 100)
-	base.Score = math.Round(score*10) / 10
-	if base.Score >= 70 && base.MaxT0Shares >= 100 && base.ExpectedEdge > 0 {
-		base.Action = "适合做T"
-	} else if base.Score >= 52 && base.MaxT0Shares >= 100 {
-		base.Action = "观察"
-	} else {
-		base.Action = "不建议"
-	}
-	base.Reasons = reasons
-	base.Risks = risks
-	return base, nil
-}
-
-func (app *App) listT0DailyBars(tsCode string, limit int) ([]t0DailyBar, error) {
 	rows, err := app.database.Conn().Query(`
-		SELECT trade_date, open, high, low, close, pre_close, pct_chg, amount
-		FROM data_daily_bars
-		WHERE ts_code = ?
-		ORDER BY trade_date DESC
-		LIMIT ?`, tsCode, limit)
+		SELECT run_id, ts_code, name, industry, n_days, n_candidates, two_sided_rate, one_sided_rate,
+		       avg_edge, total_edge, avg_next_range, score, summary_json, updated_at
+		FROM t0_daily_backtests
+		WHERE run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
+		ORDER BY score DESC, two_sided_rate DESC
+		LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]t0DailyBar, 0)
+	out := make([]T0DailyBacktest, 0)
 	for rows.Next() {
-		var bar t0DailyBar
-		if err := rows.Scan(&bar.TradeDate, &bar.Open, &bar.High, &bar.Low, &bar.Close, &bar.PreClose, &bar.PctChg, &bar.Amount); err != nil {
+		var item T0DailyBacktest
+		if err := rows.Scan(
+			&item.RunID, &item.TSCode, &item.Name, &item.Industry, &item.NDays, &item.NCandidates,
+			&item.TwoSidedRate, &item.OneSidedRate, &item.AvgEdge, &item.TotalEdge, &item.AvgNextRange,
+			&item.Score, &item.SummaryJSON, &item.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
-		out = append(out, bar)
+		out = append(out, item)
 	}
 	return out, rows.Err()
 }
 
-func windowReturn(bars []t0DailyBar, window int) float64 {
-	if len(bars) < window || bars[0].Close <= 0 || bars[window-1].Close <= 0 {
-		return 0
+func (app *App) RunT0DailyResearch() error {
+	if err := app.ensureDatabase(); err != nil {
+		return err
 	}
-	return bars[0].Close/bars[window-1].Close - 1
+	if status, err := app.GetT0DailyResearchStatus(); err == nil && status.State == "running" {
+		return errors.New("日线做T研究正在运行")
+	}
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return errors.New("数据路径未设置")
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	dbPath := filepath.Join(dataPath, "meta.db")
+	logDir := filepath.Join(dataPath, "logs", "t0_daily_research")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(logDir, time.Now().Format("20060102_150405")+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		app.database.UpsertSQL(
+			"task_run_status",
+			[]string{"task", "task_type", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+			[]string{"task"},
+			[]string{"task_type", "state", "idx", "total", "stage", "name", "message", "started_at", "updated_at", "finished_at"},
+		),
+		"t0_daily_research", "market_scan", "running", 0, 5, "prepare", "启动日线做T研究", "", now, now, "",
+	)
+	args := []string{
+		"scripts/t0_daily_worker.py",
+		"--data-path", dataPath,
+		"--db-path", dbPath,
+		"--lookback", "80",
+		"--history-days", "520",
+		"--limit", "120",
+		"--backtest-limit", "80",
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		finishedAt := time.Now().Format(time.RFC3339)
+		_, _ = app.database.Conn().Exec(
+			`UPDATE task_run_status SET state='error', message=?, updated_at=?, finished_at=? WHERE task='t0_daily_research'`,
+			err.Error(),
+			finishedAt,
+			finishedAt,
+		)
+		return err
+	}
+	go app.waitT0DailyResearch(cmd, logFile, logPath)
+	return nil
 }
 
-func averageRange(bars []t0DailyBar, window int) float64 {
-	n := minInt(len(bars), window)
-	if n <= 0 {
-		return 0
+func (app *App) waitT0DailyResearch(cmd *exec.Cmd, logFile *os.File, logPath string) {
+	err := cmd.Wait()
+	_ = logFile.Close()
+	if err == nil || app.database == nil {
+		return
 	}
-	sum := 0.0
-	count := 0
-	for i := 0; i < n; i++ {
-		if bars[i].Close <= 0 {
-			continue
+	status, statusErr := app.GetT0DailyResearchStatus()
+	if statusErr == nil && status.State != "running" {
+		return
+	}
+	app.markPythonStatusTaskError("t0_daily_research", "日线做T研究进程已退出: "+err.Error()+"，日志: "+logPath)
+}
+
+func (app *App) GetT0DailyResearchStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("t0_daily_research")
+}
+
+func parseJSONStringList(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{}
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(value), &items); err == nil {
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if strings.TrimSpace(item) != "" {
+				out = append(out, strings.TrimSpace(item))
+			}
 		}
-		sum += (bars[i].High - bars[i].Low) / bars[i].Close
-		count++
+		return out
 	}
-	if count == 0 {
-		return 0
-	}
-	return sum / float64(count)
-}
-
-func averageClose(bars []t0DailyBar, window int) float64 {
-	n := minInt(len(bars), window)
-	if n <= 0 {
-		return 0
-	}
-	sum := 0.0
-	for i := 0; i < n; i++ {
-		sum += bars[i].Close
-	}
-	return sum / float64(n)
-}
-
-func averageAmount(bars []t0DailyBar, window int) float64 {
-	n := minInt(len(bars), window)
-	if n <= 0 {
-		return 0
-	}
-	sum := 0.0
-	count := 0
-	for i := 0; i < n; i++ {
-		if bars[i].Amount <= 0 {
-			continue
-		}
-		sum += bars[i].Amount
-		count++
-	}
-	if count == 0 {
-		return 0
-	}
-	return sum / float64(count)
-}
-
-func drawdownFromHigh(bars []t0DailyBar, window int) float64 {
-	n := minInt(len(bars), window)
-	if n <= 0 || bars[0].Close <= 0 {
-		return 0
-	}
-	high := 0.0
-	for i := 0; i < n; i++ {
-		if bars[i].High > high {
-			high = bars[i].High
-		}
-	}
-	if high <= 0 {
-		return 0
-	}
-	return bars[0].Close/high - 1
+	return []string{}
 }
 
 func roundPrice(value float64) float64 {
 	return math.Round(value*100) / 100
-}
-
-func minInt(a int, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func (app *App) ConfirmPositionTrades(trades []position.TradeRequest) (position.Summary, error) {

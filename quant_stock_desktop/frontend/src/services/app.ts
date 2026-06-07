@@ -64,6 +64,9 @@ declare global {
           GetPositionSummary: () => Promise<PositionSummary>
           ListT0Recommendations: (limit: number) => Promise<T0Recommendation[]>
           ListT0DataPullCandidates: (limit: number) => Promise<T0DataPullCandidate[]>
+          ListT0DailyBacktests: (limit: number) => Promise<T0DailyBacktest[]>
+          RunT0DailyResearch: () => Promise<void>
+          GetT0DailyResearchStatus: () => Promise<RunStatus>
           GetPositionHistory: () => Promise<PositionHistoryPoint[]>
           GetPositionHoldings: () => Promise<PositionItem[]>
           GetPositionRecommendation: () => Promise<PositionRecommendation>
@@ -845,6 +848,23 @@ export interface T0DataPullCandidate {
   generated_at: string
 }
 
+export interface T0DailyBacktest {
+  run_id: string
+  ts_code: string
+  name: string
+  industry: string
+  n_days: number
+  n_candidates: number
+  two_sided_rate: number
+  one_sided_rate: number
+  avg_edge: number
+  total_edge: number
+  avg_next_range: number
+  score: number
+  summary_json: string
+  updated_at: string
+}
+
 export async function getAppInfo(): Promise<AppInfo> {
   if (window.go?.main?.App?.GetAppInfo) {
     return window.go.main.App.GetAppInfo()
@@ -1565,6 +1585,26 @@ export async function listT0DataPullCandidates(limit = 100): Promise<T0DataPullC
     return (await window.go.main.App.ListT0DataPullCandidates(limit)) || []
   }
   return []
+}
+
+export async function listT0DailyBacktests(limit = 100): Promise<T0DailyBacktest[]> {
+  if (window.go?.main?.App?.ListT0DailyBacktests) {
+    return (await window.go.main.App.ListT0DailyBacktests(limit)) || []
+  }
+  return []
+}
+
+export async function runT0DailyResearch(): Promise<void> {
+  if (window.go?.main?.App?.RunT0DailyResearch) {
+    await window.go.main.App.RunT0DailyResearch()
+  }
+}
+
+export async function getT0DailyResearchStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetT0DailyResearchStatus) {
+    return window.go.main.App.GetT0DailyResearchStatus()
+  }
+  return emptyRunStatus('t0_daily_research')
 }
 
 export async function generatePositionSignal(req: GenerateSignalRequest = {}): Promise<GenerateSignalResponse> {
