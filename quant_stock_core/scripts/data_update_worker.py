@@ -599,7 +599,19 @@ class Worker:
         values = df.loc[open_mask, "cal_date"].tolist()
         return sorted(v for v in values if start <= v <= end)
 
+    def ensure_trade_cal_current(self) -> None:
+        latest = self.store.latest_date("trade_cal", "cal_date")
+        if latest >= today():
+            return
+        df = self.client.call(
+            "trade_cal",
+            {"exchange": "SSE", "start_date": DATA_START_DATE, "end_date": today()},
+            "exchange,cal_date,is_open,pretrade_date",
+        )
+        self.store.write_upsert("trade_cal", df, overwrite=True)
+
     def update_by_trade_date(self, dataset: str, backfill_history: bool) -> int:
+        self.ensure_trade_cal_current()
         start = self.start_date or (DATA_START_DATE if backfill_history else self.incremental_start(dataset, "trade_date"))
         dates = self.trade_dates(start, today())
         existing = self.store.existing_values(dataset, "trade_date")
