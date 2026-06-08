@@ -314,6 +314,10 @@ export function RefreshLimitUpMomentumCandidates(arg1) {
   return window['go']['main']['App']['RefreshLimitUpMomentumCandidates'](arg1);
 }
 
+export function RefreshPositionRealtimeQuotes() {
+  return window['go']['main']['App']['RefreshPositionRealtimeQuotes']();
+}
+
 export function RefreshRecommendationHindsight() {
   return window['go']['main']['App']['RefreshRecommendationHindsight']();
 }

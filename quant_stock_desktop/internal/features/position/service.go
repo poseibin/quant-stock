@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,6 +54,18 @@ func (service *Service) releaseSignal() {
 	service.signalMu.Lock()
 	service.signalRunning = false
 	service.signalMu.Unlock()
+}
+
+func normalizeTradeDate(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	text = strings.ReplaceAll(text, "-", "")
+	if len(text) > 8 {
+		return text[:8]
+	}
+	return text
 }
 
 func (service *Service) GetSummary(dataPath string) (Summary, error) {
@@ -107,6 +120,168 @@ func (service *Service) GetHoldings() ([]Position, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+func (service *Service) RefreshValuationWithPrices(prices map[string]float64, valuationDate string) (Summary, error) {
+	if service.db == nil {
+		return Summary{}, errors.New("database is not initialized")
+	}
+	positions, err := service.GetHoldings()
+	if err != nil {
+		return Summary{}, err
+	}
+	if len(positions) == 0 {
+		return service.GetSummary("")
+	}
+	valuationDate = normalizeTradeDate(valuationDate)
+	if valuationDate == "" {
+		valuationDate = time.Now().Format("20060102")
+	}
+	now := time.Now().Format(time.RFC3339)
+	tx, err := service.db.Conn().Begin()
+	if err != nil {
+		return Summary{}, err
+	}
+	defer tx.Rollback()
+
+	var currentCash, initialCash float64
+	if err := tx.QueryRow(`SELECT current_cash, initial_cash FROM portfolio_pool_summary WHERE id = 1`).Scan(&currentCash, &initialCash); err != nil {
+		return Summary{}, err
+	}
+
+	preClose := map[string]float64{}
+	for _, p := range positions {
+		var tradeDate string
+		var closeValue, preCloseValue float64
+		err := tx.QueryRow(`
+			SELECT trade_date, COALESCE(close,0), COALESCE(pre_close,0)
+			FROM data_daily_bars
+			WHERE ts_code = ?
+			ORDER BY trade_date DESC
+			LIMIT 1`, p.TSCode).Scan(&tradeDate, &closeValue, &preCloseValue)
+		if err == nil {
+			if normalizeTradeDate(tradeDate) == valuationDate && preCloseValue > 0 {
+				preClose[p.TSCode] = preCloseValue
+			} else if closeValue > 0 {
+				preClose[p.TSCode] = closeValue
+			}
+		}
+	}
+
+	todayBuyShares := map[string]float64{}
+	todayBuyAmount := map[string]float64{}
+	rows, err := tx.Query(`
+		SELECT ts_code, COALESCE(SUM(shares),0), COALESCE(SUM(amount),0)
+		FROM portfolio_pool_trades
+		WHERE side = 'buy' AND REPLACE(trade_date, '-', '') = ?
+		GROUP BY ts_code`, valuationDate)
+	if err != nil {
+		return Summary{}, err
+	}
+	for rows.Next() {
+		var tsCode string
+		var shares, amount float64
+		if err := rows.Scan(&tsCode, &shares, &amount); err != nil {
+			rows.Close()
+			return Summary{}, err
+		}
+		todayBuyShares[tsCode] = shares
+		todayBuyAmount[tsCode] = amount
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Summary{}, err
+	}
+	rows.Close()
+
+	totalMarketValue := 0.0
+	totalTodayPnL := 0.0
+	totalUnrealizedPnL := 0.0
+	totalCost := 0.0
+	for _, p := range positions {
+		price := p.Price
+		if nextPrice := prices[p.TSCode]; nextPrice > 0 {
+			price = nextPrice
+		}
+		if price <= 0 {
+			price = p.AvgCost
+		}
+		shares := float64(p.Shares)
+		marketValue := price * shares
+		cost := p.AvgCost * shares
+		pnl := marketValue - cost
+		pnlPct := 0.0
+		if p.AvgCost > 0 {
+			pnlPct = (price/p.AvgCost - 1) * 100
+		}
+		todayShares := math.Min(shares, todayBuyShares[p.TSCode])
+		overnightShares := math.Max(0, shares-todayShares)
+		todayPnL := 0.0
+		if overnightShares > 0 && preClose[p.TSCode] > 0 {
+			todayPnL += (price - preClose[p.TSCode]) * overnightShares
+		}
+		if todayShares > 0 {
+			todayAvg := p.AvgCost
+			if todayBuyAmount[p.TSCode] > 0 {
+				todayAvg = todayBuyAmount[p.TSCode] / todayShares
+			}
+			todayPnL += (price - todayAvg) * todayShares
+		}
+		if _, err := tx.Exec(`
+			UPDATE portfolio_pool_holdings
+			SET last_price = ?, market_value = ?, pnl = ?, pnl_pct = ?, updated_at = ?
+			WHERE ts_code = ?`, price, marketValue, pnl, pnlPct, now, p.TSCode); err != nil {
+			return Summary{}, err
+		}
+		totalMarketValue += marketValue
+		totalTodayPnL += todayPnL
+		totalUnrealizedPnL += pnl
+		totalCost += cost
+	}
+	totalAssets := currentCash + totalMarketValue
+	if totalAssets > 0 {
+		if _, err := tx.Exec(`UPDATE portfolio_pool_holdings SET weight = market_value / ? WHERE shares > 0`, totalAssets); err != nil {
+			return Summary{}, err
+		}
+	}
+	var realizedTotal float64
+	if err := tx.QueryRow(`SELECT COALESCE(SUM(pnl),0) FROM portfolio_pool_trades WHERE side = 'sell'`).Scan(&realizedTotal); err != nil {
+		return Summary{}, err
+	}
+	var nClosed int
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT ts_code) FROM portfolio_pool_trades WHERE side = 'sell'`).Scan(&nClosed); err != nil {
+		return Summary{}, err
+	}
+	unrealizedPct := 0.0
+	if totalCost > 0 {
+		unrealizedPct = totalUnrealizedPnL / totalCost
+	}
+	todayBase := totalMarketValue - totalTodayPnL
+	todayPct := 0.0
+	if todayBase > 0 {
+		todayPct = totalTodayPnL / todayBase
+	}
+	totalPnL := realizedTotal + totalUnrealizedPnL
+	cumReturn := 0.0
+	if initialCash > 0 {
+		cumReturn = totalPnL / initialCash
+	}
+	if _, err := tx.Exec(`
+		UPDATE portfolio_pool_summary
+		SET market_value = ?, total_assets = ?, total_cost = ?,
+		    today_pnl = ?, today_pct = ?, unrealized_pnl = ?, unrealized_pct = ?,
+		    realized_pnl = ?, total_pnl = ?, cum_return = ?, n_closed = ?, updated_at = ?
+		WHERE id = 1`,
+		totalMarketValue, totalAssets, totalCost,
+		totalTodayPnL, todayPct, totalUnrealizedPnL, unrealizedPct,
+		realizedTotal, totalPnL, cumReturn, nClosed, now,
+	); err != nil {
+		return Summary{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Summary{}, err
+	}
+	return service.GetSummary("")
 }
 
 func (service *Service) ConfirmTrades(dataPath string, trades []TradeRequest) (Summary, error) {

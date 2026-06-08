@@ -3802,6 +3802,38 @@ func (app *App) ConfirmPositionTrades(trades []position.TradeRequest) (position.
 	return app.positionService.ConfirmTrades(app.settings.DataPath, trades)
 }
 
+func (app *App) RefreshPositionRealtimeQuotes() (position.Summary, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.Summary{}, err
+	}
+	holdings, err := app.positionService.GetHoldings()
+	if err != nil {
+		return position.Summary{}, err
+	}
+	if len(holdings) == 0 {
+		return app.positionService.GetSummary(app.settings.DataPath)
+	}
+	prices := map[string]float64{}
+	for _, holding := range holdings {
+		code := strings.TrimSpace(holding.TSCode)
+		if code == "" {
+			continue
+		}
+		price, err := app.fetchDCRealtimePrice(code)
+		if err != nil {
+			continue
+		}
+		if price > 0 {
+			prices[code] = price
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if len(prices) == 0 {
+		return position.Summary{}, errors.New("东方财富 dc 实时行情未返回有效价格，已保留日线收盘价")
+	}
+	return app.positionService.RefreshValuationWithPrices(prices, time.Now().Format("20060102"))
+}
+
 func (app *App) ClearPositionPool() (position.Summary, error) {
 	if err := app.ensurePositionService(); err != nil {
 		return position.Summary{}, err
@@ -3811,10 +3843,105 @@ func (app *App) ClearPositionPool() (position.Summary, error) {
 
 func (app *App) applyLatestExecutionPrices(trades []position.TradeRequest) {
 	for i := range trades {
-		price := app.latestClosePrice(trades[i].TSCode)
+		price := 0.0
+		if realtimePrice, err := app.fetchDCRealtimePrice(trades[i].TSCode); err == nil && realtimePrice > 0 {
+			price = realtimePrice
+		}
+		if price <= 0 {
+			price = app.latestClosePrice(trades[i].TSCode)
+		}
 		if price > 0 {
 			trades[i].Price = price
 		}
+	}
+}
+
+func (app *App) fetchDCRealtimePrice(tsCode string) (float64, error) {
+	tsCode = strings.TrimSpace(tsCode)
+	if tsCode == "" {
+		return 0, errors.New("ts_code is empty")
+	}
+	secID := eastmoneySecID(tsCode)
+	if secID == "" {
+		return 0, fmt.Errorf("unsupported ts_code: %s", tsCode)
+	}
+	baseCtx := app.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseCtx, 15*time.Second)
+	defer cancel()
+	url := fmt.Sprintf("https://push2.eastmoney.com/api/qt/stock/get?secid=%s&fields=f43,f58,f60", secID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+			time.Sleep(time.Duration(attempt+1) * 300 * time.Millisecond)
+			continue
+		}
+		var payload struct {
+			Data map[string]any `json:"data"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("dc quote http %d", resp.StatusCode)
+			time.Sleep(time.Duration(attempt+1) * 300 * time.Millisecond)
+			continue
+		}
+		if decodeErr != nil {
+			lastErr = decodeErr
+			time.Sleep(time.Duration(attempt+1) * 300 * time.Millisecond)
+			continue
+		}
+		raw := anyToFloat(payload.Data["f43"])
+		if raw > 0 {
+			return raw / 100, nil
+		}
+		lastErr = errors.New("dc quote price is empty")
+	}
+	return 0, lastErr
+}
+
+func eastmoneySecID(tsCode string) string {
+	parts := strings.Split(strings.TrimSpace(tsCode), ".")
+	if len(parts) != 2 || parts[0] == "" {
+		return ""
+	}
+	switch strings.ToUpper(parts[1]) {
+	case "SH":
+		return "1." + parts[0]
+	case "SZ", "BJ":
+		return "0." + parts[0]
+	default:
+		return ""
+	}
+}
+
+func anyToFloat(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		out, _ := v.Float64()
+		return out
+	case string:
+		out, _ := strconv.ParseFloat(strings.TrimSpace(strings.ReplaceAll(v, ",", "")), 64)
+		return out
+	default:
+		return 0
 	}
 }
 

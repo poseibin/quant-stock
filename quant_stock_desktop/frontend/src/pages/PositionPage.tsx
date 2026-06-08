@@ -4,6 +4,7 @@ import {
   confirmPositionTrades,
   getPositionRecommendation,
   getPositionSummary,
+  refreshPositionRealtimeQuotes,
   type PositionRecommendation,
   type PositionSummary,
   type TradeRequest
@@ -76,6 +77,7 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [refreshingQuotes, setRefreshingQuotes] = useState(false)
   const [activeTab, setActiveTab] = useState<PositionTab>('holdings')
   const [error, setError] = useState('')
   const [confirmReset, setConfirmReset] = useState(false)
@@ -159,6 +161,19 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
       .finally(() => setSaving(false))
   }
 
+  const refreshRealtimeQuotes = () => {
+    setRefreshingQuotes(true)
+    setError('')
+    refreshPositionRealtimeQuotes()
+      .then((nextSummary) => {
+        setSummary(nextSummary)
+        return getPositionRecommendation()
+      })
+      .then((nextRecommendation) => setRecommendation(nextRecommendation))
+      .catch((err: Error) => setError(err.message || '刷新实时价失败'))
+      .finally(() => setRefreshingQuotes(false))
+  }
+
   const clearPositions = () => {
     if (!summary) return
     if (!confirmReset) {
@@ -195,7 +210,7 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
       : `决策日 ${recommendation.date} · 目标 ${recommendation.n_holdings} 只 / ${percent(recommendation.total_weight)} · 可执行 ${rebalanceCount} 笔 · 买 ${recommendation.n_buy} / 卖 ${recommendation.n_sell}`
     : ''
   const rebalanceDisabled = loading || saving || rebalanceCount === 0 || rebalanced
-  const clearDisabled = loading || saving || clearing || !summary
+  const clearDisabled = loading || saving || clearing || refreshingQuotes || !summary
   return (
     <div className="positionPage">
       {error ? <div className="errorBanner">{error}</div> : null}
@@ -209,8 +224,10 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
         summary={summary}
         loading={loading}
         clearing={clearing}
+        refreshingQuotes={refreshingQuotes}
         confirmReset={confirmReset}
         clearDisabled={clearDisabled}
+        onRefreshRealtimeQuotes={refreshRealtimeQuotes}
         onClear={clearPositions}
         onOpenResearch={onOpenResearch}
       /> : null}
@@ -231,12 +248,14 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   )
 }
 
-function HoldingsPanel({ summary, loading, clearing, confirmReset, clearDisabled, onClear, onOpenResearch }: {
+function HoldingsPanel({ summary, loading, clearing, refreshingQuotes, confirmReset, clearDisabled, onRefreshRealtimeQuotes, onClear, onOpenResearch }: {
   summary: PositionSummary | null
   loading: boolean
   clearing: boolean
+  refreshingQuotes: boolean
   confirmReset: boolean
   clearDisabled: boolean
+  onRefreshRealtimeQuotes: () => void
   onClear: () => void
   onOpenResearch?: (tsCode: string) => void
 }) {
@@ -248,6 +267,9 @@ function HoldingsPanel({ summary, loading, clearing, confirmReset, clearDisabled
           <p className="recommendationMeta">当前账户现金、持仓和浮动盈亏</p>
         </div>
         <div className="tableHeaderRight">
+          <button className="secondaryButton" onClick={onRefreshRealtimeQuotes} disabled={clearDisabled || loading}>
+            {refreshingQuotes ? '刷新中...' : '刷新实时价'}
+          </button>
           <button className="secondaryButton dangerButton" onClick={onClear} disabled={clearDisabled}>{clearing ? '重置中...' : confirmReset ? '确认重置' : '重置账户'}</button>
         </div>
       </div>

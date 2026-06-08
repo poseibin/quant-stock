@@ -164,6 +164,8 @@ export function RefreshLimitBreakoutCandidates(arg1:market.BreakoutQuery):Promis
 
 export function RefreshLimitUpMomentumCandidates(arg1:market.LimitUpMomentumQuery):Promise<Array<market.LimitUpMomentumCandidate>>;
 
+export function RefreshPositionRealtimeQuotes():Promise<position.Summary>;
+
 export function RefreshRecommendationHindsight():Promise<Array<main.RecommendationHindsightDTO>>;
 
 export function RefreshTaskStatus(arg1:string):Promise<task.DTO>;
