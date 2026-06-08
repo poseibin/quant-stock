@@ -64,6 +64,65 @@ def test_rebalance_dates():
     assert isinstance(out, list)
 
 
+def test_weekly_rebalance_uses_iso_year(monkeypatch):
+    from trading.strategy.base import get_rebalance_dates
+    from research.data.storage import duckdb_query
+
+    monkeypatch.setattr(
+        duckdb_query,
+        "get_trade_dates",
+        lambda start, end: ["20241230", "20241231", "20250102", "20250103"],
+    )
+    assert get_rebalance_dates("20241230", "20250103", "weekly") == ["20250103"]
+
+
+def test_breakout_pullback_uses_daily_touch_window():
+    import pandas as pd
+    from scripts.limit_breakout_model_worker import simulate_breakout_pullback_return
+
+    row = pd.Series({
+        "close": 100.0,
+        "future_low_3d": 90.0,
+        "future_high_3d": 101.0,
+        "exit_close_5d": 101.0,
+        "next_low_1d": 90.0,
+        "next_high_1d": 94.0,
+        "next_low_2d": 90.0,
+        "next_high_2d": 94.0,
+        "next_low_3d": 90.0,
+        "next_high_3d": 94.0,
+    })
+    ret = simulate_breakout_pullback_return(row, 5, -0.05, 3, 0.12, -0.05, 0, 0, 0, 0)
+    assert ret is None
+
+
+def test_breakout_confirmation_starts_after_confirm_close():
+    import pandas as pd
+    from scripts.limit_breakout_model_worker import simulate_breakout_confirmation_return
+
+    row = pd.Series({
+        "close": 100.0,
+        "entry_open_1d": 101.0,
+        "entry_gap_1d": 0.01,
+        "exit_close_1d": 104.0,
+        "future_high_5d": 200.0,
+        "future_low_5d": 90.0,
+        "next_high_2d": 105.0,
+        "next_low_2d": 103.0,
+        "next_high_3d": 105.0,
+        "next_low_3d": 103.0,
+        "next_high_4d": 105.0,
+        "next_low_4d": 103.0,
+        "next_high_5d": 105.0,
+        "next_low_5d": 103.0,
+        "next_high_6d": 105.0,
+        "next_low_6d": 103.0,
+        "exit_close_after_confirm_5d": 105.0,
+    })
+    ret = simulate_breakout_confirmation_return(row, 5, 0.04, 0.08, 0.12, -0.05, 0, 0, 0, 0)
+    assert ret == (105.0 / 104.0 - 1)
+
+
 if __name__ == "__main__":
     test_imports()
     test_config_paths()

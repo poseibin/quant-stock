@@ -17,6 +17,7 @@ from scripts.limit_up_model_worker import (
     limit_threshold,
     metrics_for_top,
     now_text,
+    sample_quality_summary,
     safe_float,
     tier_metrics_list,
     top_rows_by_date,
@@ -98,12 +99,21 @@ def simulate_breakout_pullback_return(row: pd.Series, hold_days: int, entry_disc
     if signal_close <= 0:
         return None
     entry_price = signal_close * (1 + entry_discount)
-    touch_low = safe_float(row.get(f"future_low_{touch_days}d"))
-    touch_high = safe_float(row.get(f"future_high_{touch_days}d"))
-    if touch_low <= 0 or touch_high <= 0 or touch_low > entry_price or touch_high < entry_price:
+    touch_day = 0
+    for day in range(1, min(touch_days, hold_days) + 1):
+        day_low = safe_float(row.get(f"next_low_{day}d"))
+        day_high = safe_float(row.get(f"next_high_{day}d"))
+        if day_low > 0 and day_high > 0 and day_low <= entry_price <= day_high:
+            touch_day = day
+            break
+    if touch_day <= 0:
         return None
-    future_high = safe_float(row.get(f"future_high_{hold_days}d"))
-    future_low = safe_float(row.get(f"future_low_{hold_days}d"))
+    highs = [safe_float(row.get(f"next_high_{day}d")) for day in range(touch_day, hold_days + 1)]
+    lows = [safe_float(row.get(f"next_low_{day}d")) for day in range(touch_day, hold_days + 1)]
+    highs = [value for value in highs if value > 0]
+    lows = [value for value in lows if value > 0]
+    future_high = max(highs) if highs else 0.0
+    future_low = min(lows) if lows else 0.0
     exit_close = safe_float(row.get(f"exit_close_{hold_days}d"))
     return trade_return_from_bounds(entry_price, future_high, future_low, exit_close, take_profit, stop_loss, buy_slippage, sell_slippage, commission, stamp_tax)
 
@@ -118,9 +128,15 @@ def simulate_breakout_confirmation_return(row: pd.Series, hold_days: int, max_ga
     next_return = next_close / signal_close - 1
     if entry_gap > max_gap or next_return <= 0 or next_return > max_next_return:
         return None
-    future_high = safe_float(row.get(f"future_high_{hold_days}d"))
-    future_low = safe_float(row.get(f"future_low_{hold_days}d"))
-    exit_close = safe_float(row.get(f"exit_close_{hold_days}d"))
+    if hold_days <= 1:
+        return None
+    highs = [safe_float(row.get(f"next_high_{day}d")) for day in range(2, hold_days + 2)]
+    lows = [safe_float(row.get(f"next_low_{day}d")) for day in range(2, hold_days + 2)]
+    highs = [value for value in highs if value > 0]
+    lows = [value for value in lows if value > 0]
+    future_high = max(highs) if highs else 0.0
+    future_low = min(lows) if lows else 0.0
+    exit_close = safe_float(row.get(f"exit_close_after_confirm_{hold_days}d"))
     return trade_return_from_bounds(next_close, future_high, future_low, exit_close, take_profit, stop_loss, buy_slippage, sell_slippage, commission, stamp_tax)
 
 
@@ -168,6 +184,7 @@ def breakout_trade_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry
             "sell_slippage": sell_slippage,
             "commission": commission,
             "stamp_tax": stamp_tax,
+            "path_assumption": "daily_ohlc_stop_first",
         },
     }
     if trades.empty:
@@ -519,6 +536,10 @@ def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.Da
         df[f"exit_close_{hold_days}d"] = group["close"].shift(-hold_days)
         df[f"future_high_{hold_days}d"] = group["high"].transform(lambda s, h=hold_days: s.shift(-1).iloc[::-1].rolling(h, min_periods=1).max().iloc[::-1])
         df[f"future_low_{hold_days}d"] = group["low"].transform(lambda s, h=hold_days: s.shift(-1).iloc[::-1].rolling(h, min_periods=1).min().iloc[::-1])
+        df[f"exit_close_after_confirm_{hold_days}d"] = group["close"].shift(-(hold_days + 1))
+    for day in range(1, 7):
+        df[f"next_high_{day}d"] = group["high"].shift(-day)
+        df[f"next_low_{day}d"] = group["low"].shift(-day)
 
     df["label"] = (((df["fwd5_max_return"] >= 0.10) | (df["hit_limit_up_5d"] > 0)) & (df["max_drawdown_5d"] > -0.12)).astype(int)
     df["year"] = df["trade_date"].str.slice(0, 4).astype(int)
@@ -586,6 +607,9 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
         fold_metrics.append({
             "year": int(year),
             "rows": int(len(fold)),
+            "train_rows": int(train_mask.sum()),
+            "train_positive_rate": safe_float(y_train.mean()),
+            "scale_pos_weight": safe_float(max(1.0, neg / max(pos, 1))),
             "positive_rate": safe_float(fold["label"].mean()),
             "baseline_return": fold_baseline,
             "roc_auc": safe_float(roc_auc_score(fold["label"], prob)) if fold["label"].nunique() > 1 else 0.0,
@@ -635,6 +659,13 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
         "tiers": tier_metrics_list(pred, tier_set(int(args.top_k)), baseline_return),
         "folds": fold_metrics,
         "trading_validation": breakout_trading_validation(pred),
+        "evaluation_quality": sample_quality_summary(
+            data,
+            pred,
+            fold_metrics,
+            universe_note="模型只评估横盘、启动、流动性达标候选池，不代表全市场无条件预测能力。",
+            path_note="回踩买用逐日 high/low 判断触达；确认买按次日收盘确认后，从下一交易日开始计算持有收益；同日同时触发止盈/止损按先止损处理。",
+        ),
         "test_start": str(pred["trade_date"].min()),
         "test_end": str(pred["trade_date"].max()),
         "top_k": int(args.top_k),

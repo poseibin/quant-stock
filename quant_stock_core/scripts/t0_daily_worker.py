@@ -689,6 +689,25 @@ def t0_rank_ic(frame: pd.DataFrame) -> float:
     return safe_float(frame["model_score"].corr(frame["edge"], method="spearman"))
 
 
+def t0_quality_summary(samples: pd.DataFrame, pred: pd.DataFrame, folds: list[dict[str, object]]) -> dict[str, object]:
+    years = sorted(int(year) for year in samples["year"].dropna().unique()) if not samples.empty else []
+    fold_years = [int(item["year"]) for item in folds if "year" in item]
+    ambiguous = safe_float(((samples["two_sided"] == 1) | (samples["stop_hit"] == 1)).mean()) if not samples.empty else 0.0
+    return {
+        "sample_rows": int(len(samples)),
+        "prediction_rows": int(len(pred)),
+        "sample_years": years,
+        "fold_years": fold_years,
+        "fold_count": int(len(folds)),
+        "missing_fold_years": [int(year) for year in years if year >= (min(fold_years) if fold_years else 9999) and year not in fold_years],
+        "overall_positive_rate": safe_float(samples["label"].mean()) if not samples.empty else 0.0,
+        "tested_positive_rate": safe_float(pred["label"].mean()) if not pred.empty else 0.0,
+        "path_ambiguity_rate": ambiguous,
+        "path_assumption": "日线 OHLC 无法确认盘中高抛、低吸、停手线的先后顺序；标签要求高低两边触达且未触停手线，仍属于近似评估。",
+        "universe_note": "模型样本来自规则分达到候选线的日线做T候选，不代表全市场无条件预测能力。",
+    }
+
+
 def train_t0_admission_model(history: pd.DataFrame, latest: pd.DataFrame, candidates: list[Candidate], run_id: str, data_path: str, metric_window: int = 20) -> dict[str, object]:
     import lightgbm as lgb
     from sklearn.metrics import average_precision_score, roc_auc_score
@@ -743,7 +762,10 @@ def train_t0_admission_model(history: pd.DataFrame, latest: pd.DataFrame, candid
         folds.append({
             "year": int(year),
             "rows": int(len(fold)),
+            "train_rows": int(train_mask.sum()),
+            "train_positive_rate": safe_float(y_train.mean()),
             "positive_rate": safe_float(fold["label"].mean()),
+            "path_ambiguity_rate": safe_float(((fold["two_sided"] == 1) | (fold["stop_hit"] == 1)).mean()),
             "top10_two_sided": safe_float(top["two_sided"].mean()),
             "top10_avg_edge": safe_float(top["edge"].mean()),
             "top10_total_edge": safe_float(top["edge"].sum()),
@@ -786,6 +808,7 @@ def train_t0_admission_model(history: pd.DataFrame, latest: pd.DataFrame, candid
         "top10_avg_edge": safe_float(pd.Series([safe_float(item["top10_avg_edge"]) for item in folds]).mean()) if folds else 0.0,
         "top10_two_sided": safe_float(pd.Series([safe_float(item["top10_two_sided"]) for item in folds]).mean()) if folds else 0.0,
         "folds": folds,
+        "evaluation_quality": t0_quality_summary(samples, pred, folds),
         "feature_importance": feature_importance,
         "candidate_scores": latest_scores,
         "model_path": str(out_dir / "latest_model.joblib"),

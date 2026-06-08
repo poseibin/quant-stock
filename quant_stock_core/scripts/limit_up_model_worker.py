@@ -393,17 +393,32 @@ def tier_metrics_list(frame: pd.DataFrame, tiers: list[int], baseline_return: fl
     return [tier_metrics(frame, top_k, baseline_return) for top_k in tiers]
 
 
+def sample_quality_summary(data: pd.DataFrame, pred: pd.DataFrame, fold_metrics: list[dict[str, Any]], *, universe_note: str, path_note: str) -> dict[str, Any]:
+    years = sorted(int(year) for year in data["year"].dropna().unique()) if not data.empty and "year" in data else []
+    fold_years = [int(item["year"]) for item in fold_metrics if "year" in item]
+    return {
+        "universe_note": universe_note,
+        "path_assumption": path_note,
+        "sample_rows": int(len(data)),
+        "prediction_rows": int(len(pred)),
+        "sample_years": years,
+        "fold_years": fold_years,
+        "fold_count": int(len(fold_metrics)),
+        "missing_fold_years": [int(year) for year in years if year >= (min(fold_years) if fold_years else 9999) and year not in fold_years],
+        "overall_positive_rate": safe_float(data["label"].mean()) if not data.empty and "label" in data else 0.0,
+        "tested_positive_rate": safe_float(pred["label"].mean()) if not pred.empty and "label" in pred else 0.0,
+        "min_fold_rows": int(min((int(item.get("rows", 0)) for item in fold_metrics), default=0)),
+        "max_fold_rows": int(max((int(item.get("rows", 0)) for item in fold_metrics), default=0)),
+    }
+
+
 def simulate_trade_return(row: Any, hold_days: int, max_gap: float, take_profit: float, stop_loss: float, buy_slippage: float, sell_slippage: float, commission: float, stamp_tax: float) -> float | None:
     signal_close = safe_float(getattr(row, "close", 0))
     entry_open = safe_float(getattr(row, "entry_open_1d", 0))
     entry_gap = safe_float(getattr(row, "entry_gap_1d", 0))
-    entry_pct = safe_float(getattr(row, "entry_pct_chg_1d", 0))
     if signal_close <= 0 or entry_open <= 0:
         return None
     if entry_gap > max_gap:
-        return None
-    limit_pct = limit_threshold(str(getattr(row, "ts_code", "")), str(getattr(row, "name", ""))) / 100.0
-    if entry_pct / 100.0 >= max(0.0, limit_pct - 0.003):
         return None
 
     future_high = safe_float(getattr(row, f"future_high_{hold_days}d", 0))
@@ -427,13 +442,9 @@ def simulate_pullback_return(row: Any, hold_days: int, min_buy_premium: float, m
     signal_close = safe_float(getattr(row, "close", 0))
     entry_open = safe_float(getattr(row, "entry_open_1d", 0))
     entry_gap = safe_float(getattr(row, "entry_gap_1d", 0))
-    entry_pct = safe_float(getattr(row, "entry_pct_chg_1d", 0))
     if signal_close <= 0 or entry_open <= 0:
         return None
     if entry_gap > max_open_gap:
-        return None
-    limit_pct = limit_threshold(str(getattr(row, "ts_code", "")), str(getattr(row, "name", ""))) / 100.0
-    if entry_pct / 100.0 >= max(0.0, limit_pct - 0.003):
         return None
 
     next_low = safe_float(getattr(row, "future_low_1d", 0))
@@ -500,7 +511,7 @@ def trading_rule_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry_m
             "compound_return": 0.0,
             "max_drawdown": 0.0,
             "yearly": [],
-            "rule": {"entry_mode": entry_mode, "max_gap": max_gap, "take_profit": take_profit, "stop_loss": stop_loss, "buy_slippage": buy_slippage, "sell_slippage": sell_slippage, "commission": commission, "stamp_tax": stamp_tax, "min_buy_premium": min_buy_premium, "max_buy_premium": max_buy_premium},
+            "rule": {"entry_mode": entry_mode, "max_gap": max_gap, "take_profit": take_profit, "stop_loss": stop_loss, "buy_slippage": buy_slippage, "sell_slippage": sell_slippage, "commission": commission, "stamp_tax": stamp_tax, "min_buy_premium": min_buy_premium, "max_buy_premium": max_buy_premium, "path_assumption": "daily_ohlc_stop_first"},
         }
     daily_returns = trades.groupby("trade_date")["return"].mean().sort_index()
     stats = equity_stats(daily_returns)
@@ -529,7 +540,7 @@ def trading_rule_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry_m
         "compound_return": stats["compound_return"],
         "max_drawdown": stats["max_drawdown"],
         "yearly": yearly,
-        "rule": {"entry_mode": entry_mode, "max_gap": max_gap, "take_profit": take_profit, "stop_loss": stop_loss, "buy_slippage": buy_slippage, "sell_slippage": sell_slippage, "commission": commission, "stamp_tax": stamp_tax, "min_buy_premium": min_buy_premium, "max_buy_premium": max_buy_premium},
+        "rule": {"entry_mode": entry_mode, "max_gap": max_gap, "take_profit": take_profit, "stop_loss": stop_loss, "buy_slippage": buy_slippage, "sell_slippage": sell_slippage, "commission": commission, "stamp_tax": stamp_tax, "min_buy_premium": min_buy_premium, "max_buy_premium": max_buy_premium, "path_assumption": "daily_ohlc_stop_first"},
     }
 
 
@@ -594,6 +605,9 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
         metric = {
             "year": int(year),
             "rows": int(len(fold)),
+            "train_rows": int(train_mask.sum()),
+            "train_positive_rate": safe_float(y_train.mean()),
+            "scale_pos_weight": safe_float(max(1.0, neg / max(pos, 1))),
             "positive_rate": safe_float(fold["label"].mean()),
             "baseline_return": fold_baseline,
             "roc_auc": safe_float(roc_auc_score(fold["label"], prob)) if fold["label"].nunique() > 1 else 0.0,
@@ -645,6 +659,13 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
         "tiers": tier_summary,
         "folds": fold_metrics,
         "trading_validation": trading_validation(pred),
+        "evaluation_quality": sample_quality_summary(
+            data,
+            pred,
+            fold_metrics,
+            universe_note="模型只评估强势、流动性达标、可交易候选池，不代表全市场无条件预测能力。",
+            path_note="交易验证使用日线 OHLC，无法确认盘中止盈/止损先后；同日同时触发时按先止损处理。",
+        ),
         "test_start": str(pred["trade_date"].min()),
         "test_end": str(pred["trade_date"].max()),
         "top_k": int(args.top_k),

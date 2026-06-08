@@ -71,7 +71,8 @@ def get_rebalance_dates(start: str, end: str, freq: str) -> list[str]:
     df = pd.DataFrame({"d": all_days})
     df["dt"] = pd.to_datetime(df["d"])
     if freq == "weekly":
-        df["k"] = df["dt"].dt.isocalendar().week.astype(str) + df["dt"].dt.year.astype(str)
+        iso = df["dt"].dt.isocalendar()
+        df["k"] = iso.year.astype(str) + "-" + iso.week.astype(str).str.zfill(2)
     elif freq == "monthly":
         df["k"] = df["dt"].dt.to_period("M").astype(str)
     elif freq == "quarterly":
