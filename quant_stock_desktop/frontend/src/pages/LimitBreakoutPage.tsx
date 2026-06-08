@@ -400,7 +400,7 @@ function SignalSummaryPanel({
         </div>
         {onRefresh && (
           <div className="tableHeaderRight">
-            <button className="secondaryButton startButton" onClick={onRefresh} disabled={loading}>更新推荐</button>
+            <button className="secondaryButton startButton" onClick={onRefresh} disabled={loading}>{loading ? '更新中...' : '更新推荐'}</button>
           </div>
         )}
       </div>
@@ -769,8 +769,8 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
           run={modelRuns[0]}
           variant="momentum"
           error={modelError}
-          loading={modelLoading}
-          onRefresh={() => loadModel()}
+          loading={modelLoading || modelStatus?.state === 'running'}
+          onRefresh={trainModel}
         />
       )}
 
@@ -1261,8 +1261,8 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
           run={modelRuns[0]}
           variant="breakout"
           error={modelError}
-          loading={modelLoading}
-          onRefresh={() => loadModel()}
+          loading={modelLoading || modelStatus?.state === 'running'}
+          onRefresh={trainModel}
         />
       )}
 
