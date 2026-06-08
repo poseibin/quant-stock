@@ -160,6 +160,19 @@ function parseLimitUpRunSummary(run?: LimitUpModelRunSummary): LimitUpRunSummary
   }
 }
 
+function bestTradingValidation(run?: LimitUpModelRunSummary) {
+  const rows = parseLimitUpRunSummary(run).trading_validation || []
+  return rows.reduce<LimitUpTradingValidation | null>((best, item) => !best || item.compound_return > best.compound_return ? item : best, null)
+}
+
+function tradeLayerPass(run: LimitUpModelRunSummary | undefined, variant: 'momentum' | 'breakout') {
+  if (!run || run.top_return <= 0 || run.top_excess_return <= 0) return false
+  const trading = bestTradingValidation(run)
+  if (!trading || trading.avg_return <= 0 || trading.compound_return <= 0) return false
+  if (variant === 'momentum') return trading.max_drawdown > -0.35
+  return true
+}
+
 function avg(values: number[]) {
   const valid = values.filter((value) => Number.isFinite(value))
   if (valid.length === 0) return 0
@@ -197,22 +210,31 @@ function aucTone(value: number) {
   return 'negativeText'
 }
 
-function predictionTradeAction(item: LimitUpModelPrediction, variant: 'momentum' | 'breakout') {
+function predictionTradeAction(item: LimitUpModelPrediction, variant: 'momentum' | 'breakout', run?: LimitUpModelRunSummary) {
   const score = Number(item.model_score || 0)
   const prob = Number(item.prob || 0)
+  const tradePass = tradeLayerPass(run, variant)
   if (variant === 'breakout') {
+    if (!tradePass) {
+      if (prob >= 0.48 && score >= 60) return { label: '观察', badge: 'running', stage: '交易层未过' }
+      return { label: '放弃', badge: 'created', stage: '结构不够强' }
+    }
     if (prob >= 0.58 && score >= 72) return { label: '可试仓', badge: 'success', stage: '等回踩确认' }
     if (prob >= 0.48 && score >= 60) return { label: '观察', badge: 'running', stage: '等突破回踩' }
     return { label: '放弃', badge: 'created', stage: '结构不够强' }
   }
-  if (prob >= 0.62 && score >= 72) return { label: '可小仓', badge: 'success', stage: '等换手承接' }
-  if (prob >= 0.50 && score >= 60) return { label: '只观察', badge: 'running', stage: '等回封/分歧转强' }
-  return { label: '不追', badge: 'created', stage: '赔率不足' }
+  if (!tradePass) {
+    if (prob >= 0.50 && score >= 60) return { label: '观察', badge: 'running', stage: '交易层未过' }
+    return { label: '放弃', badge: 'created', stage: '赔率不足' }
+  }
+  if (prob >= 0.62 && score >= 72) return { label: '可试仓', badge: 'success', stage: '等换手承接' }
+  if (prob >= 0.50 && score >= 60) return { label: '观察', badge: 'running', stage: '等回封/分歧转强' }
+  return { label: '放弃', badge: 'created', stage: '赔率不足' }
 }
 
-function predictionTradePlan(item: LimitUpModelPrediction, variant: 'momentum' | 'breakout') {
+function predictionTradePlan(item: LimitUpModelPrediction, variant: 'momentum' | 'breakout', run?: LimitUpModelRunSummary) {
   const price = Number(item.price || 0)
-  const action = predictionTradeAction(item, variant)
+  const action = predictionTradeAction(item, variant, run)
   const executable = action.badge === 'success'
   const watchable = action.badge === 'running'
   const cash = executable ? 10000 : watchable ? 5000 : 0
@@ -254,8 +276,8 @@ function predictionTradePlan(item: LimitUpModelPrediction, variant: 'momentum' |
 
 function summarizePredictions(predictions: LimitUpModelPrediction[], run: LimitUpModelRunSummary | undefined, variant: 'momentum' | 'breakout') {
   const count = predictions.length
-  const executable = predictions.filter((item) => predictionTradeAction(item, variant).badge === 'success').length
-  const watch = predictions.filter((item) => predictionTradeAction(item, variant).badge === 'running').length
+  const executable = predictions.filter((item) => predictionTradeAction(item, variant, run).badge === 'success').length
+  const watch = predictions.filter((item) => predictionTradeAction(item, variant, run).badge === 'running').length
   const avgProb = count ? avg(predictions.map((item) => item.prob)) : 0
   const avgScore = count ? avg(predictions.map((item) => item.model_score)) : 0
   const latestCount = predictions.filter((item) => item.is_latest).length
@@ -268,6 +290,37 @@ function summarizePredictions(predictions: LimitUpModelPrediction[], run: LimitU
     latestCount,
     verdict: run && run.top_excess_return > 0 && run.top_return > 0 ? '可观察' : run ? '谨慎' : '未更新',
   }
+}
+
+function tierActionConclusion(tier: LimitUpTierMetric, variant: 'momentum' | 'breakout', tradePass: boolean) {
+  if (variant === 'momentum') {
+    if (!tradePass) return '观察，不给试仓'
+    if (tier.top_k <= 3 && tier.avg_return > 0.04 && tier.limit_up_hit_rate > 0.5) return '可极小仓验证'
+    if (tier.avg_return > 0.02) return '观察池'
+    return '停用'
+  }
+  if (!tradePass) return tier.top_k <= 3 && tier.avg_return > 0 ? '只等回踩观察' : '停用'
+  if (tier.top_k <= 3 && tier.avg_return > 0 && tier.excess_return > 0) return '回踩条件单'
+  if (tier.avg_return > 0) return '观察'
+  return '停用'
+}
+
+function TopTierExecutionSummary({ run, variant }: { run?: LimitUpModelRunSummary; variant: 'momentum' | 'breakout' }) {
+  const summary = parseLimitUpRunSummary(run)
+  const tiers = summary.tiers || []
+  if (!run || tiers.length === 0) return null
+  const tradePass = tradeLayerPass(run, variant)
+  return (
+    <div className="metricStrip signalTierStrip">
+      {tiers.map((tier) => (
+        <div className={`metricCard ${tradePass && tier.avg_return > 0 ? 'good' : ''}`} key={`${variant}-${tier.top_k}`}>
+          <span>Top{tier.top_k}</span>
+          <b className={marketTone(tier.avg_return)}>{pct(tier.avg_return)}</b>
+          <em>{tierActionConclusion(tier, variant, tradePass)} · 超额 {pct(tier.excess_return)} · 再板 {pctNoSign(tier.limit_up_hit_rate)}</em>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function runStatusPercent(status: RunStatus) {
@@ -323,7 +376,7 @@ function SignalSummaryPanel({
         </div>
         {onRefresh && (
           <div className="tableHeaderRight">
-            <button className="secondaryButton startButton" onClick={onRefresh} disabled={loading}>刷新结果</button>
+            <button className="secondaryButton startButton" onClick={onRefresh} disabled={loading}>更新推荐</button>
           </div>
         )}
       </div>
@@ -339,7 +392,7 @@ function SignalSummaryPanel({
           <em>{summary.latestCount || summary.count} 只最新截面</em>
         </div>
         <div className={`metricCard ${summary.executable > 0 ? 'good' : ''}`}>
-          <span>{variant === 'breakout' ? '可试仓' : '可小仓'}</span>
+          <span>可试仓</span>
           <b>{summary.executable}</b>
           <em>{variant === 'breakout' ? '结构和概率同时通过' : '概率和接力评分同时通过'}</em>
         </div>
@@ -377,12 +430,14 @@ function SignalSummaryPanel({
 
 function SignalActionList({
   predictions,
+  run,
   variant,
   onOpenResearch,
   selectedCode,
   onSelect,
 }: {
   predictions: LimitUpModelPrediction[]
+  run?: LimitUpModelRunSummary
   variant: 'momentum' | 'breakout'
   onOpenResearch?: OpenResearch
   selectedCode: string
@@ -391,7 +446,7 @@ function SignalActionList({
   const title = variant === 'breakout' ? '横盘爆点观察清单' : '涨停接力动作清单'
   const hint = variant === 'breakout'
     ? '按模型概率和结构分给出观察、试仓、失效条件；不是突破就追，必须等回踩承接。'
-    : '按模型概率和接力分给出可小仓、只观察、不追；高开过大、买不到板或承接差都直接放弃。'
+    : '按模型概率和接力分给出可试仓、观察、放弃；高开过大、买不到板或承接差都直接放弃。'
   return (
     <section className="modelRecommendCard signalActionCard">
       <div className="tableHeader">
@@ -401,6 +456,7 @@ function SignalActionList({
           <div className="cardHint">{hint}</div>
         </div>
       </div>
+      <TopTierExecutionSummary run={run} variant={variant} />
       {predictions.length === 0 ? (
         <div className="taskGridEmpty compactEmpty">暂无模型推荐，先去模型训练页更新模型</div>
       ) : (
@@ -423,8 +479,8 @@ function SignalActionList({
               </thead>
               <tbody>
                 {predictions.map((item, index) => {
-                  const action = predictionTradeAction(item, variant)
-                  const plan = predictionTradePlan(item, variant)
+                  const action = predictionTradeAction(item, variant, run)
+                  const plan = predictionTradePlan(item, variant, run)
                   return (
                     <tr key={`action-${item.ts_code}`} className={selectedCode === item.ts_code ? 'active' : ''} onClick={() => onSelect(item.ts_code)}>
                       <td><strong>{index + 1}</strong></td>
@@ -442,10 +498,13 @@ function SignalActionList({
                         </button>
                         <div className="mono">{item.ts_code}</div>
                         <div className="recommendationMeta">{item.industry || '未分类'} · {dateLabel(item.trade_date)}</div>
+                        <div className="recommendationMeta">首次推荐 {dateLabel(item.first_seen_date)} · 观察 {item.observation_days || 0} 天 · 保留 {item.seen_count || 0} 次</div>
+                        <div className="recommendationMeta">{item.observation_result || '观察中'}</div>
                       </td>
                       <td>
                         <span className={`badge ${action.badge}`}>{action.label}</span>
                         <div className="cardHint">{action.stage}</div>
+                        <div className="cardHint">保留原因：{item.observation_reason || '模型推荐'}</div>
                       </td>
                       <td>
                         <strong>{n(item.model_score, 1)}</strong>
@@ -516,7 +575,7 @@ function ValidationGatePanel({
       </div>
       <div className="metricCard">
         <span>推荐动作</span>
-        <b>{signalPass && tradePass ? '可小仓验证' : signalPass ? '只观察不自动买' : '先停用推荐'}</b>
+        <b>{signalPass && tradePass ? '可试仓验证' : signalPass ? '观察不自动买' : '先停用推荐'}</b>
         <em>{signalPass && !tradePass ? '模型能找票，但交易规则还没证明能赚钱' : variant === 'breakout' ? '横盘必须等回踩承接' : '涨停必须看开盘承接'}</em>
       </div>
     </div>
@@ -658,6 +717,7 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
       {view === 'recommend' && (
         <SignalActionList
           predictions={modelPredictions}
+          run={modelRuns[0]}
           variant="momentum"
           onOpenResearch={onOpenResearch}
           selectedCode={selectedCode}
@@ -1101,6 +1161,7 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
       {view === 'recommend' && (
         <SignalActionList
           predictions={modelPredictions}
+          run={modelRuns[0]}
           variant="breakout"
           onOpenResearch={onOpenResearch}
           selectedCode={selectedCode}

@@ -25,7 +25,7 @@ type NavigationState = {
 const pages: Array<{ id: Page; label: string; icon: typeof Activity }> = [
   { id: 'dashboard', label: '总览', icon: Activity },
   { id: 'positions', label: '持仓管理', icon: WalletCards },
-  { id: 'factorResearch', label: '研究中心', icon: FlaskConical },
+  { id: 'factorResearch', label: '通用策略', icon: FlaskConical },
   { id: 't0Assistant', label: '做T助手', icon: Repeat2 },
   { id: 'breakout', label: '涨停预警', icon: Flame },
   { id: 'flatBreakout', label: '横盘预警', icon: Radar },
@@ -155,7 +155,7 @@ function isPage(value: unknown): value is Page {
 function titleOf(page: Page) {
   switch (page) {
     case 'dashboard': return '总览'
-    case 'factorResearch': return '研究中心'
+    case 'factorResearch': return '通用策略'
     case 'positions': return '持仓管理'
     case 't0Assistant': return '做T助手'
     case 'research': return '个股研究'
@@ -169,7 +169,7 @@ function titleOf(page: Page) {
 
 function renderPage(page: Page, appInfo: AppInfo, openResearch: (tsCode: string, options?: { projection?: boolean }) => void, researchCode: string, researchReturnPage: Page | null, researchProjection: boolean, backFromResearch: () => void) {
   if (page === 'dashboard') return <DashboardPage appInfo={appInfo} />
-  if (page === 'factorResearch') return <FactorResearchPage />
+  if (page === 'factorResearch') return <FactorResearchPage onOpenResearch={openResearch} />
   if (page === 'positions') return <PositionPage onOpenResearch={openResearch} />
   if (page === 't0Assistant') return <T0AssistantPage onOpenResearch={openResearch} />
   if (page === 'research') return <StockResearchPage initialTsCode={researchCode} returnLabel={researchReturnPage ? titleOf(researchReturnPage) : ''} showLimitProjection={researchProjection} onBack={researchReturnPage ? backFromResearch : undefined} />

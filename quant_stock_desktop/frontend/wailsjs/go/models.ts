@@ -411,10 +411,21 @@ export namespace main {
 	    run_id: string;
 	    trade_date: string;
 	    ts_code: string;
+	    name: string;
+	    industry: string;
+	    price: number;
+	    pct_chg: number;
 	    pred_score: number;
 	    pred_rank: number;
 	    is_top20: boolean;
 	    model_path: string;
+	    first_seen_date: string;
+	    last_seen_date: string;
+	    seen_count: number;
+	    observation_days: number;
+	    observation_status: string;
+	    observation_reason: string;
+	    observation_result: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new FactorLatestPrediction(source);
@@ -425,10 +436,21 @@ export namespace main {
 	        this.run_id = source["run_id"];
 	        this.trade_date = source["trade_date"];
 	        this.ts_code = source["ts_code"];
+	        this.name = source["name"];
+	        this.industry = source["industry"];
+	        this.price = source["price"];
+	        this.pct_chg = source["pct_chg"];
 	        this.pred_score = source["pred_score"];
 	        this.pred_rank = source["pred_rank"];
 	        this.is_top20 = source["is_top20"];
 	        this.model_path = source["model_path"];
+	        this.first_seen_date = source["first_seen_date"];
+	        this.last_seen_date = source["last_seen_date"];
+	        this.seen_count = source["seen_count"];
+	        this.observation_days = source["observation_days"];
+	        this.observation_status = source["observation_status"];
+	        this.observation_reason = source["observation_reason"];
+	        this.observation_result = source["observation_result"];
 	    }
 	}
 	export class FactorModelFeature {
@@ -503,6 +525,48 @@ export namespace main {
 	        this.top_bottom_spread = source["top_bottom_spread"];
 	        this.summary_json = source["summary_json"];
 	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class FactorObservationEvent {
+	    strategy: string;
+	    run_id: string;
+	    trade_date: string;
+	    ts_code: string;
+	    name: string;
+	    industry: string;
+	    event_type: string;
+	    rank_no: number;
+	    score: number;
+	    rank_pct: number;
+	    reason: string;
+	    first_seen_date: string;
+	    last_seen_date: string;
+	    seen_count: number;
+	    observation_status: string;
+	    created_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorObservationEvent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.run_id = source["run_id"];
+	        this.trade_date = source["trade_date"];
+	        this.ts_code = source["ts_code"];
+	        this.name = source["name"];
+	        this.industry = source["industry"];
+	        this.event_type = source["event_type"];
+	        this.rank_no = source["rank_no"];
+	        this.score = source["score"];
+	        this.rank_pct = source["rank_pct"];
+	        this.reason = source["reason"];
+	        this.first_seen_date = source["first_seen_date"];
+	        this.last_seen_date = source["last_seen_date"];
+	        this.seen_count = source["seen_count"];
+	        this.observation_status = source["observation_status"];
+	        this.created_at = source["created_at"];
 	    }
 	}
 	export class FactorResearchRunSummary {
@@ -929,6 +993,13 @@ export namespace main {
 	    is_latest: boolean;
 	    summary_json: string;
 	    updated_at: string;
+	    first_seen_date: string;
+	    last_seen_date: string;
+	    seen_count: number;
+	    observation_days: number;
+	    observation_status: string;
+	    observation_reason: string;
+	    observation_result: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new LimitUpModelPrediction(source);
@@ -955,6 +1026,13 @@ export namespace main {
 	        this.is_latest = source["is_latest"];
 	        this.summary_json = source["summary_json"];
 	        this.updated_at = source["updated_at"];
+	        this.first_seen_date = source["first_seen_date"];
+	        this.last_seen_date = source["last_seen_date"];
+	        this.seen_count = source["seen_count"];
+	        this.observation_days = source["observation_days"];
+	        this.observation_status = source["observation_status"];
+	        this.observation_reason = source["observation_reason"];
+	        this.observation_result = source["observation_result"];
 	    }
 	}
 	export class LimitUpModelRunSummary {
@@ -1414,6 +1492,13 @@ export namespace main {
 	    reasons: string[];
 	    risks: string[];
 	    generated_at: string;
+	    first_seen_date: string;
+	    last_seen_date: string;
+	    seen_count: number;
+	    observation_days: number;
+	    observation_status: string;
+	    observation_reason: string;
+	    observation_result: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new T0DataPullCandidate(source);
@@ -1449,6 +1534,13 @@ export namespace main {
 	        this.reasons = source["reasons"];
 	        this.risks = source["risks"];
 	        this.generated_at = source["generated_at"];
+	        this.first_seen_date = source["first_seen_date"];
+	        this.last_seen_date = source["last_seen_date"];
+	        this.seen_count = source["seen_count"];
+	        this.observation_days = source["observation_days"];
+	        this.observation_status = source["observation_status"];
+	        this.observation_reason = source["observation_reason"];
+	        this.observation_result = source["observation_result"];
 	    }
 	}
 	export class T0Recommendation {
@@ -1482,6 +1574,13 @@ export namespace main {
 	    reasons: string[];
 	    risks: string[];
 	    generated_at: string;
+	    first_seen_date: string;
+	    last_seen_date: string;
+	    seen_count: number;
+	    observation_days: number;
+	    observation_status: string;
+	    observation_reason: string;
+	    observation_result: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new T0Recommendation(source);
@@ -1519,6 +1618,13 @@ export namespace main {
 	        this.reasons = source["reasons"];
 	        this.risks = source["risks"];
 	        this.generated_at = source["generated_at"];
+	        this.first_seen_date = source["first_seen_date"];
+	        this.last_seen_date = source["last_seen_date"];
+	        this.seen_count = source["seen_count"];
+	        this.observation_days = source["observation_days"];
+	        this.observation_status = source["observation_status"];
+	        this.observation_reason = source["observation_reason"];
+	        this.observation_result = source["observation_result"];
 	    }
 	}
 	export class T0TimeMachineResult {
@@ -1841,6 +1947,13 @@ export namespace market {
 	    reasons: string[];
 	    bars: BreakoutBar[];
 	    projected_bars: BreakoutBar[];
+	    first_seen_date: string;
+	    last_seen_date: string;
+	    seen_count: number;
+	    observation_days: number;
+	    observation_status: string;
+	    observation_reason: string;
+	    observation_result: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new LimitBreakoutCandidate(source);
@@ -1870,6 +1983,13 @@ export namespace market {
 	        this.reasons = source["reasons"];
 	        this.bars = this.convertValues(source["bars"], BreakoutBar);
 	        this.projected_bars = this.convertValues(source["projected_bars"], BreakoutBar);
+	        this.first_seen_date = source["first_seen_date"];
+	        this.last_seen_date = source["last_seen_date"];
+	        this.seen_count = source["seen_count"];
+	        this.observation_days = source["observation_days"];
+	        this.observation_status = source["observation_status"];
+	        this.observation_reason = source["observation_reason"];
+	        this.observation_result = source["observation_result"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2023,6 +2143,13 @@ export namespace market {
 	    risks: string[];
 	    bars: BreakoutBar[];
 	    projected_bars: BreakoutBar[];
+	    first_seen_date: string;
+	    last_seen_date: string;
+	    seen_count: number;
+	    observation_days: number;
+	    observation_status: string;
+	    observation_reason: string;
+	    observation_result: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new LimitUpMomentumCandidate(source);
@@ -2062,6 +2189,13 @@ export namespace market {
 	        this.risks = source["risks"];
 	        this.bars = this.convertValues(source["bars"], BreakoutBar);
 	        this.projected_bars = this.convertValues(source["projected_bars"], BreakoutBar);
+	        this.first_seen_date = source["first_seen_date"];
+	        this.last_seen_date = source["last_seen_date"];
+	        this.seen_count = source["seen_count"];
+	        this.observation_days = source["observation_days"];
+	        this.observation_status = source["observation_status"];
+	        this.observation_reason = source["observation_reason"];
+	        this.observation_result = source["observation_result"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

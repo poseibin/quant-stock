@@ -182,6 +182,10 @@ export function ListFactorModelPredictions(arg1, arg2) {
   return window['go']['main']['App']['ListFactorModelPredictions'](arg1, arg2);
 }
 
+export function ListFactorObservationEvents(arg1) {
+  return window['go']['main']['App']['ListFactorObservationEvents'](arg1);
+}
+
 export function ListFactorResearchRuns(arg1) {
   return window['go']['main']['App']['ListFactorResearchRuns'](arg1);
 }

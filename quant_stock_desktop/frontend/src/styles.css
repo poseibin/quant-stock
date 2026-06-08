@@ -4907,6 +4907,10 @@ th {
   overflow: hidden;
 }
 
+.signalActionCard {
+  margin-top: 22px;
+}
+
 .modelRecommendViewport {
   min-width: 0;
   width: 100%;

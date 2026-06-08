@@ -273,6 +273,10 @@ function t0FeatureLabel(feature: string) {
   return t0FeatureNameMap[feature] || feature
 }
 
+function isT0ModelTrained(model: T0ModelSummary | null | undefined) {
+  return model?.status === 'trained' || model?.status === 'success'
+}
+
 function topGridWindows(grid: TimeMachineGridSummary | null) {
   return (grid?.windows || []).slice(0, 6)
 }
@@ -294,6 +298,9 @@ async function waitForRunDone(loadStatus: () => Promise<RunStatus>, label: strin
 }
 
 function actionPriority(action: string) {
+  if (action === '可试仓') return 3
+  if (action === '观察') return 2
+  if (action === '放弃') return 0
   if (action === '优先计划') return 3
   if (action === '候选观察') return 2
   return 1
@@ -308,6 +315,12 @@ function countBy<T>(rows: T[], pick: (row: T) => string) {
   return Array.from(counts.entries())
     .map(([label, count]) => ({ label, count }))
     .sort((a, b) => b.count - a.count)
+}
+
+function t0TierConclusion(row: { topK: number; avgEdge: number; totalEdge: number; twoSidedRate: number; oneSidedRate: number; stopRate: number }) {
+  if (row.topK <= 3 && row.avgEdge > 0.02 && row.twoSidedRate >= 0.3) return '给条件单'
+  if (row.avgEdge > 0.01 && row.totalEdge > 0) return '观察'
+  return '停用'
 }
 
 export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
@@ -612,11 +625,11 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
   const evalSignalPass = profitSummary.avgRecentTotal > 0 && profitSummary.avgTwoSided > 0
   const evalTradePass = bestCombined > 0 && bestT0Edge > 0 && (!Number.isFinite(bestWorst) || bestWorst > -0.05) && (!bestTrading || bestTrading.compoundReturn > 0)
   const evalVerdict = timeMachineRows.length === 0
-    ? { tone: 'warningText', label: '未验证', text: '还没有做T时光机评估。先跑快速验收或深度验收，再决定推荐页是否可执行。' }
+    ? { tone: 'warningText', label: '未验证', text: '还没有做T时光机评估。先去模型训练页更新模型，再决定推荐页是否可执行。' }
     : evalSignalPass && evalTradePass
       ? { tone: 'positiveText', label: '可观察', text: `时光机合并收益 ${percent(bestCombined, true)}，做T贡献 ${percent(bestT0Edge, true)}，近2月候选价差 ${percent(profitSummary.avgRecentTotal, true)}。` }
       : evalSignalPass
-        ? { tone: 'warningText', label: '只观察', text: `日线信号有价差，但时光机稳定性不足；最差窗口 ${percent(bestWorst, true)}，暂不自动化。` }
+        ? { tone: 'warningText', label: '观察', text: `日线信号有价差，但时光机稳定性不足；最差窗口 ${percent(bestWorst, true)}，暂不自动化。` }
         : { tone: 'negativeText', label: '不通过', text: '近2月候选价差或两边触达不足，模型暂不适合作为实盘条件单入口。' }
 
   return (
@@ -672,7 +685,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           <div className={`metricCard ${timeMachineSummary.avgCombined > 0 ? 'good' : ''}`}>
             <span>策略结论</span>
             <b>{timeMachineSummary.verdict}</b>
-            <em>{timeMachineSummary.grid?.best ? `最佳 ${timeMachineSummary.grid.best.lookback}/${timeMachineSummary.grid.best.eval_days} · ${timeMachineSummary.grid.best.anchor_count || 1}锚点` : timeMachineSummary.count > 0 ? `${timeMachineSummary.count} 只历史样本` : '先运行时光机'}</em>
+            <em>{timeMachineSummary.grid?.best ? `最佳 ${timeMachineSummary.grid.best.lookback}/${timeMachineSummary.grid.best.eval_days} · ${timeMachineSummary.grid.best.anchor_count || 1}锚点` : timeMachineSummary.count > 0 ? `${timeMachineSummary.count} 只历史样本` : '先更新模型'}</em>
           </div>
           <div className="metricCard good">
             <span>时光机合并收益</span>
@@ -747,8 +760,17 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           <div>
             <div className="sectionLabel">ACTION LIST</div>
             <h2>做T条件单清单</h2>
-            <p className="recommendationMeta">把观察和执行合成一张表：未持仓先按建底仓条件单，已有底仓才给高抛/接回条件单；所有股数按100股取整。</p>
+            <p className="recommendationMeta">Top3 才给条件单；Top4-10 只观察，不下单。未持仓先按建底仓条件单，已有底仓才给高抛/接回条件单。</p>
           </div>
+        </div>
+        <div className="metricStrip signalTierStrip">
+          {evaluationTiers.map((tier) => (
+            <div className={`metricCard ${t0TierConclusion(tier) === '给条件单' ? 'good' : ''}`} key={`t0-tier-${tier.topK}`}>
+              <span>Top{tier.topK}</span>
+              <b className={signedClass(tier.avgEdge)}>{percent(tier.avgEdge, true)}</b>
+              <em>{t0TierConclusion(tier)} · 累计 {percent(tier.totalEdge, true)} · 两边 {percent(tier.twoSidedRate)}</em>
+            </div>
+          ))}
         </div>
         <div className="tableWrap">
           <table>
@@ -774,8 +796,10 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 const held = Boolean(position)
                 const tShares = position?.max_t0_shares || 0
                 const buildShares = roundLotShares(plan.buy, 10000)
-                const buyShares = held ? tShares : buildShares
-                const sellShares = held ? tShares : 0
+                const executable = index < 3
+                const buyShares = executable ? held ? tShares : buildShares : 0
+                const sellShares = executable && held ? tShares : 0
+                const displayAction = executable ? '可试仓' : '观察'
                 return (
                   <tr key={row.ts_code}>
                     <td><strong>{index + 1}</strong></td>
@@ -787,12 +811,15 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                       <div className="recommendationMeta t0CurrentPrice">当前价 ¥{money(row.price)}</div>
                       <div className="recommendationMeta">{row.industry || '—'} · {formatDate(row.trade_date)}</div>
                       <div className="recommendationMeta">{held ? `已持仓 · 可T ${tShares} 股` : '未持仓 · 先建底仓条件单'}</div>
+                      <div className="recommendationMeta">首次推荐 {formatDate(row.first_seen_date)} · 观察 {row.observation_days || 0} 天 · 保留 {row.seen_count || 0} 次</div>
+                      <div className="recommendationMeta">{row.observation_result || '观察中'}</div>
                     </td>
                     <td>
-                      <span className={`badge ${pullBadge(row.action)}`}>{row.action}</span>
+                      <span className={`badge ${pullBadge(displayAction)}`}>{displayAction}</span>
                       <div className="recommendationMeta">{row.setup || row.state || '交易员模型'}</div>
-                      <div className="recommendationMeta">{row.first_action || '挂单等待'}</div>
+                      <div className="recommendationMeta">{executable ? row.first_action || '挂单等待' : 'Top4-10 不执行'}</div>
                       <div className="recommendationMeta">{flow.label} · 今日 {percent(row.today_pct, true)}</div>
+                      <div className="recommendationMeta">保留原因：{row.observation_reason || row.setup || row.action || '做T候选'}</div>
                     </td>
                     <td>
                       <strong>¥{money(plan.buy)}</strong>
@@ -802,7 +829,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                     </td>
                     <td>
                       <strong>{buyShares > 0 ? `${buyShares} 股` : '不买'}</strong>
-                      <div className="recommendationMeta">{held ? '卖出后同股数接回' : '按1万元试仓估算'}</div>
+                      <div className="recommendationMeta">{executable ? held ? '卖出后同股数接回' : '按1万元试仓估算' : '观察层不下单'}</div>
                       <div className="recommendationMeta">100股取整</div>
                     </td>
                     <td>
@@ -813,8 +840,8 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                     </td>
                     <td>
                       <strong>{sellShares > 0 ? `${sellShares} 股` : '不卖'}</strong>
-                      <div className="recommendationMeta">{held ? `T仓 ${plan.tRatio}` : '未持仓无卖单'}</div>
-                      <div className="recommendationMeta">{held ? '保留底仓' : '建仓后再生成卖单'}</div>
+                      <div className="recommendationMeta">{executable && held ? `T仓 ${plan.tRatio}` : executable ? '未持仓无卖单' : '观察层不卖出'}</div>
+                      <div className="recommendationMeta">{executable && held ? '保留底仓' : executable ? '建仓后再生成卖单' : '等下次排名确认'}</div>
                     </td>
                     <td>
                       <strong className="negative">¥{money(plan.stop)}</strong>
@@ -833,7 +860,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                   </tr>
                 )
               })}
-              {!loading && operationTop10.length === 0 ? <tr><td colSpan={9} className="emptyCell">暂无做T条件单候选，请先运行日线评估和时光机验证</td></tr> : null}
+              {!loading && operationTop10.length === 0 ? <tr><td colSpan={9} className="emptyCell">暂无做T条件单候选，请先去模型训练页更新模型</td></tr> : null}
               {loading ? <tr><td colSpan={9} className="emptyCell">加载中...</td></tr> : null}
             </tbody>
           </table>
@@ -873,7 +900,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           <div className={`metricCard ${evalSignalPass ? 'good' : ''}`}>
             <span>第一关 信号有效</span>
             <b>{evalSignalPass ? '信号有效' : profitSummary.count ? '信号谨慎' : '待验证'}</b>
-            <em>{profitSummary.count ? `Top10价差 ${percent(profitSummary.avgRecentTotal, true)} · 两边 ${percent(profitSummary.avgTwoSided)}` : '先运行日线评估'}</em>
+            <em>{profitSummary.count ? `Top10价差 ${percent(profitSummary.avgRecentTotal, true)} · 两边 ${percent(profitSummary.avgTwoSided)}` : '先更新模型'}</em>
           </div>
           <div className={`metricCard ${evalTradePass ? 'good' : ''}`}>
             <span>第二关 交易可做</span>
@@ -882,19 +909,19 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           </div>
           <div className="metricCard">
             <span>推荐动作</span>
-            <b>{evalSignalPass && evalTradePass ? '可小仓验证' : evalSignalPass ? '只观察不自动化' : '先停用推荐'}</b>
+            <b>{evalSignalPass && evalTradePass ? '可试仓验证' : evalSignalPass ? '观察不自动化' : '先停用推荐'}</b>
             <em>{evalSignalPass && !evalTradePass ? '有票但稳定性没过，推荐页只给观察计划' : '已有底仓才允许做T条件单'}</em>
           </div>
         </div>
         <div className="limitModelNote">
           <b>近年稳定性</b>
           <span>
-            {recentYears.length ? `最近${recentYears.length}年合并收益 ${percent(recentCombined, true)}，做T贡献 ${percent(recentT0Edge, true)}，${recentCombined < bestCombined * 0.75 ? '低于全周期均值，说明模型有衰减，需要看最近切面。' : '仍高于零轴，暂未出现明显失效。'}` : '暂无分年稳定性数据，请先运行时光机。'}
+            {recentYears.length ? `最近${recentYears.length}年合并收益 ${percent(recentCombined, true)}，做T贡献 ${percent(recentT0Edge, true)}，${recentCombined < bestCombined * 0.75 ? '低于全周期均值，说明模型有衰减，需要看最近切面。' : '仍高于零轴，暂未出现明显失效。'}` : '暂无分年稳定性数据，请先更新模型。'}
           </span>
           <b>最大压力年</b>
           <span>{worstYear ? `${worstYear.year} 年合并收益 ${percent(worstYear.combined, true)}，做T贡献 ${percent(worstYear.t0Edge, true)}。` : Number.isFinite(bestWorst) ? `当前最差窗口合并收益 ${percent(bestWorst, true)}。` : '暂无压力数据。'}</span>
           <b>交易验证</b>
-          <span>{bestTrading ? `当前保守做T规则最优为 ${bestTrading.name}，累计价差 ${percent(bestTrading.compoundReturn, true)}，成交率 ${percent(bestTrading.fillRate)}。${bestTrading.compoundReturn <= 0 ? '交易层暂不通过，不能自动实盘。' : '交易层可继续小仓验证。'}` : '暂无交易层验证，运行日线评估后生成。'}</span>
+          <span>{bestTrading ? `当前保守做T规则最优为 ${bestTrading.name}，累计价差 ${percent(bestTrading.compoundReturn, true)}，成交率 ${percent(bestTrading.fillRate)}。${bestTrading.compoundReturn <= 0 ? '交易层暂不通过，不能自动实盘。' : '交易层可继续小仓验证。'}` : '暂无交易层验证，更新模型后生成。'}</span>
         </div>
         <div className="limitModelEvalGrid">
           <div>
@@ -914,7 +941,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 </thead>
                 <tbody>
                   {evaluationTiers.length === 0 ? (
-                    <tr><td colSpan={7}>暂无分层评估，运行日线评估后生成</td></tr>
+                    <tr><td colSpan={7}>暂无分层评估，更新模型后生成</td></tr>
                   ) : evaluationTiers.map((row) => (
                     <tr key={row.topK}>
                       <td>Top{row.topK}</td>
@@ -946,7 +973,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 </thead>
                 <tbody>
                   {yearMetrics.length === 0 ? (
-                    <tr><td colSpan={6}>暂无分年评估，运行时光机后生成</td></tr>
+                    <tr><td colSpan={6}>暂无分年评估，更新模型后生成</td></tr>
                   ) : yearMetrics.map((row) => (
                     <tr key={row.year}>
                       <td>{row.year}</td>
@@ -980,7 +1007,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
               </thead>
               <tbody>
                 {tradingRows.length === 0 ? (
-                  <tr><td colSpan={7}>暂无交易验证，运行日线评估后生成</td></tr>
+                  <tr><td colSpan={7}>暂无交易验证，更新模型后生成</td></tr>
                 ) : tradingRows.map((row) => (
                   <tr key={row.name}>
                     <td>{row.name}</td>
@@ -1029,23 +1056,20 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
             <div className="cardHint">基于箱体位置、波动空间、触达质量、流动性和交易风险训练做T准入模型；按近2月日线近似回测校验，宁可多给观察，不把单边风险高的票直接推成执行。</div>
           </div>
           <div className="tableHeaderRight">
-            <button className="primaryButton" onClick={run} disabled={loading || running || isRunning || cycleRunning}>
-              {running || isRunning ? '模型更新中...' : '更新模型'}
-            </button>
-            <button className="secondaryButton startButton" onClick={runModelCycle} disabled={loading || running || isRunning || timeMachineRunning || isTimeMachineRunning || cycleRunning}>
-              {cycleRunning ? '循环中...' : '一键循环'}
+            <button className="primaryButton" onClick={runModelCycle} disabled={loading || running || isRunning || timeMachineRunning || isTimeMachineRunning || cycleRunning} title="先更新做T日线模型，再自动运行快速时光机验收">
+              {cycleRunning || running || isRunning || timeMachineRunning || isTimeMachineRunning ? '模型更新中...' : '更新模型'}
             </button>
           </div>
         </div>
         {(error || runStatus?.message) && <div className={error ? 'errorBox' : 'cardHint'}>{error || runStatus?.message}</div>}
         <div className="limitModelVerdict">
           <div>
-            <span className={modelExplainSummary.model?.status === 'trained' ? 'positiveText' : profitSummary.avgRecentTotal > 0 ? 'warningText' : 'negativeText'}>
-              {modelExplainSummary.model?.status === 'trained' ? '可观察' : modelExplainSummary.model?.reason ? '样本不足' : '等待训练'}
+            <span className={isT0ModelTrained(modelExplainSummary.model) ? 'positiveText' : profitSummary.avgRecentTotal > 0 ? 'warningText' : 'negativeText'}>
+              {isT0ModelTrained(modelExplainSummary.model) ? '可观察' : modelExplainSummary.model?.reason ? '样本不足' : '等待训练'}
             </span>
             <b>{dataUpdatedAt ? formatDateTime(dataUpdatedAt) : '等待更新'}</b>
             <p>
-              {modelExplainSummary.model?.status === 'trained'
+              {isT0ModelTrained(modelExplainSummary.model)
                 ? `LightGBM walk-forward 已训练，样本 ${modelExplainSummary.trainRows}，正样本率 ${percent(modelExplainSummary.positiveRate)}，Top10单次价差 ${percent(modelExplainSummary.top10AvgEdge, true)}。`
                 : modelExplainSummary.model?.reason
                   ? `本轮模型未训练：${modelExplainSummary.model.reason}。推荐页会退回交易员规则分，不自动放大执行。`
@@ -1097,7 +1121,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
             </thead>
             <tbody>
               {modelExplainSummary.folds.length === 0 ? (
-                <tr><td colSpan={7}>暂无 walk-forward 明细，运行更新模型后生成</td></tr>
+                <tr><td colSpan={7}>暂无 walk-forward 明细，更新模型后生成</td></tr>
               ) : modelExplainSummary.folds.map((row) => (
                 <tr key={row.year}>
                   <td>{row.year}</td>
@@ -1121,8 +1145,12 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
 }
 
 function pullBadge(action: string) {
+  if (action === '可试仓') return 'success'
+  if (action === '观察') return 'running'
+  if (action === '放弃') return 'created'
   if (action === '优先计划') return 'success'
   if (action === '候选观察') return 'running'
+  if (action === '只观察') return 'running'
   return 'created'
 }
 

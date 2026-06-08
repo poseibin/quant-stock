@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, Play, RefreshCw, ShieldCheck } from 'lucide-react'
-import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
+import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorObservationEvents, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorObservationEvent, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
 
 type FactorFamily = {
   name: string
@@ -19,14 +19,19 @@ type PipelineStep = {
   status: '已完成' | '运行中' | '排队中' | '待执行' | '失败' | '已取消'
 }
 
-type ResearchTab = 'overview' | 'runs' | 'factors' | 'model' | 'risk'
+type ResearchTab = 'recommend' | 'model' | 'evaluation'
+
+type GeneralStrategyPlan = {
+  buy: number
+  sell: number
+  stop: number
+  shares: number
+}
 
 const researchTabs: Array<{ key: ResearchTab; label: string }> = [
-  { key: 'overview', label: '任务流水线' },
-  { key: 'runs', label: '运行监控' },
-  { key: 'factors', label: '因子检验' },
+  { key: 'recommend', label: '股票推荐' },
   { key: 'model', label: '模型训练' },
-  { key: 'risk', label: '压力准入' }
+  { key: 'evaluation', label: '模型评估' }
 ]
 
 const factorFamilies: FactorFamily[] = [
@@ -48,7 +53,7 @@ const pipelineBase: Array<Omit<PipelineStep, 'status'>> = [
   { key: 'train_lgbm', title: '训练 LightGBM', owner: 'Python 模型引擎', output: 'factor_model_runs', detail: '用 walk-forward 预测未来 20 日行业相对收益，落库 OOS 预测和特征重要度。' },
   { key: 'latest_inference', title: '最新截面推理', owner: 'Python 模型引擎', output: 'factor_latest_predictions', detail: '使用最新生效模型对当前截面打分，输出 Top20% 候选池。' },
   { key: 'stress_report', title: '压力分段报告', owner: 'Python 评估引擎', output: 'factor_model_stress_results', detail: '按股灾、弱势、流动性挤压、年度等分段检查模型失效区间。' },
-  { key: 'strategy_admission', title: '策略准入评估', owner: 'Go 编排 + 评估中心', output: 'eval_strategy_admission', detail: '把 ml_factor_ranker 接入准入表，统一输出可启用、观察或拒绝的依据。' },
+  { key: 'strategy_admission', title: '策略准入评估', owner: 'Go 编排 + 准入评估', output: 'eval_strategy_admission', detail: '把 ml_factor_ranker 接入准入表，统一输出可启用、观察或拒绝的依据。' },
   { key: 'validate_research_run', title: '产物完整性检查', owner: 'Python 研究引擎', output: 'factor_research_stage_results', detail: '检查面板、IC、模型、推理、压力报告和准入结果是否齐全。' }
 ]
 
@@ -60,6 +65,14 @@ const validationRows = [
   ['多空收益', 'Top - Bottom', '判断强弱分离', '扣成本前后'],
   ['中性化对照', '原始 / 行业 / 市值 / 流动性', '剥离暴露', '保留多版本']
 ]
+
+function currentResearchEndDate() {
+  const today = new Date()
+  const year = today.getFullYear()
+  const month = String(today.getMonth() + 1).padStart(2, '0')
+  const day = String(today.getDate()).padStart(2, '0')
+  return `${year}${month}${day}`
+}
 
 function statusClass(status: FactorFamily['status'] | PipelineStep['status']) {
   if (status === 'ready' || status === '已完成') return 'success'
@@ -74,8 +87,8 @@ function statusText(status: FactorFamily['status']) {
   return '后续扩展'
 }
 
-export function FactorResearchPage() {
-  const [activeTab, setActiveTab] = useState<ResearchTab>('runs')
+export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
+  const [activeTab, setActiveTab] = useState<ResearchTab>('recommend')
   const [tasks, setTasks] = useState<TaskDTO[]>([])
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -87,6 +100,7 @@ export function FactorResearchPage() {
   const [modelFeatures, setModelFeatures] = useState<FactorModelFeature[]>([])
   const [predictions, setPredictions] = useState<FactorModelPrediction[]>([])
   const [latestPredictions, setLatestPredictions] = useState<FactorLatestPrediction[]>([])
+  const [observationEvents, setObservationEvents] = useState<FactorObservationEvent[]>([])
   const [correlations, setCorrelations] = useState<FactorCorrelationResult[]>([])
   const [stressRows, setStressRows] = useState<FactorStressResult[]>([])
   const [admissionRows, setAdmissionRows] = useState<FactorAdmissionComparison[]>([])
@@ -120,10 +134,29 @@ export function FactorResearchPage() {
   const failedTasks = parentTasks.filter((task) => task.status === 'failed' || task.status === 'interrupted').length
   const totalFactors = factorFamilies.reduce((sum, item) => sum + item.count, 0)
   const readyFactors = factorFamilies.filter((item) => item.status === 'ready').reduce((sum, item) => sum + item.count, 0)
-  const endDate = useMemo(() => '20251231', [])
+  const latestPredictionDate = latestPredictions[0]?.trade_date || ''
+  const dailyRecommendations = useMemo(() => {
+    const rows = latestPredictionDate
+      ? latestPredictions.filter((row) => row.trade_date === latestPredictionDate)
+      : latestPredictions
+    return rows
+      .filter((row) => row.is_top20)
+      .sort((a, b) => b.pred_score - a.pred_score)
+      .slice(0, 20)
+  }, [latestPredictionDate, latestPredictions])
+  const droppedObservationEvents = useMemo(() => observationEvents
+    .filter((row) => row.event_type === 'dropped')
+    .slice(0, 12), [observationEvents])
+  const top10Recommendations = dailyRecommendations.slice(0, 10)
+  const recommendationVerdict = model?.status === 'success' && dailyRecommendations.length > 0
+    ? '可观察'
+    : model?.status === 'success'
+      ? '待推理'
+      : '等待训练'
+  const endDate = useMemo(() => currentResearchEndDate(), [])
   const startDate = useMemo(() => '20100101', [])
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     const items = (await listTasks({ limit: 300 })).filter((item) => item.task_type === 'factor_research')
     setTasks(items)
     const runItems = await listFactorResearchRuns(20)
@@ -140,6 +173,7 @@ export function FactorResearchPage() {
       setModelFeatures(await listFactorModelFeatures(latestRun, 24))
       setPredictions(await listFactorModelPredictions(latestRun, 80))
       setLatestPredictions(await listFactorLatestPredictions(latestRun, 80))
+      setObservationEvents(await listFactorObservationEvents(80))
       setCorrelations(await listFactorCorrelationResults(latestRun, 80))
       setStressRows(await listFactorStressResults(latestRun, 160))
     } else {
@@ -149,14 +183,24 @@ export function FactorResearchPage() {
       setModelFeatures([])
       setPredictions([])
       setLatestPredictions([])
+      setObservationEvents([])
       setCorrelations([])
       setStressRows([])
     }
-  }
+  }, [])
 
   useEffect(() => {
     refresh()
-  }, [])
+  }, [refresh])
+
+  useEffect(() => {
+    const hasActiveTask = busy || runningTasks > 0 || queuedTasks > 0
+    const intervalMs = hasActiveTask ? 3000 : 15000
+    const timer = window.setInterval(() => {
+      refresh()
+    }, intervalMs)
+    return () => window.clearInterval(timer)
+  }, [busy, queuedTasks, refresh, runningTasks])
 
   const createAndStart = async (profile: 'smoke' | 'full') => {
     setBusy(true)
@@ -185,13 +229,13 @@ export function FactorResearchPage() {
             stress_aware: true
           }
       const task = await createTask({
-        name: profile === 'smoke' ? `因子研究烟测-${params.start_date}-${params.end_date}` : `因子研究正式-${params.start_date}-${params.end_date}`,
+        name: profile === 'smoke' ? `通用策略烟测-${params.start_date}-${params.end_date}` : `通用策略正式-${params.start_date}-${params.end_date}`,
         task_type: 'factor_research',
         params
       })
       await startTask(task.id)
       await refresh()
-      setNotice(profile === 'smoke' ? '已启动因子研究烟测任务' : '已启动因子研究正式任务')
+      setNotice(profile === 'smoke' ? '已启动通用策略烟测任务' : '已启动通用策略正式任务')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -206,7 +250,7 @@ export function FactorResearchPage() {
     try {
       await startTask(taskID)
       await refresh()
-      setNotice('已启动因子研究任务，Go 会按流水线顺序启动子阶段')
+      setNotice('已启动通用策略任务，Go 会按流水线顺序启动子阶段')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -216,46 +260,201 @@ export function FactorResearchPage() {
 
   return (
     <div className="factorResearchPage">
-      <div className="pageToolbar factorHero">
-        <div>
-          <div className="sectionLabel">QUANT RESEARCH CENTER</div>
-          <h2>量化研究中心</h2>
-          <p>从 10-15 年历史数据里自动生成因子、检验稳定性，再训练 LightGBM 预测未来 20 日相对收益。</p>
-        </div>
-        <div className="factorHeroActions">
-          <button className="secondaryButton" onClick={refresh} disabled={busy}>
-            <RefreshCw size={16} />
-            刷新
-          </button>
-          <button className="secondaryButton" onClick={() => createAndStart('smoke')} disabled={busy} title="2020-2025 快速跑通完整链路">
-            <DatabaseZap size={16} />
-            烟测闭环
-          </button>
-          <button className="primaryButton" onClick={() => createAndStart('full')} disabled={busy} title="2010-2025 正式全量研究闭环">
-            <Play size={16} />
-            正式全量
-          </button>
-        </div>
-      </div>
       {notice ? <div className="saveHint">{notice}</div> : null}
       {error ? <div className="errorBanner">{error}</div> : null}
 
-      <div className="metricStrip">
-        <div className="metricCard good"><span>当前样本</span><b>{numberText(runs[0]?.sample_rows)}</b><em>{runs[0]?.sample_dates ? `${runs[0].sample_dates} 期月频截面` : '等待运行'}</em></div>
-        <div className="metricCard"><span>当前因子</span><b>{numberText(runs[0]?.factor_count || totalFactors)}</b><em>当前覆盖 105 个基础因子，含 rank/neutral 两版</em></div>
-        <div className="metricCard"><span>可用因子</span><b>{icRows.filter((row) => row.status === 'ready').length || readyFactors}</b><em>按 Rank IC、胜率、分层筛选</em></div>
-        <div className="metricCard"><span>模型状态</span><b>{model?.status || '-'}</b><em>{model?.model_type || '等待训练'}</em></div>
+      <div className="pageTabsHeader">
+        <div className="inlineTabs evaluationModeTabs signalViewTabs" role="tablist" aria-label="通用策略页签">
+          {researchTabs.map((tab) => (
+            <button key={tab.key} className={activeTab === tab.key ? 'active' : ''} onClick={() => setActiveTab(tab.key)}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="dataUpdatedPill">数据更新：{formatTradeDate(latestPredictionDate || runs[0]?.updated_at || '')}</div>
       </div>
 
-      <div className="inlineTabs" role="tablist" aria-label="量化研究中心页签">
-        {researchTabs.map((tab) => (
-          <button key={tab.key} className={activeTab === tab.key ? 'active' : ''} onClick={() => setActiveTab(tab.key)}>
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      {activeTab === 'recommend' ? (
+        <>
+      <section className="detailCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">GENERAL STRATEGY</div>
+            <h2>通用策略每日股票推荐</h2>
+            <p className="recommendationMeta">基于通用因子模型的最新截面推理，每天给出 Top20% 候选；先看模型分位和准入结果，再决定是否进入持仓计划。</p>
+          </div>
+          <div className="tableHeaderRight">
+            <button className="secondaryButton startButton" onClick={refresh} disabled={busy}>
+              <RefreshCw size={16} />
+              刷新推荐
+            </button>
+          </div>
+        </div>
 
-      {activeTab === 'overview' ? (
+        <div className="metricStrip">
+          <div className={`metricCard ${dailyRecommendations.length > 0 ? 'good' : ''}`}><span>策略结论</span><b>{recommendationVerdict}</b><em>{latestPredictionDate ? `${formatTradeDate(latestPredictionDate)} 截面` : '等待最新推理'}</em></div>
+          <div className="metricCard"><span>今日推荐</span><b>{numberText(dailyRecommendations.length)}</b><em>Top20% 候选池</em></div>
+          <div className="metricCard"><span>TOP10均值分位</span><b>{percentText(avg(top10Recommendations.map((row) => row.pred_rank)))}</b><em>分位越高，排序越靠前</em></div>
+          <div className={`metricCard ${latestAdmission?.admission === '可启用' || latestAdmission?.admission === '可模拟' ? 'good' : ''}`}><span>准入状态</span><b>{latestAdmission?.admission || '待评估'}</b><em>{latestAdmission ? `评分 ${decimalText(latestAdmission.admission_score, 2)}` : '等待模型评估'}</em></div>
+        </div>
+
+        <div className="metricStrip">
+          <div className="metricCard"><span>1 生成因子</span><b>{numberText(runs[0]?.factor_count || totalFactors)}</b><em>基础因子 + rank/neutral 版本</em></div>
+          <div className={`metricCard ${model?.status === 'success' ? 'good' : ''}`}><span>2 训练模型</span><b>{model?.status || '-'}</b><em>{model?.model_type || 'LightGBM 等待训练'}</em></div>
+          <div className={`metricCard ${latestPredictions.length > 0 ? 'good' : ''}`}><span>3 最新推理</span><b>{numberText(latestPredictions.length)}</b><em>当前截面候选</em></div>
+          <div className="metricCard"><span>4 执行建议</span><b>{dailyRecommendations.length > 0 ? '观察建仓' : '不行动'}</b><em>先进入观察，不自动下单</em></div>
+        </div>
+      </section>
+
+      <section className="detailCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">STOCK LIST</div>
+            <h2>今日推荐股票列表</h2>
+            <p className="recommendationMeta">观察池会保留入池日期、保留次数和刷新原因；Top5 给小仓建仓计划，后续候选只观察，不自动下单。</p>
+          </div>
+          <span>{latestPredictionDate ? `${formatTradeDate(latestPredictionDate)} · ${shortRunID(latestPredictions[0]?.run_id || '')}` : '暂无推荐截面'}</span>
+        </div>
+        <div className="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>股票</th>
+                <th>动作</th>
+                <th>条件买入</th>
+                <th>买入股数</th>
+                <th>条件卖出</th>
+                <th>卖出股数</th>
+                <th>止损/停手</th>
+                <th>验证 / 风险</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dailyRecommendations.length === 0 ? (
+                <tr><td colSpan={9} className="emptyCell">暂无每日通用策略推荐，请先在模型训练页完成正式全量并生成最新截面推理</td></tr>
+              ) : dailyRecommendations.map((row, index) => {
+                const plan = generalStrategyPlan(row, index)
+                const executable = index < 5 && plan.shares > 0
+                const displayAction = executable ? '可试仓' : '观察'
+                return (
+                  <tr key={`${row.run_id}-${row.trade_date}-${row.ts_code}`}>
+                    <td><strong>{index + 1}</strong></td>
+                    <td className="t0StockCell">
+                      <button className="tableActionButton" onClick={() => onOpenResearch?.(row.ts_code)} title="查看个股研究">
+                        {row.name || row.ts_code}
+                      </button>
+                      <div className="mono">{row.ts_code}</div>
+                      <div className="recommendationMeta t0CurrentPrice">当前价 ¥{moneyText(row.price)}</div>
+                      <div className="recommendationMeta">{row.industry || '—'} · {formatTradeDate(row.trade_date)}</div>
+                      <div className="recommendationMeta">首次推荐 {formatTradeDate(row.first_seen_date)} · 观察 {numberText(row.observation_days)} 天</div>
+                      <div className="recommendationMeta">保留 {numberText(row.seen_count)} 次 · {row.observation_result || '观察中'}</div>
+                    </td>
+                    <td>
+                      <span className={`badge ${executable ? 'success' : 'running'}`}>{displayAction}</span>
+                      <div className="recommendationMeta">{executable ? 'Top5 可按计划试仓' : '等组合和仓位确认'}</div>
+                      <div className="recommendationMeta">今日 {percentFromPct(row.pct_chg, true)}</div>
+                      <div className="recommendationMeta">保留原因：{row.observation_reason || 'Top20%模型候选'}</div>
+                    </td>
+                    <td>
+                      <strong>¥{moneyText(plan.buy)}</strong>
+                      <div className="recommendationMeta">回落到价再买</div>
+                      <div className="recommendationMeta">现价下方 {priceDistance(row.price, plan.buy, 'down')}</div>
+                      <div className="recommendationMeta">不到价不追</div>
+                    </td>
+                    <td>
+                      <strong>{executable ? `${plan.shares} 股` : '不买'}</strong>
+                      <div className="recommendationMeta">{executable ? '按1万元试仓估算' : '观察层不下单'}</div>
+                      <div className="recommendationMeta">100股取整</div>
+                    </td>
+                    <td>
+                      <strong>¥{moneyText(plan.sell)}</strong>
+                      <div className="recommendationMeta">建仓后目标卖出价</div>
+                      <div className="recommendationMeta">距当前 {priceDistance(row.price, plan.sell, 'up')}</div>
+                      <div className="recommendationMeta">未触达不抢跑</div>
+                    </td>
+                    <td>
+                      <strong>{executable ? `${plan.shares} 股` : '不卖'}</strong>
+                      <div className="recommendationMeta">{executable ? '建仓后同股数卖出' : '未建仓无卖单'}</div>
+                      <div className="recommendationMeta">先买后卖，不做裸卖</div>
+                    </td>
+                    <td>
+                      <strong className="negative">¥{moneyText(plan.stop)}</strong>
+                      <div className="recommendationMeta">跌破不建/减仓复核</div>
+                      <div className="recommendationMeta">重新站回再评估</div>
+                    </td>
+                    <td>
+                      <strong>{decimalText(row.pred_score, 4)}</strong>
+                      <div className="recommendationMeta">分位 {percentText(row.pred_rank)}</div>
+                      <div className="recommendationMeta">保留原因：{row.observation_reason || 'Top20%模型候选'}</div>
+                      <div className="recommendationMeta">{observationStatusText(row.observation_status)} · 未来20日行业相对收益排序</div>
+                      <div className="recommendationMeta">{latestAdmission ? admissionRiskText(latestAdmission) : '待准入评估'} · 不自动成交</div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="detailCard">
+        <div className="tableHeader">
+          <div>
+            <div className="sectionLabel">OBSERVATION HISTORY</div>
+            <h2>最近移出观察池</h2>
+            <p className="recommendationMeta">每天刷新 Top20% 后，如果股票不再进入推荐池，会在这里保留移出日期、入池日期和移出原因。</p>
+          </div>
+          <span>{droppedObservationEvents.length > 0 ? `最近 ${numberText(droppedObservationEvents.length)} 条移出记录` : '暂无移出记录'}</span>
+        </div>
+        <div className="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>移出日期</th>
+                <th>股票</th>
+                <th>状态</th>
+                <th>入池/保留</th>
+                <th>模型分数</th>
+                <th>预测分位</th>
+                <th>原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              {droppedObservationEvents.length === 0 ? (
+                <tr><td colSpan={7} className="emptyCell">暂无移出记录；刷新产生变化后会在这里留下为什么被刷掉的历史</td></tr>
+              ) : droppedObservationEvents.map((row) => (
+                <tr key={`${row.run_id}-${row.trade_date}-${row.ts_code}-${row.event_type}`}>
+                  <td className="mono">{formatTradeDate(row.trade_date)}</td>
+                  <td className="t0StockCell">
+                    <button className="tableActionButton" onClick={() => onOpenResearch?.(row.ts_code)} title="查看个股研究">
+                      {row.name || row.ts_code}
+                    </button>
+                    <div className="mono">{row.ts_code}</div>
+                    <div className="recommendationMeta">{row.industry || '—'}</div>
+                  </td>
+                  <td><span className="badge failed">{observationEventText(row.event_type)}</span></td>
+                  <td>
+                    <strong>{formatTradeDate(row.first_seen_date)}</strong>
+                    <div className="recommendationMeta">保留 {numberText(row.seen_count)} 次</div>
+                    <div className="recommendationMeta">最近在池 {formatTradeDate(row.last_seen_date)}</div>
+                  </td>
+                  <td>{decimalText(row.score, 4)}</td>
+                  <td>{percentText(row.rank_pct)}</td>
+                  <td>
+                    <strong>{row.reason || '未进入本次Top20候选'}</strong>
+                    <div className="recommendationMeta">{shortRunID(row.run_id)} · {observationStatusText(row.observation_status)}</div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+        </>
+      ) : null}
+
+      {activeTab === 'model' ? (
         <>
       <section className="detailCard">
           <div className="tableHeader">
@@ -263,7 +462,17 @@ export function FactorResearchPage() {
               <div className="sectionLabel">PIPELINE</div>
               <h3>自动研究流水线</h3>
             </div>
-            <span>{latestTask ? `${latestTask.name} · ${statusLabel(latestTask.status)}` : '暂无进行中的因子研究任务'}</span>
+            <span>{latestTask ? `${latestTask.name} · ${statusLabel(latestTask.status)}` : '暂无进行中的通用策略任务'}</span>
+            <div className="tableHeaderRight">
+              <button className="secondaryButton startButton" onClick={() => createAndStart('smoke')} disabled={busy} title="2020 至今快速跑通完整链路">
+                <DatabaseZap size={16} />
+                烟测闭环
+              </button>
+              <button className="primaryButton startButton" onClick={() => createAndStart('full')} disabled={busy} title="2010 至今正式全量策略研究">
+                <Play size={16} />
+                正式全量
+              </button>
+            </div>
           </div>
           <div className="factorPipeline">
             {pipelineSteps.map((step, index) => (
@@ -284,11 +493,7 @@ export function FactorResearchPage() {
             ))}
           </div>
       </section>
-        </>
-      ) : null}
 
-      {activeTab === 'runs' ? (
-        <>
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -318,7 +523,7 @@ export function FactorResearchPage() {
           </thead>
           <tbody>
             {parentTasks.length === 0 ? (
-              <tr><td colSpan={8} className="mutedText">暂无因子研究任务</td></tr>
+              <tr><td colSpan={8} className="mutedText">暂无通用策略任务</td></tr>
             ) : parentTasks.slice(0, 12).map((task) => {
               const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
               const panel = rows.find((row) => row.stage === 'build_factor_panel') || {}
@@ -354,7 +559,7 @@ export function FactorResearchPage() {
         </>
       ) : null}
 
-      {activeTab === 'factors' ? (
+      {activeTab === 'evaluation' ? (
         <>
       <section className="detailCard">
         <div className="tableHeader">
@@ -570,7 +775,7 @@ export function FactorResearchPage() {
         </>
       ) : null}
 
-      {activeTab === 'risk' ? (
+      {activeTab === 'evaluation' ? (
         <>
       <section className="detailCard">
         <div className="tableHeader">
@@ -688,7 +893,7 @@ export function FactorResearchPage() {
         </>
       ) : null}
 
-      {activeTab === 'model' ? (
+      {activeTab === 'evaluation' ? (
         <>
       <section className="detailCard">
         <div className="tableHeader">
@@ -762,7 +967,7 @@ export function FactorResearchPage() {
         </>
       ) : null}
 
-      {activeTab === 'factors' ? (
+      {activeTab === 'evaluation' ? (
         <>
 
       <section className="detailCard">
@@ -971,6 +1176,23 @@ function numberText(value: unknown) {
   return Number.isFinite(n) ? n.toLocaleString('zh-CN') : '-'
 }
 
+function moneyText(value: unknown) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return '-'
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function roundLotShares(price: number, cash: number) {
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(cash) || cash <= 0) return 0
+  return Math.floor(cash / price / 100) * 100
+}
+
+function avg(values: unknown[]) {
+  const nums = values.map(Number).filter(Number.isFinite)
+  if (nums.length === 0) return Number.NaN
+  return nums.reduce((sum, value) => sum + value, 0) / nums.length
+}
+
 function decimalText(value: unknown, digits = 2) {
   const n = Number(value)
   return Number.isFinite(n) ? n.toFixed(digits) : '-'
@@ -979,6 +1201,62 @@ function decimalText(value: unknown, digits = 2) {
 function percentText(value: unknown, digits = 2) {
   const n = Number(value)
   return Number.isFinite(n) ? `${(n * 100).toFixed(digits)}%` : '-'
+}
+
+function percentFromPct(value: unknown, signed = false) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  const sign = signed && n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(2)}%`
+}
+
+function priceDistance(base: number, target: number, direction: 'up' | 'down') {
+  if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(target) || target <= 0) return '-'
+  const value = direction === 'up' ? target / base - 1 : 1 - target / base
+  return percentText(value)
+}
+
+function generalStrategyPlan(row: FactorLatestPrediction, index: number): GeneralStrategyPlan {
+  const price = Number(row.price)
+  if (!Number.isFinite(price) || price <= 0) {
+    return { buy: Number.NaN, sell: Number.NaN, stop: Number.NaN, shares: 0 }
+  }
+  const rank = Number.isFinite(row.pred_rank) ? row.pred_rank : 0.8
+  const buyBand = Math.max(0.006, Math.min(0.025, 0.026 - rank * 0.014))
+  const sellBand = Math.max(0.025, Math.min(0.08, 0.028 + rank * 0.04))
+  const stopBand = Math.max(0.035, Math.min(0.08, 0.075 - Math.min(rank, 1) * 0.025))
+  const cash = index < 3 ? 10000 : index < 5 ? 6000 : 0
+  const buy = price * (1 - buyBand)
+  return {
+    buy,
+    sell: price * (1 + sellBand),
+    stop: price * (1 - stopBand),
+    shares: roundLotShares(buy, cash)
+  }
+}
+
+function observationStatusText(status: string) {
+  if (status === 'active') return '观察池内'
+  if (status === 'dropped') return '已移出观察池'
+  return status || '观察记录'
+}
+
+function observationEventText(eventType: string) {
+  if (eventType === 'entered') return '新入池'
+  if (eventType === 'kept') return '继续保留'
+  if (eventType === 'dropped') return '已移出'
+  return eventType || '观察事件'
+}
+
+function formatTradeDate(value?: string) {
+  if (!value) return '-'
+  if (/^\d{8}$/.test(value)) {
+    return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10)
+  }
+  return value
 }
 
 function factorLabel(factor: string) {
@@ -1050,8 +1328,8 @@ function dateRangeText(start?: string, end?: string) {
 }
 
 function admissionBadge(admission: string) {
-  if (admission === '通过' || admission === '可准入') return 'success'
-  if (admission === '继续观察') return 'running'
+  if (admission === '通过' || admission === '可准入' || admission === '可启用' || admission === '可模拟') return 'success'
+  if (admission === '继续观察' || admission === '观察') return 'running'
   return 'failed'
 }
 

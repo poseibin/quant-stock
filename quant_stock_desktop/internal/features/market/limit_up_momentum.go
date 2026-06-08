@@ -46,6 +46,13 @@ type LimitUpMomentumCandidate struct {
 	Risks             []string      `json:"risks"`
 	Bars              []BreakoutBar `json:"bars"`
 	ProjectedBars     []BreakoutBar `json:"projected_bars"`
+	FirstSeenDate     string        `json:"first_seen_date"`
+	LastSeenDate      string        `json:"last_seen_date"`
+	SeenCount         int           `json:"seen_count"`
+	ObservationDays   int           `json:"observation_days"`
+	ObservationStatus string        `json:"observation_status"`
+	ObservationReason string        `json:"observation_reason"`
+	ObservationResult string        `json:"observation_result"`
 }
 
 func NormalizeLimitUpMomentumQuery(query LimitUpMomentumQuery) LimitUpMomentumQuery {

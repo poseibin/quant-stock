@@ -24,28 +24,35 @@ type BreakoutBar struct {
 }
 
 type LimitBreakoutCandidate struct {
-	TSCode        string        `json:"ts_code"`
-	Name          string        `json:"name"`
-	Industry      string        `json:"industry"`
-	LatestDate    string        `json:"latest_date"`
-	Close         float64       `json:"close"`
-	Score         float64       `json:"score"`
-	FlatScore     float64       `json:"flat_score"`
-	BreakoutScore float64       `json:"breakout_score"`
-	QualityScore  float64       `json:"quality_score"`
-	BaseLow       float64       `json:"base_low"`
-	BaseHigh      float64       `json:"base_high"`
-	BaseRatio     float64       `json:"base_ratio"`
-	BaseReturn    float64       `json:"base_return"`
-	RecentReturn  float64       `json:"recent_return"`
-	LimitUpCount  int           `json:"limit_up_count"`
-	VolumeSurge   float64       `json:"volume_surge"`
-	ROE           float64       `json:"roe"`
-	NetMargin     float64       `json:"net_margin"`
-	DebtToAssets  float64       `json:"debt_to_assets"`
-	Reasons       []string      `json:"reasons"`
-	Bars          []BreakoutBar `json:"bars"`
-	ProjectedBars []BreakoutBar `json:"projected_bars"`
+	TSCode            string        `json:"ts_code"`
+	Name              string        `json:"name"`
+	Industry          string        `json:"industry"`
+	LatestDate        string        `json:"latest_date"`
+	Close             float64       `json:"close"`
+	Score             float64       `json:"score"`
+	FlatScore         float64       `json:"flat_score"`
+	BreakoutScore     float64       `json:"breakout_score"`
+	QualityScore      float64       `json:"quality_score"`
+	BaseLow           float64       `json:"base_low"`
+	BaseHigh          float64       `json:"base_high"`
+	BaseRatio         float64       `json:"base_ratio"`
+	BaseReturn        float64       `json:"base_return"`
+	RecentReturn      float64       `json:"recent_return"`
+	LimitUpCount      int           `json:"limit_up_count"`
+	VolumeSurge       float64       `json:"volume_surge"`
+	ROE               float64       `json:"roe"`
+	NetMargin         float64       `json:"net_margin"`
+	DebtToAssets      float64       `json:"debt_to_assets"`
+	Reasons           []string      `json:"reasons"`
+	Bars              []BreakoutBar `json:"bars"`
+	ProjectedBars     []BreakoutBar `json:"projected_bars"`
+	FirstSeenDate     string        `json:"first_seen_date"`
+	LastSeenDate      string        `json:"last_seen_date"`
+	SeenCount         int           `json:"seen_count"`
+	ObservationDays   int           `json:"observation_days"`
+	ObservationStatus string        `json:"observation_status"`
+	ObservationReason string        `json:"observation_reason"`
+	ObservationResult string        `json:"observation_result"`
 }
 
 func (service *Service) ListLimitBreakoutCandidates(dataPath string, query BreakoutQuery) ([]LimitBreakoutCandidate, error) {

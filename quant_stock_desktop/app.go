@@ -79,67 +79,81 @@ type AppInfo struct {
 }
 
 type T0Recommendation struct {
-	TSCode         string   `json:"ts_code"`
-	Name           string   `json:"name"`
-	Industry       string   `json:"industry"`
-	TradeDate      string   `json:"trade_date"`
-	Action         string   `json:"action"`
-	Recommendation string   `json:"recommendation"`
-	Score          float64  `json:"score"`
-	State          string   `json:"state"`
-	Setup          string   `json:"setup"`
-	FirstAction    string   `json:"first_action"`
-	Shares         int      `json:"shares"`
-	MaxT0Shares    int      `json:"max_t0_shares"`
-	Price          float64  `json:"price"`
-	AvgCost        float64  `json:"avg_cost"`
-	PositionWeight float64  `json:"position_weight"`
-	TodayPct       float64  `json:"today_pct"`
-	Return5        float64  `json:"return_5d"`
-	Return20       float64  `json:"return_20d"`
-	AvgRange20     float64  `json:"avg_range_20d"`
-	Drawdown20     float64  `json:"drawdown_20d"`
-	Amount         float64  `json:"amount"`
-	BuyBackPrice   float64  `json:"buy_back_price"`
-	ReducePrice    float64  `json:"reduce_price"`
-	StopPrice      float64  `json:"stop_price"`
-	TRatio         float64  `json:"t_ratio"`
-	ExpectedEdge   float64  `json:"expected_edge"`
-	PlanJSON       string   `json:"plan_json"`
-	Reasons        []string `json:"reasons"`
-	Risks          []string `json:"risks"`
-	GeneratedAt    string   `json:"generated_at"`
+	TSCode            string   `json:"ts_code"`
+	Name              string   `json:"name"`
+	Industry          string   `json:"industry"`
+	TradeDate         string   `json:"trade_date"`
+	Action            string   `json:"action"`
+	Recommendation    string   `json:"recommendation"`
+	Score             float64  `json:"score"`
+	State             string   `json:"state"`
+	Setup             string   `json:"setup"`
+	FirstAction       string   `json:"first_action"`
+	Shares            int      `json:"shares"`
+	MaxT0Shares       int      `json:"max_t0_shares"`
+	Price             float64  `json:"price"`
+	AvgCost           float64  `json:"avg_cost"`
+	PositionWeight    float64  `json:"position_weight"`
+	TodayPct          float64  `json:"today_pct"`
+	Return5           float64  `json:"return_5d"`
+	Return20          float64  `json:"return_20d"`
+	AvgRange20        float64  `json:"avg_range_20d"`
+	Drawdown20        float64  `json:"drawdown_20d"`
+	Amount            float64  `json:"amount"`
+	BuyBackPrice      float64  `json:"buy_back_price"`
+	ReducePrice       float64  `json:"reduce_price"`
+	StopPrice         float64  `json:"stop_price"`
+	TRatio            float64  `json:"t_ratio"`
+	ExpectedEdge      float64  `json:"expected_edge"`
+	PlanJSON          string   `json:"plan_json"`
+	Reasons           []string `json:"reasons"`
+	Risks             []string `json:"risks"`
+	GeneratedAt       string   `json:"generated_at"`
+	FirstSeenDate     string   `json:"first_seen_date"`
+	LastSeenDate      string   `json:"last_seen_date"`
+	SeenCount         int      `json:"seen_count"`
+	ObservationDays   int      `json:"observation_days"`
+	ObservationStatus string   `json:"observation_status"`
+	ObservationReason string   `json:"observation_reason"`
+	ObservationResult string   `json:"observation_result"`
 }
 
 type T0DataPullCandidate struct {
-	TSCode       string   `json:"ts_code"`
-	Name         string   `json:"name"`
-	Industry     string   `json:"industry"`
-	TradeDate    string   `json:"trade_date"`
-	Action       string   `json:"action"`
-	Score        float64  `json:"score"`
-	State        string   `json:"state"`
-	Setup        string   `json:"setup"`
-	FirstAction  string   `json:"first_action"`
-	Price        float64  `json:"price"`
-	ReducePrice  float64  `json:"reduce_price"`
-	BuyPrice     float64  `json:"buy_price"`
-	StopPrice    float64  `json:"stop_price"`
-	TRatio       float64  `json:"t_ratio"`
-	TodayPct     float64  `json:"today_pct"`
-	Return5      float64  `json:"return_5d"`
-	Return20     float64  `json:"return_20d"`
-	AvgRange20   float64  `json:"avg_range_20d"`
-	Drawdown20   float64  `json:"drawdown_20d"`
-	Amount       float64  `json:"amount"`
-	AvgAmount20  float64  `json:"avg_amount_20d"`
-	ExpectedEdge float64  `json:"expected_edge"`
-	TargetFreq   string   `json:"target_freq"`
-	LookbackDays int      `json:"lookback_days"`
-	PlanJSON     string   `json:"plan_json"`
-	Reasons      []string `json:"reasons"`
-	Risks        []string `json:"risks"`
-	GeneratedAt  string   `json:"generated_at"`
+	TSCode            string   `json:"ts_code"`
+	Name              string   `json:"name"`
+	Industry          string   `json:"industry"`
+	TradeDate         string   `json:"trade_date"`
+	Action            string   `json:"action"`
+	Score             float64  `json:"score"`
+	State             string   `json:"state"`
+	Setup             string   `json:"setup"`
+	FirstAction       string   `json:"first_action"`
+	Price             float64  `json:"price"`
+	ReducePrice       float64  `json:"reduce_price"`
+	BuyPrice          float64  `json:"buy_price"`
+	StopPrice         float64  `json:"stop_price"`
+	TRatio            float64  `json:"t_ratio"`
+	TodayPct          float64  `json:"today_pct"`
+	Return5           float64  `json:"return_5d"`
+	Return20          float64  `json:"return_20d"`
+	AvgRange20        float64  `json:"avg_range_20d"`
+	Drawdown20        float64  `json:"drawdown_20d"`
+	Amount            float64  `json:"amount"`
+	AvgAmount20       float64  `json:"avg_amount_20d"`
+	ExpectedEdge      float64  `json:"expected_edge"`
+	TargetFreq        string   `json:"target_freq"`
+	LookbackDays      int      `json:"lookback_days"`
+	PlanJSON          string   `json:"plan_json"`
+	Reasons           []string `json:"reasons"`
+	Risks             []string `json:"risks"`
+	GeneratedAt       string   `json:"generated_at"`
+	FirstSeenDate     string   `json:"first_seen_date"`
+	LastSeenDate      string   `json:"last_seen_date"`
+	SeenCount         int      `json:"seen_count"`
+	ObservationDays   int      `json:"observation_days"`
+	ObservationStatus string   `json:"observation_status"`
+	ObservationReason string   `json:"observation_reason"`
+	ObservationResult string   `json:"observation_result"`
 }
 
 type T0DailyBacktest struct {
@@ -301,13 +315,68 @@ type FactorStressResult struct {
 }
 
 type FactorLatestPrediction struct {
-	RunID     string  `json:"run_id"`
-	TradeDate string  `json:"trade_date"`
-	TsCode    string  `json:"ts_code"`
-	PredScore float64 `json:"pred_score"`
-	PredRank  float64 `json:"pred_rank"`
-	IsTop20   bool    `json:"is_top20"`
-	ModelPath string  `json:"model_path"`
+	RunID             string  `json:"run_id"`
+	TradeDate         string  `json:"trade_date"`
+	TsCode            string  `json:"ts_code"`
+	Name              string  `json:"name"`
+	Industry          string  `json:"industry"`
+	Price             float64 `json:"price"`
+	PctChg            float64 `json:"pct_chg"`
+	PredScore         float64 `json:"pred_score"`
+	PredRank          float64 `json:"pred_rank"`
+	IsTop20           bool    `json:"is_top20"`
+	ModelPath         string  `json:"model_path"`
+	FirstSeenDate     string  `json:"first_seen_date"`
+	LastSeenDate      string  `json:"last_seen_date"`
+	SeenCount         int     `json:"seen_count"`
+	ObservationDays   int     `json:"observation_days"`
+	ObservationStatus string  `json:"observation_status"`
+	ObservationReason string  `json:"observation_reason"`
+	ObservationResult string  `json:"observation_result"`
+}
+
+type FactorObservationEvent struct {
+	Strategy          string  `json:"strategy"`
+	RunID             string  `json:"run_id"`
+	TradeDate         string  `json:"trade_date"`
+	TsCode            string  `json:"ts_code"`
+	Name              string  `json:"name"`
+	Industry          string  `json:"industry"`
+	EventType         string  `json:"event_type"`
+	RankNo            int     `json:"rank_no"`
+	Score             float64 `json:"score"`
+	RankPct           float64 `json:"rank_pct"`
+	Reason            string  `json:"reason"`
+	FirstSeenDate     string  `json:"first_seen_date"`
+	LastSeenDate      string  `json:"last_seen_date"`
+	SeenCount         int     `json:"seen_count"`
+	ObservationStatus string  `json:"observation_status"`
+	CreatedAt         string  `json:"created_at"`
+}
+
+type strategyObservationCandidate struct {
+	Strategy  string
+	RunID     string
+	TradeDate string
+	TSCode    string
+	Name      string
+	Industry  string
+	RankNo    int
+	Score     float64
+	RankPct   float64
+	Price     float64
+	PctChg    float64
+	Reason    string
+}
+
+type strategyObservationInfo struct {
+	FirstSeenDate     string
+	LastSeenDate      string
+	SeenCount         int
+	ObservationDays   int
+	ObservationStatus string
+	ObservationReason string
+	ObservationResult string
 }
 
 type FactorAdmissionComparison struct {
@@ -391,25 +460,32 @@ type LimitUpModelFeature struct {
 }
 
 type LimitUpModelPrediction struct {
-	RunID         string  `json:"run_id"`
-	TradeDate     string  `json:"trade_date"`
-	TSCode        string  `json:"ts_code"`
-	Name          string  `json:"name"`
-	Industry      string  `json:"industry"`
-	Price         float64 `json:"price"`
-	High          float64 `json:"high"`
-	Low           float64 `json:"low"`
-	TodayPct      float64 `json:"today_pct"`
-	Prob          float64 `json:"prob"`
-	ModelScore    float64 `json:"model_score"`
-	Label         int     `json:"label"`
-	Fwd5Return    float64 `json:"fwd5_return"`
-	Fwd5MaxReturn float64 `json:"fwd5_max_return"`
-	MaxDrawdown5D float64 `json:"max_drawdown_5d"`
-	HitLimitUp5D  int     `json:"hit_limit_up_5d"`
-	IsLatest      bool    `json:"is_latest"`
-	SummaryJSON   string  `json:"summary_json"`
-	UpdatedAt     string  `json:"updated_at"`
+	RunID             string  `json:"run_id"`
+	TradeDate         string  `json:"trade_date"`
+	TSCode            string  `json:"ts_code"`
+	Name              string  `json:"name"`
+	Industry          string  `json:"industry"`
+	Price             float64 `json:"price"`
+	High              float64 `json:"high"`
+	Low               float64 `json:"low"`
+	TodayPct          float64 `json:"today_pct"`
+	Prob              float64 `json:"prob"`
+	ModelScore        float64 `json:"model_score"`
+	Label             int     `json:"label"`
+	Fwd5Return        float64 `json:"fwd5_return"`
+	Fwd5MaxReturn     float64 `json:"fwd5_max_return"`
+	MaxDrawdown5D     float64 `json:"max_drawdown_5d"`
+	HitLimitUp5D      int     `json:"hit_limit_up_5d"`
+	IsLatest          bool    `json:"is_latest"`
+	SummaryJSON       string  `json:"summary_json"`
+	UpdatedAt         string  `json:"updated_at"`
+	FirstSeenDate     string  `json:"first_seen_date"`
+	LastSeenDate      string  `json:"last_seen_date"`
+	SeenCount         int     `json:"seen_count"`
+	ObservationDays   int     `json:"observation_days"`
+	ObservationStatus string  `json:"observation_status"`
+	ObservationReason string  `json:"observation_reason"`
+	ObservationResult string  `json:"observation_result"`
 }
 
 type LimitUpModelTimeMachineSlice struct {
@@ -1423,7 +1499,12 @@ func (app *App) ListLimitBreakoutCandidates(query market.BreakoutQuery) ([]marke
 	if err := app.ensureMarketService(); err != nil {
 		return nil, err
 	}
-	return app.marketService.ListLimitBreakoutCandidates(app.settings.DataPath, query)
+	items, err := app.marketService.ListLimitBreakoutCandidates(app.settings.DataPath, query)
+	if err != nil {
+		return nil, err
+	}
+	app.syncLimitBreakoutObservation(query, items)
+	return items, nil
 }
 
 func (app *App) RefreshLimitBreakoutCandidates(query market.BreakoutQuery) ([]market.LimitBreakoutCandidate, error) {
@@ -1470,14 +1551,24 @@ func (app *App) RefreshLimitBreakoutCandidates(query market.BreakoutQuery) ([]ma
 		app.markPythonStatusTaskError("limit_breakout", "涨停预警扫描失败: "+err.Error()+"，日志: "+logPath)
 		return nil, fmt.Errorf("涨停预警扫描失败: %w，请查看日志 %s", err, logPath)
 	}
-	return app.marketService.ListLimitBreakoutCandidates(dataPath, query)
+	items, err := app.marketService.ListLimitBreakoutCandidates(dataPath, query)
+	if err != nil {
+		return nil, err
+	}
+	app.syncLimitBreakoutObservation(query, items)
+	return items, nil
 }
 
 func (app *App) ListLimitUpMomentumCandidates(query market.LimitUpMomentumQuery) ([]market.LimitUpMomentumCandidate, error) {
 	if err := app.ensureMarketService(); err != nil {
 		return nil, err
 	}
-	return app.marketService.ListLimitUpMomentumCandidates(app.settings.DataPath, query)
+	items, err := app.marketService.ListLimitUpMomentumCandidates(app.settings.DataPath, query)
+	if err != nil {
+		return nil, err
+	}
+	app.syncLimitUpMomentumObservation(query, items)
+	return items, nil
 }
 
 func (app *App) RefreshLimitUpMomentumCandidates(query market.LimitUpMomentumQuery) ([]market.LimitUpMomentumCandidate, error) {
@@ -1524,7 +1615,12 @@ func (app *App) RefreshLimitUpMomentumCandidates(query market.LimitUpMomentumQue
 		app.markPythonStatusTaskError("limit_up_momentum", "涨停板推荐扫描失败: "+err.Error()+"，日志: "+logPath)
 		return nil, fmt.Errorf("涨停板推荐扫描失败: %w，请查看日志 %s", err, logPath)
 	}
-	return app.marketService.ListLimitUpMomentumCandidates(dataPath, query)
+	items, err := app.marketService.ListLimitUpMomentumCandidates(dataPath, query)
+	if err != nil {
+		return nil, err
+	}
+	app.syncLimitUpMomentumObservation(query, items)
+	return items, nil
 }
 
 func (app *App) GetLimitBreakoutRunStatus() (position.RunStatus, error) {
@@ -1532,6 +1628,88 @@ func (app *App) GetLimitBreakoutRunStatus() (position.RunStatus, error) {
 		return position.RunStatus{}, err
 	}
 	return app.positionService.GetRunStatus("limit_breakout")
+}
+
+func (app *App) syncLimitBreakoutObservation(query market.BreakoutQuery, items []market.LimitBreakoutCandidate) {
+	if len(items) == 0 || app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	query = market.NormalizeBreakoutQuery(query)
+	tradeDate := items[0].LatestDate
+	runID := market.BreakoutCacheKey(query)
+	candidates := make([]strategyObservationCandidate, 0, len(items))
+	for i, item := range items {
+		reason := ""
+		if len(item.Reasons) > 0 {
+			reason = strings.Join(item.Reasons[:minInt(len(item.Reasons), 2)], "；")
+		}
+		candidates = append(candidates, strategyObservationCandidate{
+			Strategy:  "limit_breakout",
+			RunID:     runID,
+			TradeDate: item.LatestDate,
+			TSCode:    item.TSCode,
+			Name:      item.Name,
+			Industry:  item.Industry,
+			RankNo:    i + 1,
+			Score:     item.Score,
+			RankPct:   item.Score / 100,
+			Price:     item.Close,
+			PctChg:    item.RecentReturn,
+			Reason:    reason,
+		})
+	}
+	_ = app.syncStrategyObservationPool("limit_breakout", runID, tradeDate, candidates)
+	for i := range items {
+		meta := app.strategyObservationMeta("limit_breakout", items[i].TSCode, items[i].LatestDate, items[i].Close)
+		items[i].FirstSeenDate = meta.FirstSeenDate
+		items[i].LastSeenDate = meta.LastSeenDate
+		items[i].SeenCount = meta.SeenCount
+		items[i].ObservationDays = meta.ObservationDays
+		items[i].ObservationStatus = meta.ObservationStatus
+		items[i].ObservationReason = meta.ObservationReason
+		items[i].ObservationResult = meta.ObservationResult
+	}
+}
+
+func (app *App) syncLimitUpMomentumObservation(query market.LimitUpMomentumQuery, items []market.LimitUpMomentumCandidate) {
+	if len(items) == 0 || app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	query = market.NormalizeLimitUpMomentumQuery(query)
+	tradeDate := items[0].TradeDate
+	runID := market.LimitUpMomentumCacheKey(query)
+	candidates := make([]strategyObservationCandidate, 0, len(items))
+	for i, item := range items {
+		reason := firstNonEmpty(item.Recommendation, item.Stage)
+		if len(item.Reasons) > 0 {
+			reason = strings.Join(item.Reasons[:minInt(len(item.Reasons), 2)], "；")
+		}
+		candidates = append(candidates, strategyObservationCandidate{
+			Strategy:  "limit_up_momentum",
+			RunID:     runID,
+			TradeDate: item.TradeDate,
+			TSCode:    item.TSCode,
+			Name:      item.Name,
+			Industry:  item.Industry,
+			RankNo:    i + 1,
+			Score:     item.Score,
+			RankPct:   item.Score / 100,
+			Price:     item.Close,
+			PctChg:    item.Recent20Return,
+			Reason:    reason,
+		})
+	}
+	_ = app.syncStrategyObservationPool("limit_up_momentum", runID, tradeDate, candidates)
+	for i := range items {
+		meta := app.strategyObservationMeta("limit_up_momentum", items[i].TSCode, items[i].TradeDate, items[i].Close)
+		items[i].FirstSeenDate = meta.FirstSeenDate
+		items[i].LastSeenDate = meta.LastSeenDate
+		items[i].SeenCount = meta.SeenCount
+		items[i].ObservationDays = meta.ObservationDays
+		items[i].ObservationStatus = meta.ObservationStatus
+		items[i].ObservationReason = meta.ObservationReason
+		items[i].ObservationResult = meta.ObservationResult
+	}
 }
 
 func (app *App) GetLimitUpMomentumRunStatus() (position.RunStatus, error) {
@@ -1935,11 +2113,16 @@ func (app *App) ListFactorLatestPredictions(runID string, limit int) ([]FactorLa
 		limit = 120
 	}
 	rows, err := app.database.Conn().Query(`
-		SELECT run_id, trade_date, ts_code, COALESCE(pred_score, 0), COALESCE(pred_rank, 0),
-		       COALESCE(is_top20, 0), COALESCE(model_path, '')
-		FROM factor_latest_predictions
-		WHERE run_id = ?
-		ORDER BY trade_date DESC, pred_score DESC
+		SELECT p.run_id, p.trade_date, p.ts_code,
+		       COALESCE(s.name, ''), COALESCE(s.industry, ''),
+		       COALESCE(d.close, 0), COALESCE(d.pct_chg, 0),
+		       COALESCE(p.pred_score, 0), COALESCE(p.pred_rank, 0),
+		       COALESCE(p.is_top20, 0), COALESCE(p.model_path, '')
+		FROM factor_latest_predictions p
+		LEFT JOIN data_stock_basic s ON s.ts_code = p.ts_code
+		LEFT JOIN data_daily_bars d ON d.ts_code = p.ts_code AND d.trade_date = p.trade_date
+		WHERE p.run_id = ?
+		ORDER BY p.trade_date DESC, p.pred_score DESC
 		LIMIT ?`, runID, limit)
 	if err != nil {
 		return []FactorLatestPrediction{}, nil
@@ -1949,10 +2132,454 @@ func (app *App) ListFactorLatestPredictions(runID string, limit int) ([]FactorLa
 	for rows.Next() {
 		var item FactorLatestPrediction
 		var isTop20 int
-		if err := rows.Scan(&item.RunID, &item.TradeDate, &item.TsCode, &item.PredScore, &item.PredRank, &isTop20, &item.ModelPath); err != nil {
+		if err := rows.Scan(&item.RunID, &item.TradeDate, &item.TsCode, &item.Name, &item.Industry, &item.Price, &item.PctChg, &item.PredScore, &item.PredRank, &isTop20, &item.ModelPath); err != nil {
 			return out, err
 		}
 		item.IsTop20 = isTop20 != 0
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	if len(out) > 0 {
+		if err := app.syncFactorObservationPool(runID, out); err != nil {
+			return out, nil
+		}
+		app.attachFactorObservationMeta(out)
+	}
+	return out, nil
+}
+
+func (app *App) syncFactorObservationPool(runID string, rows []FactorLatestPrediction) error {
+	if app.database == nil || app.database.Conn() == nil || len(rows) == 0 {
+		return nil
+	}
+	tradeDate := rows[0].TradeDate
+	if tradeDate == "" {
+		return nil
+	}
+	strategy := "ml_factor_ranker"
+	now := time.Now().Format(time.RFC3339)
+	activeBefore := map[string]struct{}{}
+	activeRows, err := app.database.Conn().Query(`SELECT ts_code FROM strategy_observation_pool WHERE strategy = ? AND status = 'active'`, strategy)
+	if err == nil {
+		defer activeRows.Close()
+		for activeRows.Next() {
+			var code string
+			if scanErr := activeRows.Scan(&code); scanErr == nil && code != "" {
+				activeBefore[code] = struct{}{}
+			}
+		}
+	}
+	current := map[string]FactorLatestPrediction{}
+	rankNo := 0
+	for _, item := range rows {
+		if !item.IsTop20 {
+			continue
+		}
+		rankNo++
+		current[item.TsCode] = item
+		eventType := "kept"
+		if _, ok := activeBefore[item.TsCode]; !ok {
+			eventType = "entered"
+		}
+		reason := factorObservationReason(eventType, rankNo, item)
+		if err := app.upsertObservationPoolRow(strategy, runID, tradeDate, item, rankNo, eventType, reason, now); err != nil {
+			return err
+		}
+		if err := app.insertObservationEvent(strategy, runID, tradeDate, item, rankNo, eventType, reason, now); err != nil {
+			return err
+		}
+		if err := app.refreshObservationPoolStats(strategy, item.TsCode); err != nil {
+			return err
+		}
+	}
+	for code := range activeBefore {
+		if _, ok := current[code]; ok {
+			continue
+		}
+		item := FactorLatestPrediction{RunID: runID, TradeDate: tradeDate, TsCode: code}
+		_ = app.database.Conn().QueryRow(`SELECT COALESCE(name, ''), COALESCE(industry, '') FROM strategy_observation_pool WHERE strategy = ? AND ts_code = ?`, strategy, code).Scan(&item.Name, &item.Industry)
+		reason := "未进入本次Top20候选，最新截面刷新后移出观察池"
+		if _, err := app.database.Conn().Exec(`UPDATE strategy_observation_pool SET status='dropped', exit_reason=?, last_run_id=?, updated_at=? WHERE strategy=? AND ts_code=?`, reason, runID, now, strategy, code); err != nil {
+			return err
+		}
+		if err := app.insertObservationEvent(strategy, runID, tradeDate, item, 0, "dropped", reason, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (app *App) refreshObservationPoolStats(strategy string, tsCode string) error {
+	var seenCount int
+	err := app.database.Conn().QueryRow(`
+		SELECT COUNT(DISTINCT trade_date)
+		FROM strategy_observation_events
+		WHERE strategy = ? AND ts_code = ? AND event_type IN ('entered', 'kept')`, strategy, tsCode).Scan(&seenCount)
+	if err != nil {
+		return err
+	}
+	_, err = app.database.Conn().Exec(`UPDATE strategy_observation_pool SET seen_count = ? WHERE strategy = ? AND ts_code = ?`, seenCount, strategy, tsCode)
+	return err
+}
+
+func (app *App) upsertObservationPoolRow(strategy string, runID string, tradeDate string, item FactorLatestPrediction, rankNo int, eventType string, reason string, now string) error {
+	payload, _ := json.Marshal(map[string]any{
+		"pred_score": item.PredScore,
+		"pred_rank":  item.PredRank,
+		"price":      item.Price,
+		"pct_chg":    item.PctChg,
+	})
+	insertSQL := app.database.UpsertSQL(
+		"strategy_observation_pool",
+		[]string{"strategy", "ts_code", "name", "industry", "first_seen_date", "last_seen_date", "last_run_id", "seen_count", "last_rank", "best_rank", "last_score", "best_score", "last_rank_pct", "best_rank_pct", "status", "enter_reason", "keep_reason", "exit_reason", "payload_json", "created_at", "updated_at"},
+		[]string{"strategy", "ts_code"},
+		[]string{"name", "industry", "last_seen_date", "last_run_id", "last_rank", "last_score", "last_rank_pct", "status", "keep_reason", "exit_reason", "payload_json", "updated_at"},
+	)
+	enterReason := reason
+	keepReason := reason
+	if eventType != "entered" {
+		enterReason = ""
+	}
+	if eventType == "entered" {
+		keepReason = "首次进入观察池"
+	}
+	_, err := app.database.Conn().Exec(
+		insertSQL,
+		strategy, item.TsCode, item.Name, item.Industry, tradeDate, tradeDate, runID, 1, rankNo, rankNo, item.PredScore, item.PredScore, item.PredRank, item.PredRank, "active", enterReason, keepReason, "", string(payload), now, now,
+	)
+	if err != nil {
+		return err
+	}
+	_, err = app.database.Conn().Exec(`
+		UPDATE strategy_observation_pool
+		SET seen_count = CASE WHEN first_seen_date = ? THEN seen_count ELSE seen_count END,
+		    best_rank = CASE WHEN best_rank = 0 OR ? < best_rank THEN ? ELSE best_rank END,
+		    best_score = CASE WHEN ? > best_score THEN ? ELSE best_score END,
+		    best_rank_pct = CASE WHEN ? > best_rank_pct THEN ? ELSE best_rank_pct END
+		WHERE strategy = ? AND ts_code = ?`,
+		tradeDate, rankNo, rankNo, item.PredScore, item.PredScore, item.PredRank, item.PredRank, strategy, item.TsCode,
+	)
+	return err
+}
+
+func (app *App) insertObservationEvent(strategy string, runID string, tradeDate string, item FactorLatestPrediction, rankNo int, eventType string, reason string, now string) error {
+	payload, _ := json.Marshal(map[string]any{
+		"pred_score": item.PredScore,
+		"pred_rank":  item.PredRank,
+		"price":      item.Price,
+		"pct_chg":    item.PctChg,
+	})
+	insertSQL := app.database.UpsertSQL(
+		"strategy_observation_events",
+		[]string{"id", "strategy", "run_id", "trade_date", "ts_code", "name", "industry", "event_type", "rank_no", "score", "rank_pct", "reason", "payload_json", "created_at"},
+		[]string{"id"},
+		[]string{"name", "industry", "rank_no", "score", "rank_pct", "reason", "payload_json", "created_at"},
+	)
+	eventID := strings.Join([]string{strategy, runID, tradeDate, item.TsCode, eventType}, "|")
+	_, err := app.database.Conn().Exec(insertSQL, eventID, strategy, runID, tradeDate, item.TsCode, item.Name, item.Industry, eventType, rankNo, item.PredScore, item.PredRank, reason, string(payload), now)
+	return err
+}
+
+func (app *App) attachFactorObservationMeta(rows []FactorLatestPrediction) {
+	if app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	for i := range rows {
+		err := app.database.Conn().QueryRow(`
+			SELECT COALESCE(first_seen_date, ''), COALESCE(last_seen_date, ''), COALESCE(seen_count, 0),
+			       COALESCE(status, ''), COALESCE(NULLIF(keep_reason, ''), enter_reason, exit_reason, '')
+			FROM strategy_observation_pool
+			WHERE strategy = 'ml_factor_ranker' AND ts_code = ?`, rows[i].TsCode).
+			Scan(&rows[i].FirstSeenDate, &rows[i].LastSeenDate, &rows[i].SeenCount, &rows[i].ObservationStatus, &rows[i].ObservationReason)
+		if err != nil {
+			continue
+		}
+		rows[i].ObservationDays = observationDays(rows[i].FirstSeenDate, firstNonEmpty(rows[i].TradeDate, rows[i].LastSeenDate))
+		rows[i].ObservationResult = app.strategyObservationResult("ml_factor_ranker", rows[i].TsCode, rows[i].Price)
+	}
+}
+
+func factorObservationReason(eventType string, rankNo int, item FactorLatestPrediction) string {
+	if eventType == "entered" {
+		return fmt.Sprintf("首次进入通用策略Top20，排名第%d，预测分位%s", rankNo, formatPercentForReason(item.PredRank))
+	}
+	return fmt.Sprintf("继续保留在通用策略Top20，排名第%d，预测分位%s", rankNo, formatPercentForReason(item.PredRank))
+}
+
+func formatPercentForReason(value float64) string {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f%%", value*100)
+}
+
+func (app *App) syncStrategyObservationPool(strategy string, runID string, tradeDate string, candidates []strategyObservationCandidate) error {
+	if app.database == nil || app.database.Conn() == nil || strategy == "" || tradeDate == "" {
+		return nil
+	}
+	now := time.Now().Format(time.RFC3339)
+	activeBefore := map[string]struct{}{}
+	activeRows, err := app.database.Conn().Query(`SELECT ts_code FROM strategy_observation_pool WHERE strategy = ? AND status = 'active'`, strategy)
+	if err == nil {
+		defer activeRows.Close()
+		for activeRows.Next() {
+			var code string
+			if scanErr := activeRows.Scan(&code); scanErr == nil && code != "" {
+				activeBefore[code] = struct{}{}
+			}
+		}
+	}
+	current := map[string]strategyObservationCandidate{}
+	for _, item := range candidates {
+		if item.TSCode == "" {
+			continue
+		}
+		item.Strategy = strategy
+		item.RunID = firstNonEmpty(item.RunID, runID)
+		item.TradeDate = firstNonEmpty(item.TradeDate, tradeDate)
+		current[item.TSCode] = item
+		eventType := "kept"
+		if _, ok := activeBefore[item.TSCode]; !ok {
+			eventType = "entered"
+		}
+		reason := strings.TrimSpace(item.Reason)
+		if reason == "" {
+			reason = genericObservationReason(strategy, eventType, item)
+		}
+		if err := app.upsertGenericObservationPoolRow(strategy, item.RunID, item.TradeDate, item, eventType, reason, now); err != nil {
+			return err
+		}
+		if err := app.insertGenericObservationEvent(strategy, item.RunID, item.TradeDate, item, eventType, reason, now); err != nil {
+			return err
+		}
+		if err := app.refreshObservationPoolStats(strategy, item.TSCode); err != nil {
+			return err
+		}
+	}
+	for code := range activeBefore {
+		if _, ok := current[code]; ok {
+			continue
+		}
+		item := strategyObservationCandidate{Strategy: strategy, RunID: runID, TradeDate: tradeDate, TSCode: code}
+		_ = app.database.Conn().QueryRow(`SELECT COALESCE(name, ''), COALESCE(industry, '') FROM strategy_observation_pool WHERE strategy = ? AND ts_code = ?`, strategy, code).Scan(&item.Name, &item.Industry)
+		reason := "未进入本次推荐列表，最新刷新后移出观察池"
+		if _, err := app.database.Conn().Exec(`UPDATE strategy_observation_pool SET status='dropped', exit_reason=?, last_run_id=?, updated_at=? WHERE strategy=? AND ts_code=?`, reason, runID, now, strategy, code); err != nil {
+			return err
+		}
+		if err := app.insertGenericObservationEvent(strategy, runID, tradeDate, item, "dropped", reason, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (app *App) upsertGenericObservationPoolRow(strategy string, runID string, tradeDate string, item strategyObservationCandidate, eventType string, reason string, now string) error {
+	payload, _ := json.Marshal(map[string]any{
+		"score":    item.Score,
+		"rank_pct": item.RankPct,
+		"price":    item.Price,
+		"pct_chg":  item.PctChg,
+	})
+	insertSQL := app.database.UpsertSQL(
+		"strategy_observation_pool",
+		[]string{"strategy", "ts_code", "name", "industry", "first_seen_date", "last_seen_date", "last_run_id", "seen_count", "last_rank", "best_rank", "last_score", "best_score", "last_rank_pct", "best_rank_pct", "status", "enter_reason", "keep_reason", "exit_reason", "payload_json", "created_at", "updated_at"},
+		[]string{"strategy", "ts_code"},
+		[]string{"name", "industry", "last_seen_date", "last_run_id", "last_rank", "last_score", "last_rank_pct", "status", "keep_reason", "exit_reason", "payload_json", "updated_at"},
+	)
+	enterReason := reason
+	keepReason := reason
+	if eventType != "entered" {
+		enterReason = ""
+	}
+	if eventType == "entered" {
+		keepReason = "首次进入观察池"
+	}
+	_, err := app.database.Conn().Exec(
+		insertSQL,
+		strategy, item.TSCode, item.Name, item.Industry, tradeDate, tradeDate, runID, 1, item.RankNo, item.RankNo, item.Score, item.Score, item.RankPct, item.RankPct, "active", enterReason, keepReason, "", string(payload), now, now,
+	)
+	if err != nil {
+		return err
+	}
+	_, err = app.database.Conn().Exec(`
+		UPDATE strategy_observation_pool
+		SET best_rank = CASE WHEN best_rank = 0 OR ? < best_rank THEN ? ELSE best_rank END,
+		    best_score = CASE WHEN ? > best_score THEN ? ELSE best_score END,
+		    best_rank_pct = CASE WHEN ? > best_rank_pct THEN ? ELSE best_rank_pct END
+		WHERE strategy = ? AND ts_code = ?`,
+		item.RankNo, item.RankNo, item.Score, item.Score, item.RankPct, item.RankPct, strategy, item.TSCode,
+	)
+	return err
+}
+
+func (app *App) insertGenericObservationEvent(strategy string, runID string, tradeDate string, item strategyObservationCandidate, eventType string, reason string, now string) error {
+	payload, _ := json.Marshal(map[string]any{
+		"score":    item.Score,
+		"rank_pct": item.RankPct,
+		"price":    item.Price,
+		"pct_chg":  item.PctChg,
+	})
+	insertSQL := app.database.UpsertSQL(
+		"strategy_observation_events",
+		[]string{"id", "strategy", "run_id", "trade_date", "ts_code", "name", "industry", "event_type", "rank_no", "score", "rank_pct", "reason", "payload_json", "created_at"},
+		[]string{"id"},
+		[]string{"name", "industry", "rank_no", "score", "rank_pct", "reason", "payload_json", "created_at"},
+	)
+	eventID := strings.Join([]string{strategy, runID, tradeDate, item.TSCode, eventType}, "|")
+	_, err := app.database.Conn().Exec(insertSQL, eventID, strategy, runID, tradeDate, item.TSCode, item.Name, item.Industry, eventType, item.RankNo, item.Score, item.RankPct, reason, string(payload), now)
+	return err
+}
+
+func (app *App) strategyObservationMeta(strategy string, tsCode string, currentDate string, currentPrice float64) strategyObservationInfo {
+	meta := strategyObservationInfo{}
+	if app.database == nil || app.database.Conn() == nil || strategy == "" || tsCode == "" {
+		return meta
+	}
+	err := app.database.Conn().QueryRow(`
+		SELECT COALESCE(first_seen_date, ''), COALESCE(last_seen_date, ''), COALESCE(seen_count, 0),
+		       COALESCE(status, ''), COALESCE(NULLIF(keep_reason, ''), enter_reason, exit_reason, '')
+		FROM strategy_observation_pool
+		WHERE strategy = ? AND ts_code = ?`, strategy, tsCode).
+		Scan(&meta.FirstSeenDate, &meta.LastSeenDate, &meta.SeenCount, &meta.ObservationStatus, &meta.ObservationReason)
+	if err != nil {
+		return meta
+	}
+	meta.ObservationDays = observationDays(meta.FirstSeenDate, firstNonEmpty(currentDate, meta.LastSeenDate))
+	meta.ObservationResult = app.strategyObservationResult(strategy, tsCode, currentPrice)
+	return meta
+}
+
+func (app *App) strategyObservationResult(strategy string, tsCode string, currentPrice float64) string {
+	if currentPrice <= 0 {
+		return "观察中，暂无价格结果"
+	}
+	var payload string
+	err := app.database.Conn().QueryRow(`
+		SELECT payload_json
+		FROM strategy_observation_events
+		WHERE strategy = ? AND ts_code = ? AND event_type IN ('entered','kept')
+		ORDER BY trade_date ASC, created_at ASC
+		LIMIT 1`, strategy, tsCode).Scan(&payload)
+	if err != nil || payload == "" {
+		return "观察中，暂无入池价"
+	}
+	var data map[string]any
+	if json.Unmarshal([]byte(payload), &data) != nil {
+		return "观察中，暂无入池价"
+	}
+	entry := numberFromAny(data["price"])
+	if entry <= 0 {
+		return "观察中，暂无入池价"
+	}
+	ret := currentPrice/entry - 1
+	return fmt.Sprintf("入池后%s，入池价¥%.2f", formatPercentForReason(ret), entry)
+}
+
+func observationDays(firstDate string, currentDate string) int {
+	start, ok := parseObservationDate(firstDate)
+	if !ok {
+		return 0
+	}
+	end, ok := parseObservationDate(currentDate)
+	if !ok || end.Before(start) {
+		return 1
+	}
+	return int(end.Sub(start).Hours()/24) + 1
+}
+
+func parseObservationDate(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if len(value) >= 10 && strings.Contains(value[:10], "-") {
+		t, err := time.Parse("2006-01-02", value[:10])
+		return t, err == nil
+	}
+	if len(value) >= 8 {
+		t, err := time.Parse("20060102", value[:8])
+		return t, err == nil
+	}
+	return time.Time{}, false
+}
+
+func numberFromAny(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case json.Number:
+		n, _ := v.Float64()
+		return n
+	case string:
+		n, _ := strconv.ParseFloat(v, 64)
+		return n
+	default:
+		return 0
+	}
+}
+
+func minInt(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func genericObservationReason(strategy string, eventType string, item strategyObservationCandidate) string {
+	label := strategyLabel(strategy)
+	if eventType == "entered" {
+		return fmt.Sprintf("首次进入%s推荐池，排名第%d", label, item.RankNo)
+	}
+	return fmt.Sprintf("继续保留在%s推荐池，排名第%d", label, item.RankNo)
+}
+
+func strategyLabel(strategy string) string {
+	switch strategy {
+	case "ml_factor_ranker":
+		return "通用策略"
+	case "t0_daily":
+		return "做T策略"
+	case "limit_up_momentum":
+		return "涨停策略"
+	case "limit_breakout":
+		return "横盘策略"
+	default:
+		return strategy
+	}
+}
+
+func (app *App) ListFactorObservationEvents(limit int) ([]FactorObservationEvent, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorObservationEvent{}, err
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT e.strategy, e.run_id, e.trade_date, e.ts_code, COALESCE(e.name, ''), COALESCE(e.industry, ''),
+		       e.event_type, COALESCE(e.rank_no, 0), COALESCE(e.score, 0), COALESCE(e.rank_pct, 0),
+		       COALESCE(e.reason, ''), COALESCE(p.first_seen_date, ''), COALESCE(p.last_seen_date, ''),
+		       COALESCE(p.seen_count, 0), COALESCE(p.status, ''), COALESCE(e.created_at, '')
+		FROM strategy_observation_events e
+		LEFT JOIN strategy_observation_pool p ON p.strategy = e.strategy AND p.ts_code = e.ts_code
+		WHERE e.strategy = 'ml_factor_ranker'
+		ORDER BY e.trade_date DESC, e.created_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return []FactorObservationEvent{}, nil
+	}
+	defer rows.Close()
+	out := []FactorObservationEvent{}
+	for rows.Next() {
+		var item FactorObservationEvent
+		if err := rows.Scan(
+			&item.Strategy, &item.RunID, &item.TradeDate, &item.TsCode, &item.Name, &item.Industry,
+			&item.EventType, &item.RankNo, &item.Score, &item.RankPct, &item.Reason,
+			&item.FirstSeenDate, &item.LastSeenDate, &item.SeenCount, &item.ObservationStatus, &item.CreatedAt,
+		); err != nil {
+			return out, err
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -2108,7 +2735,7 @@ func (app *App) RunLimitUpModelTraining() error {
 		"--db-path", dbPath,
 		"--start", "20150101",
 		"--end", time.Now().Format("20060102"),
-		"--min-test-year", "2020",
+		"--min-test-year", "2019",
 		"--threads", "4",
 	}
 	cmd := exec.Command(pythonPath, args...)
@@ -2308,7 +2935,11 @@ func (app *App) ListLimitUpModelPredictions(runID string, limit int) ([]LimitUpM
 		item.IsLatest = latest != 0
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	app.syncLimitModelPredictionObservation("limit_up_momentum", runID, out)
+	return out, nil
 }
 
 func (app *App) ListLimitUpModelTimeMachineSlices(runID string, limit int) ([]LimitUpModelTimeMachineSlice, error) {
@@ -2355,6 +2986,41 @@ func (app *App) resolveLatestLimitUpModelRunID(runID string) string {
 	}
 	_ = app.database.Conn().QueryRow(`SELECT run_id FROM limit_up_model_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
 	return runID
+}
+
+func (app *App) syncLimitModelPredictionObservation(strategy string, runID string, items []LimitUpModelPrediction) {
+	if len(items) == 0 || app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	tradeDate := items[0].TradeDate
+	candidates := make([]strategyObservationCandidate, 0, len(items))
+	for i, item := range items {
+		candidates = append(candidates, strategyObservationCandidate{
+			Strategy:  strategy,
+			RunID:     runID,
+			TradeDate: item.TradeDate,
+			TSCode:    item.TSCode,
+			Name:      item.Name,
+			Industry:  item.Industry,
+			RankNo:    i + 1,
+			Score:     item.ModelScore,
+			RankPct:   item.Prob,
+			Price:     item.Price,
+			PctChg:    item.TodayPct,
+			Reason:    fmt.Sprintf("模型推荐，概率%s，分数%.1f", formatPercentForReason(item.Prob), item.ModelScore),
+		})
+	}
+	_ = app.syncStrategyObservationPool(strategy, runID, tradeDate, candidates)
+	for i := range items {
+		meta := app.strategyObservationMeta(strategy, items[i].TSCode, items[i].TradeDate, items[i].Price)
+		items[i].FirstSeenDate = meta.FirstSeenDate
+		items[i].LastSeenDate = meta.LastSeenDate
+		items[i].SeenCount = meta.SeenCount
+		items[i].ObservationDays = meta.ObservationDays
+		items[i].ObservationStatus = meta.ObservationStatus
+		items[i].ObservationReason = meta.ObservationReason
+		items[i].ObservationResult = meta.ObservationResult
+	}
 }
 
 func (app *App) ListLimitBreakoutModelRuns(limit int) ([]LimitUpModelRunSummary, error) {
@@ -2478,7 +3144,11 @@ func (app *App) ListLimitBreakoutModelPredictions(runID string, limit int) ([]Li
 		item.IsLatest = latest != 0
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	app.syncLimitModelPredictionObservation("limit_breakout", runID, out)
+	return out, nil
 }
 
 func (app *App) ListLimitBreakoutModelTimeMachineSlices(runID string, limit int) ([]LimitUpModelTimeMachineSlice, error) {
@@ -2719,6 +3389,7 @@ func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	app.syncT0RecommendationObservation(out)
 	return out, nil
 }
 
@@ -2773,6 +3444,7 @@ func (app *App) ListT0DataPullCandidates(limit int) ([]T0DataPullCandidate, erro
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	app.syncT0DataPullObservation(out)
 	return out, nil
 }
 
@@ -2804,6 +3476,66 @@ func (app *App) ListT0DailyRuns(limit int) ([]T0DailyRunSummary, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (app *App) syncT0DataPullObservation(items []T0DataPullCandidate) {
+	if len(items) == 0 || app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	runID := ""
+	_ = app.database.Conn().QueryRow(`SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	if runID == "" {
+		runID = "t0_daily_latest"
+	}
+	tradeDate := items[0].TradeDate
+	candidates := make([]strategyObservationCandidate, 0, len(items))
+	for i, item := range items {
+		reason := firstNonEmpty(item.Setup, item.FirstAction, item.Action)
+		if len(item.Reasons) > 0 {
+			reason = strings.Join(item.Reasons[:minInt(len(item.Reasons), 2)], "；")
+		}
+		candidates = append(candidates, strategyObservationCandidate{
+			Strategy:  "t0_daily",
+			RunID:     runID,
+			TradeDate: item.TradeDate,
+			TSCode:    item.TSCode,
+			Name:      item.Name,
+			Industry:  item.Industry,
+			RankNo:    i + 1,
+			Score:     item.Score,
+			RankPct:   item.Score / 100,
+			Price:     item.Price,
+			PctChg:    item.TodayPct,
+			Reason:    reason,
+		})
+	}
+	_ = app.syncStrategyObservationPool("t0_daily", runID, tradeDate, candidates)
+	for i := range items {
+		meta := app.strategyObservationMeta("t0_daily", items[i].TSCode, items[i].TradeDate, items[i].Price)
+		items[i].FirstSeenDate = meta.FirstSeenDate
+		items[i].LastSeenDate = meta.LastSeenDate
+		items[i].SeenCount = meta.SeenCount
+		items[i].ObservationDays = meta.ObservationDays
+		items[i].ObservationStatus = meta.ObservationStatus
+		items[i].ObservationReason = meta.ObservationReason
+		items[i].ObservationResult = meta.ObservationResult
+	}
+}
+
+func (app *App) syncT0RecommendationObservation(items []T0Recommendation) {
+	if len(items) == 0 || app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	for i := range items {
+		meta := app.strategyObservationMeta("t0_daily", items[i].TSCode, items[i].TradeDate, items[i].Price)
+		items[i].FirstSeenDate = meta.FirstSeenDate
+		items[i].LastSeenDate = meta.LastSeenDate
+		items[i].SeenCount = meta.SeenCount
+		items[i].ObservationDays = meta.ObservationDays
+		items[i].ObservationStatus = meta.ObservationStatus
+		items[i].ObservationReason = meta.ObservationReason
+		items[i].ObservationResult = meta.ObservationResult
+	}
 }
 
 func (app *App) ListT0DailyBacktests(limit int) ([]T0DailyBacktest, error) {
@@ -3080,7 +3812,499 @@ func (app *App) GetPositionRecommendation() (position.Recommendation, error) {
 	if err := app.ensurePositionService(); err != nil {
 		return position.Recommendation{}, err
 	}
-	return app.positionService.GetRecommendation(app.settings.DataPath)
+	return app.buildAccountRebalanceRecommendation()
+}
+
+type accountTarget struct {
+	TSCode       string
+	Name         string
+	Industry     string
+	Price        float64
+	PctChg       float64
+	TargetWeight float64
+	Sources      []position.Source
+}
+
+func (app *App) buildAccountRebalanceRecommendation() (position.Recommendation, error) {
+	if app.database == nil {
+		return position.Recommendation{}, errors.New("database is not initialized")
+	}
+	summary, err := app.positionService.GetSummary(app.settings.DataPath)
+	if err != nil {
+		return position.Recommendation{}, err
+	}
+	targets := map[string]*accountTarget{}
+	date := app.latestRecommendationDate()
+	activeVersions := app.accountRebalanceStrategyVersions()
+	app.mergeFactorTargets(targets)
+	app.mergeLimitUpModelTargets(targets)
+	app.mergeBreakoutModelTargets(targets)
+	app.mergeT0Targets(targets, summary)
+	rows := app.buildAccountRebalanceRows(targets, summary)
+	totalWeight := targetWeightSum(targets)
+	nBuy := 0
+	nSell := 0
+	for _, row := range rows {
+		switch row.Action {
+		case "新建", "加仓":
+			nBuy++
+		case "减仓", "清仓":
+			nSell++
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Action != rows[j].Action {
+			return actionRank(rows[i].Action) < actionRank(rows[j].Action)
+		}
+		return math.Abs(rows[i].DeltaWeight) > math.Abs(rows[j].DeltaWeight)
+	})
+	rec := position.Recommendation{
+		Date:                   date,
+		GeneratedAt:            time.Now().Format(time.RFC3339),
+		TotalWeight:            totalWeight,
+		NHoldings:              len(targets),
+		NBuy:                   nBuy,
+		NSell:                  nSell,
+		Rows:                   rows,
+		ActiveStrategyVersions: activeVersions,
+	}
+	if rec.Date != "" {
+		var count int
+		err := app.database.Conn().QueryRow(`SELECT COUNT(*) FROM portfolio_pool_trades WHERE trade_date = ?`, rec.Date).Scan(&count)
+		if err != nil {
+			return position.Recommendation{}, err
+		}
+		rec.Rebalanced = count > 0
+		rec.RebalanceTrades = count
+	}
+	return rec, nil
+}
+
+func targetWeightSum(targets map[string]*accountTarget) float64 {
+	total := 0.0
+	for _, item := range targets {
+		total += math.Max(item.TargetWeight, 0)
+	}
+	if total > 0.92 {
+		return 0.92
+	}
+	return total
+}
+
+func actionRank(action string) int {
+	switch action {
+	case "新建":
+		return 1
+	case "加仓":
+		return 2
+	case "减仓":
+		return 3
+	case "清仓":
+		return 4
+	default:
+		return 9
+	}
+}
+
+func (app *App) latestRecommendationDate() string {
+	dates := []string{}
+	var date string
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date),'') FROM market_limit_momentum_cache`).Scan(&date); err == nil && date != "" {
+		dates = append(dates, date)
+	}
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(latest_date),'') FROM market_limit_breakout_cache`).Scan(&date); err == nil && date != "" {
+		dates = append(dates, date)
+	}
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date),'') FROM limit_up_model_predictions WHERE is_latest = 1`).Scan(&date); err == nil && date != "" {
+		dates = append(dates, date)
+	}
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date),'') FROM limit_breakout_model_predictions WHERE is_latest = 1`).Scan(&date); err == nil && date != "" {
+		dates = append(dates, date)
+	}
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date),'') FROM factor_latest_predictions`).Scan(&date); err == nil && date != "" {
+		dates = append(dates, date)
+	}
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date),'') FROM t0_daily_candidates`).Scan(&date); err == nil && date != "" {
+		dates = append(dates, date)
+	}
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(date),'') FROM rec_daily_recommendations`).Scan(&date); err == nil && date != "" {
+		dates = append(dates, date)
+	}
+	sort.Strings(dates)
+	if len(dates) > 0 {
+		return dates[len(dates)-1]
+	}
+	return time.Now().Format("20060102")
+}
+
+func (app *App) accountRebalanceStrategyVersions() []position.RecommendationStrategyVersion {
+	out := []position.RecommendationStrategyVersion{
+		{Strategy: "account_rebalance", Label: "账户调仓决策器", Version: 1, Mode: "active", Weight: 1},
+		{Strategy: "ml_factor_ranker", Label: "通用因子截面", Version: 1, Mode: "source", Weight: 0.25},
+		{Strategy: "limit_up_model", Label: "涨停预警模型", Version: 1, Mode: "source", Weight: 0.25},
+		{Strategy: "limit_breakout_model", Label: "横盘预警模型", Version: 1, Mode: "source", Weight: 0.25},
+		{Strategy: "t0_daily", Label: "做T助手", Version: 1, Mode: "source", Weight: 0.2},
+	}
+	return out
+}
+
+func (app *App) targetFor(targets map[string]*accountTarget, tsCode, name, industry string, price, pctChg float64) *accountTarget {
+	key := strings.TrimSpace(tsCode)
+	if key == "" {
+		return nil
+	}
+	item := targets[key]
+	if item == nil {
+		item = &accountTarget{TSCode: key}
+		targets[key] = item
+	}
+	if item.Name == "" {
+		item.Name = name
+	}
+	if item.Industry == "" {
+		item.Industry = industry
+	}
+	if item.Price <= 0 && price > 0 {
+		item.Price = price
+	}
+	if item.PctChg == 0 && pctChg != 0 {
+		item.PctChg = pctChg
+	}
+	return item
+}
+
+func (app *App) addTargetWeight(targets map[string]*accountTarget, tsCode, name, industry string, price, pctChg, weight float64, strategy string) {
+	if weight <= 0 {
+		return
+	}
+	item := app.targetFor(targets, tsCode, name, industry, price, pctChg)
+	if item == nil {
+		return
+	}
+	item.TargetWeight += weight
+	item.Sources = append(item.Sources, position.Source{Strategy: strategy, Weight: weight})
+}
+
+func (app *App) mergeBaseRecommendationTargets(targets map[string]*accountTarget) {
+	rec, err := app.positionService.GetRecommendation(app.settings.DataPath)
+	if err != nil {
+		return
+	}
+	for _, row := range rec.Rows {
+		if row.ToWeight <= 0 || row.Action == "清仓" {
+			continue
+		}
+		weight := math.Min(row.ToWeight, 0.08)
+		app.addTargetWeight(targets, row.TSCode, row.Name, row.Industry, row.Price, row.PctChg, weight, "daily_recommendation")
+	}
+}
+
+func (app *App) mergeFactorTargets(targets map[string]*accountTarget) {
+	runID := strings.TrimSpace(app.latestFactorRunIDValue())
+	if runID == "" {
+		return
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT p.ts_code, COALESCE(s.name, ''), COALESCE(s.industry, ''),
+		       COALESCE(d.close, 0), COALESCE(d.pct_chg, 0),
+		       COALESCE(p.pred_score, 0), COALESCE(p.pred_rank, 0)
+		FROM factor_latest_predictions p
+		LEFT JOIN data_stock_basic s ON s.ts_code = p.ts_code
+		LEFT JOIN data_daily_bars d ON d.ts_code = p.ts_code AND d.trade_date = p.trade_date
+		WHERE p.run_id = ? AND COALESCE(p.is_top20, 0) = 1
+		ORDER BY p.pred_score DESC
+		LIMIT 8`, runID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	total := 0.0
+	for rows.Next() {
+		if total >= 0.16 {
+			break
+		}
+		var tsCode, name, industry string
+		var price, pctChg, score, rankPct float64
+		if err := rows.Scan(&tsCode, &name, &industry, &price, &pctChg, &score, &rankPct); err != nil {
+			continue
+		}
+		if price <= 0 {
+			continue
+		}
+		weight := 0.02
+		if score > 0 {
+			weight = clamp(score/40, 0.015, 0.035)
+		} else if rankPct > 0 {
+			weight = clamp(rankPct/30, 0.015, 0.035)
+		}
+		if total+weight > 0.16 {
+			weight = 0.16 - total
+		}
+		app.addTargetWeight(targets, tsCode, name, industry, price, pctChg, weight, "ml_factor_ranker")
+		total += weight
+	}
+}
+
+func (app *App) latestFactorRunIDValue() string {
+	var runID string
+	if app.database != nil {
+		_ = app.database.Conn().QueryRow(`
+			SELECT run_id
+			FROM factor_latest_predictions
+			GROUP BY run_id
+			ORDER BY MAX(trade_date) DESC, MAX(model_path) DESC
+			LIMIT 1`).Scan(&runID)
+	}
+	if strings.TrimSpace(runID) != "" {
+		return runID
+	}
+	runID, _ = app.latestFactorRunID()
+	return runID
+}
+
+func (app *App) mergeLimitUpModelTargets(targets map[string]*accountTarget) {
+	run := app.latestLimitUpModelRunSummary()
+	if !limitModelTradeLayerPass(run, "momentum") {
+		return
+	}
+	items, err := app.ListLimitUpModelPredictions("", 10)
+	if err != nil {
+		return
+	}
+	total := 0.0
+	for _, item := range items {
+		if total >= 0.12 {
+			break
+		}
+		if item.Prob < 0.62 || item.ModelScore < 72 || item.Price <= 0 {
+			continue
+		}
+		weight := clamp((item.ModelScore-65)/700+0.018, 0.02, 0.035)
+		if total+weight > 0.12 {
+			weight = 0.12 - total
+		}
+		app.addTargetWeight(targets, item.TSCode, item.Name, item.Industry, item.Price, item.TodayPct, weight, "limit_up_model")
+		total += weight
+	}
+}
+
+func (app *App) mergeBreakoutModelTargets(targets map[string]*accountTarget) {
+	run := app.latestLimitBreakoutModelRunSummary()
+	if !limitModelTradeLayerPass(run, "breakout") {
+		return
+	}
+	items, err := app.ListLimitBreakoutModelPredictions("", 10)
+	if err != nil {
+		return
+	}
+	total := 0.0
+	for _, item := range items {
+		if total >= 0.12 {
+			break
+		}
+		if item.Prob < 0.58 || item.ModelScore < 72 || item.Price <= 0 {
+			continue
+		}
+		weight := clamp((item.ModelScore-65)/800+0.018, 0.02, 0.035)
+		if total+weight > 0.12 {
+			weight = 0.12 - total
+		}
+		app.addTargetWeight(targets, item.TSCode, item.Name, item.Industry, item.Price, item.TodayPct, weight, "limit_breakout_model")
+		total += weight
+	}
+}
+
+func (app *App) latestLimitUpModelRunSummary() *LimitUpModelRunSummary {
+	rows, err := app.ListLimitUpModelRuns(1)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	return &rows[0]
+}
+
+func (app *App) latestLimitBreakoutModelRunSummary() *LimitUpModelRunSummary {
+	rows, err := app.ListLimitBreakoutModelRuns(1)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	return &rows[0]
+}
+
+func limitModelTradeLayerPass(run *LimitUpModelRunSummary, variant string) bool {
+	if run == nil || run.TopReturn <= 0 || run.TopExcessReturn <= 0 {
+		return false
+	}
+	trading := bestLimitTradingValidation(run.SummaryJSON)
+	if trading == nil || trading.AvgReturn <= 0 || trading.CompoundReturn <= 0 {
+		return false
+	}
+	if variant == "momentum" {
+		return trading.MaxDrawdown > -0.35
+	}
+	return true
+}
+
+type limitTradingValidation struct {
+	AvgReturn      float64 `json:"avg_return"`
+	CompoundReturn float64 `json:"compound_return"`
+	MaxDrawdown    float64 `json:"max_drawdown"`
+}
+
+func bestLimitTradingValidation(summaryJSON string) *limitTradingValidation {
+	var payload struct {
+		TradingValidation []limitTradingValidation `json:"trading_validation"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(summaryJSON)), &payload); err != nil {
+		return nil
+	}
+	var best *limitTradingValidation
+	for i := range payload.TradingValidation {
+		item := &payload.TradingValidation[i]
+		if best == nil || item.CompoundReturn > best.CompoundReturn {
+			best = item
+		}
+	}
+	return best
+}
+
+func (app *App) mergeT0Targets(targets map[string]*accountTarget, summary position.Summary) {
+	if len(summary.Positions) == 0 {
+		return
+	}
+	currentWeight := map[string]float64{}
+	for _, holding := range summary.Positions {
+		currentWeight[holding.TSCode] = holding.Weight
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT ts_code, COALESCE(name,''), COALESCE(industry,''), COALESCE(score,0), COALESCE(action,''), COALESCE(price,0), COALESCE(today_pct,0)
+		FROM t0_daily_candidates
+		WHERE run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
+		ORDER BY score DESC
+		LIMIT 80`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tsCode, name, industry, action string
+		var score, price, pctChg float64
+		if err := rows.Scan(&tsCode, &name, &industry, &score, &action, &price, &pctChg); err != nil {
+			continue
+		}
+		base, ok := currentWeight[tsCode]
+		if !ok || score < 58 {
+			continue
+		}
+		weight := math.Min(base, 0.08)
+		if strings.Contains(action, "不建议") || score < 65 {
+			weight = math.Min(base*0.7, weight)
+		}
+		app.addTargetWeight(targets, tsCode, name, industry, price, pctChg, weight, "t0_daily")
+	}
+}
+
+func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, summary position.Summary) []position.RecommendationItem {
+	current := map[string]position.Position{}
+	for _, item := range summary.Positions {
+		current[item.TSCode] = item
+		if _, ok := targets[item.TSCode]; !ok {
+			targets[item.TSCode] = &accountTarget{
+				TSCode:       item.TSCode,
+				Name:         item.Name,
+				Industry:     item.Industry,
+				Price:        item.Price,
+				TargetWeight: item.Weight,
+				Sources:      []position.Source{{Strategy: "account_rebalance", Weight: item.Weight}},
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return []position.RecommendationItem{}
+	}
+	scale := 1.0
+	total := 0.0
+	for _, item := range targets {
+		total += item.TargetWeight
+	}
+	if total > 0.92 {
+		scale = 0.92 / total
+	}
+	rows := make([]position.RecommendationItem, 0, len(targets))
+	for _, item := range targets {
+		holding := current[item.TSCode]
+		fromWeight := holding.Weight
+		price := item.Price
+		if price <= 0 {
+			price = holding.Price
+		}
+		toWeight := item.TargetWeight * scale
+		if toWeight < 0.005 {
+			toWeight = 0
+		}
+		targetAmount := summary.TotalAssets * toWeight
+		targetShares := 0
+		if price > 0 && targetAmount > 0 {
+			targetShares = int(targetAmount/price/100) * 100
+		}
+		if holding.Shares > 0 && targetShares > 0 && math.Abs(float64(targetShares-holding.Shares)) < 100 {
+			targetShares = holding.Shares
+			toWeight = fromWeight
+			targetAmount = float64(targetShares) * price
+		}
+		action := "持有"
+		if holding.Shares <= 0 && targetShares > 0 {
+			action = "新建"
+		} else if holding.Shares > 0 && targetShares <= 0 {
+			action = "清仓"
+		} else if targetShares > holding.Shares {
+			action = "加仓"
+		} else if targetShares < holding.Shares {
+			action = "减仓"
+		}
+		if action == "持有" {
+			continue
+		}
+		rows = append(rows, position.RecommendationItem{
+			Action:       action,
+			TSCode:       item.TSCode,
+			Name:         firstNonEmpty(item.Name, holding.Name),
+			Industry:     firstNonEmpty(item.Industry, holding.Industry),
+			FromWeight:   fromWeight,
+			ToWeight:     toWeight,
+			DeltaWeight:  toWeight - fromWeight,
+			Price:        price,
+			PctChg:       item.PctChg,
+			TargetShares: targetShares,
+			TargetAmount: targetAmount,
+			Sources:      compactSources(item.Sources),
+		})
+	}
+	return rows
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func compactSources(sources []position.Source) []position.Source {
+	weights := map[string]float64{}
+	for _, source := range sources {
+		if source.Strategy == "" || source.Weight <= 0 {
+			continue
+		}
+		weights[source.Strategy] += source.Weight
+	}
+	out := make([]position.Source, 0, len(weights))
+	for strategy, weight := range weights {
+		out = append(out, position.Source{Strategy: strategy, Weight: weight})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Weight > out[j].Weight })
+	return out
 }
 
 func (app *App) GeneratePositionSignal(req position.GenerateSignalRequest) (position.GenerateSignalResponse, error) {
@@ -3616,15 +4840,6 @@ func isSignalCancelError(err error) bool {
 		strings.Contains(message, "killed") ||
 		strings.Contains(message, "interrupt") ||
 		strings.Contains(message, "cancel")
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func stringParam(params map[string]any, key string, fallback string) string {
@@ -9766,9 +10981,15 @@ func isQuantCoreRoot(path string) bool {
 }
 
 func pythonPathForCore(quantRoot string) string {
-	candidate := filepath.Join(quantRoot, ".venv", "bin", "python")
-	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-		return candidate
+	repoRoot := filepath.Dir(quantRoot)
+	for _, candidate := range []string{
+		filepath.Join(quantRoot, ".venv", "bin", "python"),
+		filepath.Join(repoRoot, "quant_stock_desktop", ".venv", "bin", "python"),
+		filepath.Join(repoRoot, ".venv", "bin", "python"),
+	} {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
 	}
 	if w := bundledWorkerPath(); w != "" {
 		return w

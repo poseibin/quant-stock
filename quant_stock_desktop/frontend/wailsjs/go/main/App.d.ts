@@ -98,6 +98,8 @@ export function ListFactorModelFeatures(arg1:string,arg2:number):Promise<Array<m
 
 export function ListFactorModelPredictions(arg1:string,arg2:number):Promise<Array<main.FactorModelPrediction>>;
 
+export function ListFactorObservationEvents(arg1:number):Promise<Array<main.FactorObservationEvent>>;
+
 export function ListFactorResearchRuns(arg1:number):Promise<Array<main.FactorResearchRunSummary>>;
 
 export function ListFactorStateICResults(arg1:string,arg2:number):Promise<Array<main.FactorStateICResult>>;

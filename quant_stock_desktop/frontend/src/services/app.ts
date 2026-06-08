@@ -59,6 +59,7 @@ declare global {
           ListFactorCorrelationResults: (runID: string, limit: number) => Promise<FactorCorrelationResult[]>
           ListFactorStressResults: (runID: string, limit: number) => Promise<FactorStressResult[]>
           ListFactorLatestPredictions: (runID: string, limit: number) => Promise<FactorLatestPrediction[]>
+          ListFactorObservationEvents: (limit: number) => Promise<FactorObservationEvent[]>
           ListFactorAdmissionComparisons: (limit: number) => Promise<FactorAdmissionComparison[]>
           ListCrashWarningRuns: (limit: number) => Promise<CrashWarningRunSummary[]>
           ListCrashWarningFeatures: (runID: string, limit: number) => Promise<CrashWarningFeature[]>
@@ -516,10 +517,40 @@ export interface FactorLatestPrediction {
   run_id: string
   trade_date: string
   ts_code: string
+  name: string
+  industry: string
+  price: number
+  pct_chg: number
   pred_score: number
   pred_rank: number
   is_top20: boolean
   model_path: string
+  first_seen_date: string
+  last_seen_date: string
+  seen_count: number
+  observation_days: number
+  observation_status: string
+  observation_reason: string
+  observation_result: string
+}
+
+export interface FactorObservationEvent {
+  strategy: string
+  run_id: string
+  trade_date: string
+  ts_code: string
+  name: string
+  industry: string
+  event_type: string
+  rank_no: number
+  score: number
+  rank_pct: number
+  reason: string
+  first_seen_date: string
+  last_seen_date: string
+  seen_count: number
+  observation_status: string
+  created_at: string
 }
 
 export interface FactorAdmissionComparison {
@@ -622,6 +653,13 @@ export interface LimitUpModelPrediction {
   is_latest: boolean
   summary_json: string
   updated_at: string
+  first_seen_date: string
+  last_seen_date: string
+  seen_count: number
+  observation_days: number
+  observation_status: string
+  observation_reason: string
+  observation_result: string
 }
 
 export interface LimitUpModelTimeMachineSlice {
@@ -819,6 +857,13 @@ export interface LimitBreakoutCandidate {
   reasons: string[]
   bars: BreakoutBar[]
   projected_bars: BreakoutBar[]
+  first_seen_date: string
+  last_seen_date: string
+  seen_count: number
+  observation_days: number
+  observation_status: string
+  observation_reason: string
+  observation_result: string
 }
 
 export interface LimitUpMomentumQuery {
@@ -860,6 +905,13 @@ export interface LimitUpMomentumCandidate {
   risks: string[]
   bars?: BreakoutBar[]
   projected_bars?: BreakoutBar[]
+  first_seen_date: string
+  last_seen_date: string
+  seen_count: number
+  observation_days: number
+  observation_status: string
+  observation_reason: string
+  observation_result: string
 }
 
 export interface LimitSignalEvaluationSummary {
@@ -939,6 +991,13 @@ export interface T0Recommendation {
   reasons: string[]
   risks: string[]
   generated_at: string
+  first_seen_date: string
+  last_seen_date: string
+  seen_count: number
+  observation_days: number
+  observation_status: string
+  observation_reason: string
+  observation_result: string
 }
 
 export interface T0DataPullCandidate {
@@ -970,6 +1029,13 @@ export interface T0DataPullCandidate {
   reasons: string[]
   risks: string[]
   generated_at: string
+  first_seen_date: string
+  last_seen_date: string
+  seen_count: number
+  observation_days: number
+  observation_status: string
+  observation_reason: string
+  observation_result: string
 }
 
 export interface T0DailyBacktest {
@@ -1352,6 +1418,13 @@ export async function listFactorStressResults(runID = '', limit = 160): Promise<
 export async function listFactorLatestPredictions(runID = '', limit = 120): Promise<FactorLatestPrediction[]> {
   if (window.go?.main?.App?.ListFactorLatestPredictions) {
     return (await window.go.main.App.ListFactorLatestPredictions(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listFactorObservationEvents(limit = 80): Promise<FactorObservationEvent[]> {
+  if (window.go?.main?.App?.ListFactorObservationEvents) {
+    return (await window.go.main.App.ListFactorObservationEvents(limit)) || []
   }
   return []
 }
