@@ -54,6 +54,7 @@ def main() -> None:
 
     os.environ["QUANT_STRATEGY_VERSION_MODE"] = args.strategy_version_mode
     os.environ["QUANT_STRATEGY_VERSION_JSON"] = args.strategy_version_json
+    os.environ.setdefault("QUANT_REQUIRE_ML_FACTOR_RUN_ID", "1")
 
     names = _resolve_strategy_names(args.strategies)
     eval_names = list(names)

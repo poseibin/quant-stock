@@ -53,6 +53,8 @@ def _load_predictions(start: str, end: str, run_id: str) -> pd.DataFrame:
     db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
     with connect_db(db_path) as conn:
         if not run_id:
+            if os.getenv("QUANT_REQUIRE_ML_FACTOR_RUN_ID", "").strip().lower() in {"1", "true", "yes"}:
+                return pd.DataFrame()
             row = conn.execute(
                 "SELECT run_id FROM factor_model_runs WHERE status = ? ORDER BY updated_at DESC LIMIT 1",
                 ("success",),

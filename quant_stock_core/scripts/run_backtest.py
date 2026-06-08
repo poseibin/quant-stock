@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -31,6 +32,7 @@ def main() -> None:
     parser.add_argument("--slippage", type=float, default=0.002)
     parser.add_argument("--save", default=None, help="结果保存路径前缀")
     args = parser.parse_args()
+    os.environ.setdefault("QUANT_REQUIRE_ML_FACTOR_RUN_ID", "1")
 
     strategy = registry.build(args.strategy)
 

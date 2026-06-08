@@ -627,6 +627,13 @@ def build_candidates(df: pd.DataFrame, run_id: str, limit: int, metric_window: i
     return candidates[:limit]
 
 
+def candidate_pool_limit(display_limit: int, explicit_pool_limit: int = 0) -> int:
+    display = max(1, int(display_limit))
+    if explicit_pool_limit > 0:
+        return max(display, int(explicit_pool_limit))
+    return max(display, display * 3)
+
+
 def t0_model_feature_row(row: pd.Series, candidate: Candidate) -> dict[str, float]:
     return {
         "rule_score": safe_float(candidate.score),
@@ -1176,6 +1183,7 @@ def run_time_machine(
     lookback: int,
     eval_days: int,
     limit: int,
+    candidate_pool: int = 0,
     model_history_days: int = 1600,
     model_cache: dict[str, dict[str, object]] | None = None,
     data_path: str = ".",
@@ -1185,6 +1193,8 @@ def run_time_machine(
     as_of_rows = df[df["trade_date"] == as_of].copy()
     candidates = [score_row(row, run_id) for _, row in as_of_rows.iterrows()]
     candidates = [item for item in candidates if item.score >= 52]
+    candidates.sort(key=lambda item: (item.score, item.avg_amount_20d), reverse=True)
+    candidates = candidates[:candidate_pool_limit(limit, candidate_pool)]
     cache_key = f"{as_of}|{lookback}|{model_history_days}"
     if model_cache is not None and cache_key in model_cache:
         model_summary = model_cache[cache_key]
@@ -1400,6 +1410,7 @@ def run_time_machine_grid(
     lookbacks: list[int],
     eval_days_list: list[int],
     limit: int,
+    candidate_pool: int,
     anchor_count: int,
     anchor_step: int,
     model_history_days: int = 1600,
@@ -1419,7 +1430,7 @@ def run_time_machine_grid(
                 step += 1
                 run_status.progress(TIMEMACHINE_TASK_NAME, step, total + 1, "grid", f"压测窗口 lookback={lookback}, eval={eval_days}, as_of={anchor}")
                 window_run_id = f"{run_id}_lb{lookback}_ev{eval_days}_{anchor}"
-                result = run_time_machine(window_run_id, anchor, lookback, eval_days, limit, model_history_days, model_cache, data_path)
+                result = run_time_machine(window_run_id, anchor, lookback, eval_days, limit, candidate_pool, model_history_days, model_cache, data_path)
                 anchor_results.append({
                     "run_id": result["run_id"],
                     "as_of_date": result.get("as_of_date", ""),
@@ -1440,7 +1451,7 @@ def run_time_machine_grid(
         raise RuntimeError("做T时光机网格没有可用窗口")
     run_status.progress(TIMEMACHINE_TASK_NAME, total, total + 1, "best", "写入最佳稳定窗口")
     final_as_of = as_of_date or str((best.get("anchors") or [""])[0])
-    final = run_time_machine(run_id, final_as_of, int(best["lookback"]), int(best["eval_days"]), limit, model_history_days, model_cache, data_path)
+    final = run_time_machine(run_id, final_as_of, int(best["lookback"]), int(best["eval_days"]), limit, candidate_pool, model_history_days, model_cache, data_path)
     avg_returns = [safe_float(row.get("mean_avg_combined_return")) for row in windows]
     worst_returns = [safe_float(row.get("worst_avg_combined_return")) for row in windows]
     positive = [row for row in windows if safe_float(row.get("positive_anchor_rate")) >= 0.67]
@@ -1486,6 +1497,7 @@ def main() -> None:
     parser.add_argument("--history-days", type=int, default=520)
     parser.add_argument("--model-history-days", type=int, default=2200)
     parser.add_argument("--limit", type=int, default=120)
+    parser.add_argument("--candidate-pool-limit", type=int, default=0)
     parser.add_argument("--backtest-limit", type=int, default=80)
     args = parser.parse_args()
 
@@ -1501,16 +1513,17 @@ def main() -> None:
             eval_days_list = parse_int_grid(args.eval_days_grid, [args.eval_days])
             run_status.progress(task_name, 2, 5, "timemachine", "选择历史截面并评估后续收益")
             if len(lookbacks) > 1 or len(eval_days_list) > 1:
-                result = run_time_machine_grid(run_id, args.as_of_date.strip(), lookbacks, eval_days_list, args.limit, args.anchor_count, args.anchor_step, args.model_history_days, args.data_path or ".")
+                result = run_time_machine_grid(run_id, args.as_of_date.strip(), lookbacks, eval_days_list, args.limit, args.candidate_pool_limit, args.anchor_count, args.anchor_step, args.model_history_days, args.data_path or ".")
             else:
-                result = run_time_machine(run_id, args.as_of_date.strip(), args.lookback, args.eval_days, args.limit, args.model_history_days, None, args.data_path or ".")
+                result = run_time_machine(run_id, args.as_of_date.strip(), args.lookback, args.eval_days, args.limit, args.candidate_pool_limit, args.model_history_days, None, args.data_path or ".")
             run_status.progress(task_name, 5, 5, "write", "写入做T时光机结果")
             run_status.done(task_name, f"完成做T时光机：候选 {result['candidate_count']}，评估 {result['evaluated_count']}")
             print(json.dumps(result, ensure_ascii=False))
             return
         run_status.progress(task_name, 2, 6, "daily", "读取最近日线并粗筛")
         recent = read_recent_daily(args.lookback)
-        candidates = build_candidates(recent, run_id, args.limit, args.lookback)
+        pool_limit = candidate_pool_limit(args.limit, args.candidate_pool_limit)
+        candidates = build_candidates(recent, run_id, pool_limit, args.lookback)
         latest_metrics = add_metrics(recent, args.lookback)
         latest_metrics = latest_metrics[latest_metrics["trade_date"] == str(latest_metrics["trade_date"].max())].copy()
         run_status.progress(task_name, 3, 6, "train", "全市场历史训练做T准入模型")
@@ -1523,7 +1536,7 @@ def main() -> None:
         run_status.progress(task_name, 5, 6, "backtest", "执行日线近似回测")
         backtests = backtest_candidates(history, run_id, args.lookback)
         candidates = apply_effective_scores(candidates, backtests)
-        candidates = apply_model_scores(candidates, model_summary)
+        candidates = candidates[: args.limit]
         run_status.progress(task_name, 6, 6, "write", "写入做T模型与推荐结果")
         write_results(run_id, candidates, backtests, model_summary)
         run_status.done(task_name, f"完成日线做T研究：候选 {len(candidates)}，回测 {len(backtests)}")
