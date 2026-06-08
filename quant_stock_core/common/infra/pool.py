@@ -192,7 +192,7 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                     if net_amount > current_cash + 1e-6:
                         raise ValueError(f"现金不足: 需要 {net_amount:.2f}, 仅有 {current_cash:.2f}")
                     new_shares = cur_shares + shares
-                    new_cost = (cur_cost * cur_shares + net_amount) / new_shares if new_shares > 0 else 0.0
+                    new_cost = (cur_cost * cur_shares + amount) / new_shares if new_shares > 0 else 0.0
                     current_cash -= net_amount
                     if row:
                         conn.execute(

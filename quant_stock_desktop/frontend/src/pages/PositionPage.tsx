@@ -355,7 +355,7 @@ function RebalancePanel({ recommendation, loading, saving, rebalanced, rebalance
               <th>现持股</th>
               <th>目标股</th>
               <th>交易股数</th>
-              <th>价格</th>
+              <th>成交价</th>
               <th>交易金额</th>
               <th>仓位变化</th>
               <th>来源策略</th>

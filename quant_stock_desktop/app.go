@@ -3798,6 +3798,7 @@ func (app *App) ConfirmPositionTrades(trades []position.TradeRequest) (position.
 	if err := app.ensurePositionService(); err != nil {
 		return position.Summary{}, err
 	}
+	app.applyLatestExecutionPrices(trades)
 	return app.positionService.ConfirmTrades(app.settings.DataPath, trades)
 }
 
@@ -3806,6 +3807,32 @@ func (app *App) ClearPositionPool() (position.Summary, error) {
 		return position.Summary{}, err
 	}
 	return app.positionService.ClearPool(app.settings.DataPath, app.settings.DefaultInitialCash)
+}
+
+func (app *App) applyLatestExecutionPrices(trades []position.TradeRequest) {
+	for i := range trades {
+		price := app.latestClosePrice(trades[i].TSCode)
+		if price > 0 {
+			trades[i].Price = price
+		}
+	}
+}
+
+func (app *App) latestClosePrice(tsCode string) float64 {
+	if app.database == nil || app.database.Conn() == nil || strings.TrimSpace(tsCode) == "" {
+		return 0
+	}
+	var price float64
+	err := app.database.Conn().QueryRow(`
+		SELECT COALESCE(close, 0)
+		FROM data_daily_bars
+		WHERE ts_code = ?
+		ORDER BY trade_date DESC
+		LIMIT 1`, strings.TrimSpace(tsCode)).Scan(&price)
+	if err != nil || price <= 0 {
+		return 0
+	}
+	return price
 }
 
 func (app *App) GetPositionRecommendation() (position.Recommendation, error) {
@@ -4233,7 +4260,10 @@ func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, sum
 	for _, item := range targets {
 		holding := current[item.TSCode]
 		fromWeight := holding.Weight
-		price := item.Price
+		price := app.latestClosePrice(item.TSCode)
+		if price <= 0 {
+			price = item.Price
+		}
 		if price <= 0 {
 			price = holding.Price
 		}
