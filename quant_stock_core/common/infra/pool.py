@@ -19,6 +19,13 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _norm_trade_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text.replace("-", "")[:8]
+
+
 def _trade_fee(amount: float, side: str, slippage: float | None = None) -> float:
     slip = DEFAULT_SLIPPAGE if slippage is None else float(slippage)
     rate = COMMISSION_RATE + slip
@@ -313,7 +320,11 @@ def refresh_valuation(date: str | None = None) -> None:
             for _, br in last.iterrows():
                 close_val = float(br["close"]) if br["close"] is not None else 0.0
                 pre_close = float(br["pre_close"]) if br["pre_close"] not in (None, 0) else 0.0
-                bar_map[str(br["ts_code"])] = {"close": close_val, "pre_close": pre_close}
+                bar_map[str(br["ts_code"])] = {
+                    "close": close_val,
+                    "pre_close": pre_close,
+                    "trade_date": _norm_trade_date(br.get("trade_date")),
+                }
     except Exception:
         pass
 
@@ -324,6 +335,22 @@ def refresh_valuation(date: str | None = None) -> None:
     total_cost = 0.0
 
     with open_db() as conn:
+        today_buys: dict[str, dict[str, float]] = {}
+        bar_dates = sorted({str(v.get("trade_date") or "") for v in bar_map.values() if v.get("trade_date")})
+        valuation_date = bar_dates[-1] if bar_dates else _norm_trade_date(date)
+        if valuation_date:
+            rows = conn.execute(
+                """SELECT ts_code, COALESCE(SUM(shares),0), COALESCE(SUM(amount),0)
+                   FROM portfolio_pool_trades
+                   WHERE side='buy' AND REPLACE(trade_date, '-', '') = ?
+                   GROUP BY ts_code""",
+                (valuation_date,),
+            ).fetchall()
+            for r in rows:
+                shares_val = float(r[1] or 0)
+                amount_val = float(r[2] or 0)
+                today_buys[str(r[0])] = {"shares": shares_val, "amount": amount_val}
+
         conn.execute("BEGIN")
         try:
             for h in holdings_rows:
@@ -336,7 +363,18 @@ def refresh_valuation(date: str | None = None) -> None:
                 market_value = last_price * shares
                 pnl = (last_price - avg_cost) * shares
                 pnl_pct = (last_price / avg_cost - 1) * 100 if avg_cost > 0 else 0.0
-                today_pnl = (last_price - pre_close) * shares if pre_close > 0 else 0.0
+                buy_info = today_buys.get(ts, {})
+                today_buy_shares = min(float(shares), float(buy_info.get("shares") or 0.0))
+                today_buy_avg = (
+                    float(buy_info.get("amount") or 0.0) / today_buy_shares
+                    if today_buy_shares > 0 else avg_cost
+                )
+                overnight_shares = max(0.0, float(shares) - today_buy_shares)
+                today_pnl = 0.0
+                if pre_close > 0 and overnight_shares > 0:
+                    today_pnl += (last_price - pre_close) * overnight_shares
+                if today_buy_shares > 0:
+                    today_pnl += (last_price - today_buy_avg) * today_buy_shares
 
                 meta = name_map.get(ts, {})
                 conn.execute(

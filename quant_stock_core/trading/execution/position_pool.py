@@ -451,9 +451,15 @@ def compute_pnl(pool: dict, prices: dict[str, float] | None = None,
         upnl = mv - cost
         upnl_pct = upnl / cost if cost > 0 else 0
 
-        # 今日盈亏
+        # 今日盈亏：当日新建仓不应承接昨收盘到今收盘的涨跌。
+        # 这部分仓位只从实际入仓成本开始计算，否则刚买入就会显示一段并不存在的隔夜盈亏。
         prev_c = prev_closes.get(p["ts_code"])
-        if prev_c and prev_c > 0:
+        opened_today = str(p.get("first_entry_date") or "").replace("-", "")[:8] == today
+        if opened_today:
+            today_pnl = p["shares"] * (price - p["avg_cost"])
+            today_pct = (price / p["avg_cost"] - 1) if p["avg_cost"] > 0 else 0.0
+            today_base = cost
+        elif prev_c and prev_c > 0:
             today_pnl = p["shares"] * (price - prev_c)
             today_pct = (price - prev_c) / prev_c
             today_base = p["shares"] * prev_c
