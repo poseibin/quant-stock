@@ -9572,8 +9572,12 @@ func (app *App) runFactorResearchChildren(parent task.Task) {
 			app.finishFactorResearchParent(parent, task.StatusFailed, err.Error(), children)
 			return
 		}
-		next := runnablePortfolioChildren(children, 1)
-		if len(next) == 0 {
+		next, blockedByFailedStage := nextFactorResearchChild(children)
+		if next.ID == "" {
+			if blockedByFailedStage {
+				app.finishFactorResearchParent(parent, task.StatusFailed, "前置研究阶段失败", children)
+				return
+			}
 			status := portfolioParentStatus(children)
 			if status != task.StatusRunning {
 				app.finishFactorResearchParent(parent, status, "", children)
@@ -9587,8 +9591,17 @@ func (app *App) runFactorResearchChildren(parent task.Task) {
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		app.startChildTaskBatch(next[:1], app.startFactorResearchChildTaskSync)
-		time.Sleep(1 * time.Second)
+		next.Status = task.StatusQueued
+		next.UpdatedAt = time.Now()
+		_ = app.taskService.Repository().UpdateStatus(next)
+		_ = app.taskService.Repository().UpdateRuntime(next)
+		updated, err := app.startFactorResearchChildTaskSync(next)
+		if err != nil {
+			if updated.ID == "" {
+				updated = next
+			}
+			app.markChildTaskFailed(updated, err)
+		}
 		children, _ = app.taskService.Repository().ListChildren(parent.ID)
 		parent.Progress = portfolioParentProgress(children)
 		parent.SummaryJSON = app.factorResearchSummaryForParent(parent, children)
@@ -10349,6 +10362,26 @@ func runnablePortfolioChildren(children []task.Task, limit int) []task.Task {
 		}
 	}
 	return out
+}
+
+func nextFactorResearchChild(children []task.Task) (task.Task, bool) {
+	for idx := range children {
+		child := children[idx]
+		switch child.Status {
+		case task.StatusSuccess:
+			continue
+		case task.StatusRunning, task.StatusQueued, task.StatusCancelled, task.StatusInterrupted:
+			return task.Task{}, false
+		case task.StatusFailed:
+			if child.MaxAttempts <= 0 || child.Attempt < child.MaxAttempts {
+				return child, false
+			}
+			return task.Task{}, true
+		default:
+			return child, false
+		}
+	}
+	return task.Task{}, false
 }
 
 func (app *App) reconcileOrphanRunningChildren(parentID string) {
