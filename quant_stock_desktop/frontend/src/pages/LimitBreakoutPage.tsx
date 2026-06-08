@@ -761,8 +761,6 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
 
   return (
     <>
-      {view === 'recommend' && <RunStatusProgress status={modelStatus} />}
-
       {view === 'recommend' && (
         <SignalSummaryPanel
           predictions={modelPredictions}
@@ -1252,8 +1250,6 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
           variant="breakout"
         />
       )}
-
-      {view === 'recommend' && <RunStatusProgress status={modelStatus} />}
 
       {view === 'recommend' && (
         <SignalSummaryPanel
