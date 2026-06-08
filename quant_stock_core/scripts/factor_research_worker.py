@@ -1134,9 +1134,6 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
     lgb, import_error = import_lightgbm()
     if lgb is None:
         raise RuntimeError(import_error or "LightGBM package is not installed")
-    panel_path = panel_path_for(args.run_id)
-    if not panel_path.exists():
-        raise FileNotFoundError(f"factor panel not found: {panel_path}")
     model_path = _model_path_from_db(args.db_path, args.run_id)
     if not model_path:
         raise FileNotFoundError(f"model path not found for run_id={args.run_id}")
@@ -1146,12 +1143,11 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
     booster = lgb.Booster(model_file=str(model_file))
     booster_features = [str(feature) for feature in booster.feature_name() if str(feature)]
     feature_cols = booster_features or _model_features_from_db(args.db_path, args.run_id)
-    available_cols = _parquet_columns(panel_path)
-    if feature_cols:
-        read_cols = ["trade_date", "ts_code", *[feature for feature in feature_cols if feature in available_cols]]
-        panel = pd.read_parquet(panel_path, columns=read_cols)
-        feature_cols = [feature for feature in feature_cols if feature in panel.columns]
-    else:
+    if not feature_cols:
+        panel_path = panel_path_for(args.run_id)
+        if not panel_path.exists():
+            raise FileNotFoundError(f"factor panel not found: {panel_path}")
+        available_cols = _parquet_columns(panel_path)
         candidate_cols = [
             col
             for factor in FACTOR_DEFS
@@ -1162,8 +1158,13 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
         feature_cols = selected_model_features(panel, args.db_path, args.run_id, args.label)
     if not feature_cols:
         raise RuntimeError("no model features available for latest inference")
+    mark_progress(args, 0.18, "生成当前最新截面")
+    panel = build_monthly_factor_panel(args.start, args.end, latest_only=True, require_label=False)
     if panel.empty:
-        raise RuntimeError("factor panel is empty")
+        raise RuntimeError("latest factor panel is empty")
+    feature_cols = [feature for feature in feature_cols if feature in panel.columns]
+    if not feature_cols:
+        raise RuntimeError("latest panel has no model features available")
     latest_date = str(panel["trade_date"].max())
     latest = panel[panel["trade_date"].astype(str) == latest_date][["trade_date", "ts_code", *feature_cols]].copy()
     latest = latest.replace([np.inf, -np.inf], np.nan)
@@ -1183,7 +1184,7 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
     out.to_parquet(prediction_path, index=False, compression="zstd")
     now = now_text()
     with write_transaction(args.db_path) as conn:
-        conn.execute("DELETE FROM factor_latest_predictions WHERE run_id = ? AND trade_date = ?", (args.run_id, latest_date))
+        conn.execute("DELETE FROM factor_latest_predictions WHERE run_id = ?", (args.run_id,))
         sql = replace_sql(
             "factor_latest_predictions",
             ["run_id", "trade_date", "ts_code", "pred_score", "pred_rank", "is_top20", "model_path", "created_at", "updated_at"],
@@ -1742,14 +1743,22 @@ def mark_progress(args: argparse.Namespace, progress: float, message: str, extra
     mark_stage(args.db_path, args.run_id, args.stage, "running", summary=payload)
 
 
-def build_monthly_factor_panel(start: str, end: str) -> pd.DataFrame:
+def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, require_label: bool = True) -> pd.DataFrame:
     raw = dq.RAW_DIR
-    sql = f"""
-    WITH rebal AS (
+    rebal_sql = (
+        f"SELECT max(trade_date) AS trade_date FROM read_parquet('{raw / 'daily' / '*.parquet'}') WHERE trade_date BETWEEN '{start}' AND '{end}'"
+        if latest_only
+        else f"""
       SELECT max(trade_date) AS trade_date
       FROM read_parquet('{raw / "daily" / "*.parquet"}')
       WHERE trade_date BETWEEN '{start}' AND '{end}'
       GROUP BY substr(trade_date, 1, 6)
+    """
+    )
+    label_filter = "AND p.fwd20 IS NOT NULL" if require_label else ""
+    sql = f"""
+    WITH rebal AS (
+      {rebal_sql}
     ), price AS (
       SELECT d.trade_date, d.ts_code,
              d.close * COALESCE(a.adj_factor, 1.0) AS adj_close,
@@ -1799,7 +1808,7 @@ def build_monthly_factor_panel(start: str, end: str) -> pd.DataFrame:
       LEFT JOIN read_parquet('{raw / "stock_basic" / "data.parquet"}') sb ON sb.ts_code = db.ts_code
       WHERE db.circ_mv IS NOT NULL AND db.circ_mv > 100000
         AND p.amount IS NOT NULL AND p.amount > 1000
-        AND p.fwd20 IS NOT NULL
+        {label_filter}
         AND COALESCE(sb.name, '') NOT LIKE '%ST%'
     ), fin AS (
       SELECT ts_code, ann_date, end_date, roe, roe_dt, roe_waa, roe_yearly, roa, roa_yearly,
