@@ -562,6 +562,8 @@ def score_row(row: pd.Series, run_id: str) -> Candidate:
     plan = {
         "setup": setup,
         "first_action": first_action,
+        "rule_score": score,
+        "score_after_rule": score,
         "reduce_price": round_price(reduce_price),
         "buy_price": round_price(buy_price),
         "stop_price": round_price(stop_price),
@@ -832,7 +834,9 @@ def apply_model_scores(candidates: list[Candidate], model_summary: dict[str, obj
         if model_score >= 0:
             original = item.score
             item.score = round(clamp(original * 0.62 + model_score * 0.38, 0, 100), 1)
+            item.plan["rule_score"] = round(safe_float(item.plan.get("rule_score"), original), 2)
             item.plan["model_score"] = round(model_score, 2)
+            item.plan["score_after_model"] = item.score
             item.reasons.insert(0, f"做T模型准入分 {model_score:.1f}，规则分 {original:.1f}")
             if model_score < 42:
                 item.risks.append("模型认为次日两边触达概率偏低，降为观察")
@@ -1021,6 +1025,7 @@ def apply_effective_scores(candidates: list[Candidate], backtests: list[dict[str
         recent_stop = recent["stop_hit_rate"]
         recent_sell_miss = recent["sell_first_miss_rate"]
         recent_drawdown = recent["buy_first_drawdown_rate"]
+        validation_base_score = safe_float(row.get("score"))
         liquidity = clamp((math.log10(max(item.avg_amount_20d, 1)) - 4.8) / 2.3, 0, 1)
         suitability = clamp(original_score / 100, 0, 1)
         score = (
@@ -1070,6 +1075,14 @@ def apply_effective_scores(candidates: list[Candidate], backtests: list[dict[str
             item.action = "暂缓"
             item.t_ratio = 0.0
         item.plan["t_ratio"] = item.t_ratio
+        item.plan["validation_score"] = round(score, 2)
+        item.plan["score_after_validation"] = item.score
+        item.plan["backtest_score"] = round(validation_base_score, 2)
+        item.plan["admission"] = admission
+        item.plan["recent_total_edge"] = round(recent_total, 6)
+        item.plan["recent_two_sided_rate"] = round(recent_two, 6)
+        item.plan["recent_one_sided_rate"] = round(recent_one, 6)
+        item.plan["recent_stop_hit_rate"] = round(recent_stop, 6)
         rescored.append(item)
     rescored.sort(key=lambda item: (item.score, item.avg_amount_20d), reverse=True)
     return rescored

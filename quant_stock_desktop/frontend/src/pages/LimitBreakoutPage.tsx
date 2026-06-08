@@ -64,20 +64,37 @@ type LimitUpTradingValidation = {
   max_drawdown: number
   yearly?: LimitUpTradingYearMetric[]
 }
+type EvaluationQualitySummary = {
+  universe_note?: string
+  path_assumption?: string
+  sample_rows?: number
+  prediction_rows?: number
+  sample_years?: number[]
+  fold_years?: number[]
+  fold_count?: number
+  missing_fold_years?: number[]
+  overall_positive_rate?: number
+  tested_positive_rate?: number
+  min_fold_rows?: number
+  max_fold_rows?: number
+}
 type LimitUpRunSummaryPayload = {
   tiers?: LimitUpTierMetric[]
   folds?: LimitUpYearMetric[]
   trading_validation?: LimitUpTradingValidation[]
+  evaluation_quality?: EvaluationQualitySummary
   test_start?: string
   test_end?: string
   top_k?: number
 }
 
 function pct(value: number) {
+  if (!Number.isFinite(value)) return '—'
   return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
 }
 
 function pctNoSign(value: number) {
+  if (!Number.isFinite(value)) return '—'
   return `${(value * 100).toFixed(1)}%`
 }
 
@@ -104,6 +121,13 @@ function dateTimeLabel(value: string) {
   if (!value) return '暂无'
   if (/^\d{8}$/.test(value)) return dateLabel(value)
   return value.replace('T', ' ').replace(/\.\d+Z?$/, '').slice(0, 16) || value
+}
+
+function compactYears(values?: number[]) {
+  const years = (values || []).filter(Number.isFinite).sort((a, b) => a - b)
+  if (years.length === 0) return '—'
+  if (years.length <= 4) return years.join(' / ')
+  return `${years[0]}-${years[years.length - 1]}`
 }
 
 function featureLabel(value: string) {
@@ -582,6 +606,42 @@ function ValidationGatePanel({
   )
 }
 
+function StrategyAssumptionPanel({
+  quality,
+  trading,
+  variant,
+}: {
+  quality?: EvaluationQualitySummary
+  trading: LimitUpTradingValidation | null
+  variant: 'momentum' | 'breakout'
+}) {
+  const copy = variant === 'breakout'
+    ? {
+        title: '横盘策略假设',
+        label: '横盘爆点',
+        target: '标签用未来 5 日最高收益或 5 日内涨停命中，并约束最大回撤；推荐页只做预警，机械交易必须等回踩确认。',
+        trade: '交易层按突破后回踩/确认近似，日线只能确认是否触价，不能还原真实盘口排队和日内先后。',
+      }
+    : {
+        title: '涨停策略假设',
+        label: '涨停接力',
+        target: '标签用未来 5 日最高收益、再涨停命中和回撤控制；推荐页按模型分层给观察/试仓，不代表开盘无条件追。',
+        trade: '交易层按次日开盘买入、高开过阈值不追、涨停买不到跳过、止盈止损和交易成本近似。',
+      }
+  return (
+    <div className="limitModelNote">
+      <b>{copy.title}</b>
+      <span>{copy.target}</span>
+      <b>当前交易参数</b>
+      <span>{trading ? `${trading.name}：Top${trading.top_n}，持有 ${trading.hold_days} 日，成交率 ${pctNoSign(trading.fill_rate)}，复利 ${pct(trading.compound_return)}。` : copy.trade}</span>
+      <b>样本口径</b>
+      <span>{quality?.universe_note || `${copy.label} 使用可获取日线、行业、财务与事件数据生成候选池；ST/退市样本默认排除。`}</span>
+      <b>路径假设</b>
+      <span>{quality?.path_assumption || copy.trade}</span>
+    </div>
+  )
+}
+
 type OpenResearch = (tsCode: string, options?: { projection?: boolean }) => void
 
 export function LimitBreakoutPage({ mode = 'momentum', onOpenResearch }: { mode?: TabKey; onOpenResearch?: OpenResearch }) {
@@ -794,6 +854,8 @@ function LimitUpModelTrainingPanel({
     : run.top_return <= 0 || run.top_excess_return <= 0
       ? { tone: 'negativeText', label: '谨慎', text: `${variant === 'breakout' ? 'Top3' : 'Top10'} 超额 ${pct(run.top_excess_return)}，最近年份可能失效，不能直接作为实盘入口。` }
       : { tone: 'positiveText', label: '可观察', text: `${variant === 'breakout' ? 'Top3' : 'Top10'} 平均收益 ${pct(run.top_return)}，相对候选池超额 ${pct(run.top_excess_return)}，但仍需看最近切面稳定性。` }
+  const summary = parseLimitUpRunSummary(run)
+  const bestTrading = (summary.trading_validation || []).reduce<LimitUpTradingValidation | null>((best, item) => !best || item.compound_return > best.compound_return ? item : best, null)
 
   return (
     <section className="limitModelPanel">
@@ -822,6 +884,29 @@ function LimitUpModelTrainingPanel({
           <Mini label="Rank IC" value={run ? run.rank_ic.toFixed(3) : '—'} valueClassName={run ? icTone(run.rank_ic) : ''} />
         </div>
       </div>
+      <div className="metricStrip signalTierStrip">
+        <div className="metricCard">
+          <span>评估样本</span>
+          <b>{summary.evaluation_quality?.sample_rows ? summary.evaluation_quality.sample_rows.toLocaleString('zh-CN') : run ? run.rows.toLocaleString('zh-CN') : '—'}</b>
+          <em>预测 {summary.evaluation_quality?.prediction_rows ? summary.evaluation_quality.prediction_rows.toLocaleString('zh-CN') : '—'} 行</em>
+        </div>
+        <div className="metricCard">
+          <span>Walk-forward</span>
+          <b>{summary.evaluation_quality?.fold_count || summary.folds?.length || '—'}</b>
+          <em>{compactYears(summary.evaluation_quality?.fold_years)}</em>
+        </div>
+        <div className="metricCard">
+          <span>正样本率</span>
+          <b>{pctNoSign(summary.evaluation_quality?.tested_positive_rate ?? Number.NaN)}</b>
+          <em>整体 {pctNoSign(summary.evaluation_quality?.overall_positive_rate ?? Number.NaN)}</em>
+        </div>
+        <div className="metricCard">
+          <span>交易参数</span>
+          <b>{bestTrading ? `Top${bestTrading.top_n}` : '—'}</b>
+          <em>{bestTrading ? `持有 ${bestTrading.hold_days} 日 · 成交 ${pctNoSign(bestTrading.fill_rate)}` : '模型评估后生成'}</em>
+        </div>
+      </div>
+      <StrategyAssumptionPanel quality={summary.evaluation_quality} trading={bestTrading} variant={variant} />
       <div className="limitModelColumns twoColumns">
         <div>
           <div className="formTitle">重要特征</div>
@@ -912,6 +997,29 @@ function LimitUpModelEvaluationPanel({
         </div>
       </div>
       <ValidationGatePanel run={run} trading={bestTrading} variant={variant} />
+      <div className="metricStrip signalTierStrip">
+        <div className="metricCard">
+          <span>评估样本</span>
+          <b>{summary.evaluation_quality?.sample_rows ? summary.evaluation_quality.sample_rows.toLocaleString('zh-CN') : run ? run.rows.toLocaleString('zh-CN') : '—'}</b>
+          <em>预测 {summary.evaluation_quality?.prediction_rows ? summary.evaluation_quality.prediction_rows.toLocaleString('zh-CN') : '—'} 行</em>
+        </div>
+        <div className="metricCard">
+          <span>Fold覆盖</span>
+          <b>{summary.evaluation_quality?.fold_count || yearMetrics.length || '—'}</b>
+          <em>{compactYears(summary.evaluation_quality?.fold_years)}</em>
+        </div>
+        <div className="metricCard">
+          <span>正样本率</span>
+          <b>{pctNoSign(summary.evaluation_quality?.tested_positive_rate ?? Number.NaN)}</b>
+          <em>最小/最大fold {summary.evaluation_quality?.min_fold_rows || '—'} / {summary.evaluation_quality?.max_fold_rows || '—'}</em>
+        </div>
+        <div className="metricCard">
+          <span>缺失年份</span>
+          <b>{summary.evaluation_quality?.missing_fold_years?.length || 0}</b>
+          <em>{compactYears(summary.evaluation_quality?.missing_fold_years)}</em>
+        </div>
+      </div>
+      <StrategyAssumptionPanel quality={summary.evaluation_quality} trading={bestTrading} variant={variant} />
       {run && yearMetrics.length > 0 && (
         <div className="limitModelNote">
           <b>近年稳定性</b>

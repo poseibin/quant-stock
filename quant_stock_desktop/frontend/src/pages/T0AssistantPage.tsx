@@ -19,6 +19,10 @@ function percent(value: number, signed = false) {
   return `${sign}${pct.toFixed(2)}%`
 }
 
+function n(value: number, digits = 1) {
+  return Number.isFinite(value) ? value.toFixed(digits) : '—'
+}
+
 function amountYi(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '—'
   return `${(value / 100000).toFixed(2)}亿`
@@ -153,6 +157,22 @@ type TimeMachineGridSummary = {
   window_count?: number
 }
 
+type EvaluationQualitySummary = {
+  universe_note?: string
+  path_assumption?: string
+  sample_rows?: number
+  prediction_rows?: number
+  sample_years?: number[]
+  fold_years?: number[]
+  fold_count?: number
+  missing_fold_years?: number[]
+  overall_positive_rate?: number
+  tested_positive_rate?: number
+  min_fold_rows?: number
+  max_fold_rows?: number
+  path_ambiguity_rate?: number
+}
+
 type T0ModelFeatureImportance = {
   feature: string
   importance: number
@@ -162,7 +182,10 @@ type T0ModelFeatureImportance = {
 type T0ModelFold = {
   year: number
   rows: number
+  train_rows?: number
   positive_rate: number
+  train_positive_rate?: number
+  path_ambiguity_rate?: number
   top10_two_sided: number
   top10_avg_edge: number
   top10_total_edge: number
@@ -183,6 +206,7 @@ type T0ModelSummary = {
   top10_two_sided?: number
   folds?: T0ModelFold[]
   feature_importance?: T0ModelFeatureImportance[]
+  evaluation_quality?: EvaluationQualitySummary
   model_path?: string
 }
 
@@ -267,6 +291,28 @@ function parseT0ModelSummary(run?: T0DailyRunSummary): T0ModelSummary | null {
   } catch {
     return null
   }
+}
+
+function parseT0Plan(row: T0PlanRow): Record<string, unknown> {
+  if (!row.plan_json) return {}
+  try {
+    const parsed = JSON.parse(row.plan_json) as Record<string, unknown>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function planNumber(plan: Record<string, unknown>, key: string) {
+  const value = Number(plan[key])
+  return Number.isFinite(value) ? value : Number.NaN
+}
+
+function compactYears(values?: number[]) {
+  const years = (values || []).filter(Number.isFinite).sort((a, b) => a - b)
+  if (years.length === 0) return '—'
+  if (years.length <= 4) return years.join(' / ')
+  return `${years[0]}-${years[years.length - 1]}`
 }
 
 function t0FeatureLabel(feature: string) {
@@ -507,6 +553,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
     const folds = (model?.folds || []).slice().sort((a, b) => a.year - b.year)
     return {
       model,
+      quality: model?.evaluation_quality || null,
       count,
       avgRange,
       avgAmount,
@@ -779,6 +826,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 <th>排名</th>
                 <th>股票</th>
                 <th>动作</th>
+                <th>分数拆解</th>
                 <th>条件买入</th>
                 <th>买入股数</th>
                 <th>条件卖出</th>
@@ -789,6 +837,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
             </thead>
             <tbody>
               {operationTop10.map((row, index) => {
+                const planMeta = parseT0Plan(row)
                 const plan = planBand(row)
                 const recent = parseRecentT0Stats(backtestByCode.get(row.ts_code))
                 const flow = flowSignal(row)
@@ -820,6 +869,12 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                       <div className="recommendationMeta">{executable ? row.first_action || '挂单等待' : 'Top4-10 不执行'}</div>
                       <div className="recommendationMeta">{flow.label} · 今日 {percent(row.today_pct, true)}</div>
                       <div className="recommendationMeta">保留原因：{row.observation_reason || row.setup || row.action || '做T候选'}</div>
+                    </td>
+                    <td>
+                      <strong>{Number.isFinite(planNumber(planMeta, 'score_after_validation')) ? n(planNumber(planMeta, 'score_after_validation'), 1) : n(row.score, 1)}</strong>
+                      <div className="recommendationMeta">规则 {n(planNumber(planMeta, 'rule_score'), 1)}</div>
+                      <div className="recommendationMeta">模型 {n(planNumber(planMeta, 'model_score'), 1)} → {n(planNumber(planMeta, 'score_after_model'), 1)}</div>
+                      <div className="recommendationMeta">验证 {n(planNumber(planMeta, 'validation_score'), 1)}</div>
                     </td>
                     <td>
                       <strong>¥{money(plan.buy)}</strong>
@@ -860,8 +915,8 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                   </tr>
                 )
               })}
-              {!loading && operationTop10.length === 0 ? <tr><td colSpan={9} className="emptyCell">暂无做T条件单候选，请先去模型训练页更新模型</td></tr> : null}
-              {loading ? <tr><td colSpan={9} className="emptyCell">加载中...</td></tr> : null}
+              {!loading && operationTop10.length === 0 ? <tr><td colSpan={10} className="emptyCell">暂无做T条件单候选，请先去模型训练页更新模型</td></tr> : null}
+              {loading ? <tr><td colSpan={10} className="emptyCell">加载中...</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -1085,6 +1140,36 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
             <Mini label="Top10两边" value={percent(modelExplainSummary.top10TwoSided)} />
           </div>
         </div>
+        <div className="metricStrip signalTierStrip">
+          <div className="metricCard">
+            <span>评估样本</span>
+            <b>{modelExplainSummary.quality?.sample_rows ? modelExplainSummary.quality.sample_rows.toLocaleString('zh-CN') : '—'}</b>
+            <em>预测 {modelExplainSummary.quality?.prediction_rows ? modelExplainSummary.quality.prediction_rows.toLocaleString('zh-CN') : '—'} 行</em>
+          </div>
+          <div className="metricCard">
+            <span>Walk-forward</span>
+            <b>{modelExplainSummary.quality?.fold_count || modelExplainSummary.folds.length || '—'}</b>
+            <em>{compactYears(modelExplainSummary.quality?.fold_years)}</em>
+          </div>
+          <div className="metricCard">
+            <span>正样本率</span>
+            <b>{percent(modelExplainSummary.quality?.tested_positive_rate ?? modelExplainSummary.positiveRate)}</b>
+            <em>整体 {percent(modelExplainSummary.quality?.overall_positive_rate ?? Number.NaN)}</em>
+          </div>
+          <div className="metricCard">
+            <span>路径歧义</span>
+            <b>{percent(modelExplainSummary.quality?.path_ambiguity_rate ?? Number.NaN)}</b>
+            <em>{modelExplainSummary.quality?.missing_fold_years?.length ? `缺失 ${compactYears(modelExplainSummary.quality.missing_fold_years)}` : '日线 high/low 顺序未知'}</em>
+          </div>
+        </div>
+        {(modelExplainSummary.quality?.universe_note || modelExplainSummary.quality?.path_assumption) ? (
+          <div className="limitModelNote">
+            <b>样本口径</b>
+            <span>{modelExplainSummary.quality?.universe_note || '全市场日线候选池，剔除 ST/退市样本。'}</span>
+            <b>路径假设</b>
+            <span>{modelExplainSummary.quality?.path_assumption || '日线 OHLC 无法还原日内先后顺序，触价类回测按保守规则近似。'}</span>
+          </div>
+        ) : null}
         <div className="limitModelColumns twoColumns">
           <div>
             <div className="formTitle">重要特征</div>
@@ -1111,8 +1196,10 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
             <thead>
               <tr>
                 <th>年份</th>
+                <th>训练样本</th>
                 <th>样本</th>
                 <th>正样本率</th>
+                <th>路径歧义</th>
                 <th>Top10两边</th>
                 <th>Top10单次价差</th>
                 <th>Rank IC</th>
@@ -1121,12 +1208,14 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
             </thead>
             <tbody>
               {modelExplainSummary.folds.length === 0 ? (
-                <tr><td colSpan={7}>暂无 walk-forward 明细，更新模型后生成</td></tr>
+                <tr><td colSpan={9}>暂无 walk-forward 明细，更新模型后生成</td></tr>
               ) : modelExplainSummary.folds.map((row) => (
                 <tr key={row.year}>
                   <td>{row.year}</td>
+                  <td>{row.train_rows ? row.train_rows.toLocaleString('zh-CN') : '—'}</td>
                   <td>{row.rows.toLocaleString('zh-CN')}</td>
                   <td>{percent(row.positive_rate)}</td>
+                  <td>{percent(row.path_ambiguity_rate ?? Number.NaN)}</td>
                   <td>{percent(row.top10_two_sided)}</td>
                   <td className={signedClass(row.top10_avg_edge)}>{percent(row.top10_avg_edge, true)}</td>
                   <td className={signedClass(row.rank_ic)}>{Number.isFinite(row.rank_ic) ? row.rank_ic.toFixed(3) : '—'}</td>
