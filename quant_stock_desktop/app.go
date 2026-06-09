@@ -2230,6 +2230,9 @@ func (app *App) ListFactorLatestPredictions(runID string, limit int) ([]FactorLa
 			return out, err
 		}
 		item.IsTop20 = isTop20 != 0
+		if item.Price <= 0 {
+			item.Price = app.latestClosePrice(item.TsCode)
+		}
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -3031,6 +3034,9 @@ func (app *App) ListLimitUpModelPredictions(runID string, limit int) ([]LimitUpM
 			return out, err
 		}
 		item.IsLatest = latest != 0
+		if item.Price <= 0 {
+			item.Price = app.latestClosePrice(item.TSCode)
+		}
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -3247,6 +3253,9 @@ func (app *App) ListLimitBreakoutModelPredictions(runID string, limit int) ([]Li
 			return out, err
 		}
 		item.IsLatest = latest != 0
+		if item.Price <= 0 {
+			item.Price = app.latestClosePrice(item.TSCode)
+		}
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -3474,6 +3483,9 @@ func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
 		); err != nil {
 			return nil, err
 		}
+		if item.Price <= 0 {
+			item.Price = app.latestClosePrice(item.TSCode)
+		}
 		item.MaxT0Shares = (int(float64(item.Shares)*0.3) / 100) * 100
 		band := clamp(item.AvgRange20*0.55, 0.008, 0.035)
 		if item.ReducePrice <= 0 {
@@ -3546,6 +3558,9 @@ func (app *App) ListT0DataPullCandidates(limit int) ([]T0DataPullCandidate, erro
 			&item.PlanJSON, &reasonsJSON, &risksJSON, &item.GeneratedAt,
 		); err != nil {
 			return nil, err
+		}
+		if item.Price <= 0 {
+			item.Price = app.latestClosePrice(item.TSCode)
 		}
 		band := clamp(item.AvgRange20*0.55, 0.008, 0.04)
 		if item.ReducePrice <= 0 {
@@ -4390,6 +4405,9 @@ func (app *App) mergeFactorTargets(targets map[string]*accountTarget) {
 			continue
 		}
 		if price <= 0 {
+			price = app.latestClosePrice(tsCode)
+		}
+		if price <= 0 {
 			continue
 		}
 		weight := 0.02
@@ -4594,6 +4612,12 @@ func (app *App) mergeT0Targets(targets map[string]*accountTarget, summary positi
 		var risksJSON string
 		var score, price, pctChg, expectedEdge, tRatio, buyTrigger, sellTarget, stopPrice float64
 		if err := rows.Scan(&tsCode, &name, &industry, &score, &action, &price, &pctChg, &expectedEdge, &tRatio, &risksJSON, &buyTrigger, &sellTarget, &stopPrice); err != nil {
+			continue
+		}
+		if price <= 0 {
+			price = app.latestClosePrice(tsCode)
+		}
+		if price <= 0 {
 			continue
 		}
 		base, ok := currentWeight[tsCode]
