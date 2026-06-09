@@ -294,6 +294,7 @@ function HoldingsPanel({ summary, loading, clearing, refreshingQuotes, confirmRe
               <th>代码</th>
               <th>名称</th>
               <th>行业</th>
+              <th>来源策略</th>
               <th>持股</th>
               <th>成本价</th>
               <th>现价</th>
@@ -310,6 +311,7 @@ function HoldingsPanel({ summary, loading, clearing, refreshingQuotes, confirmRe
                 <td className="mono">{item.ts_code}</td>
                 <td><StockLink tsCode={item.ts_code} onOpenResearch={onOpenResearch}>{item.name || '—'}</StockLink></td>
                 <td>{item.industry || '—'}</td>
+                <td>{item.sources?.map((source) => `${strategyLabel(source.strategy)} ${percent(source.weight)}`).join(' / ') || '—'}</td>
                 <td>{item.shares.toLocaleString('zh-CN')}</td>
                 <td>{money(item.avg_cost)}</td>
                 <td>{money(item.price)}</td>
@@ -320,8 +322,8 @@ function HoldingsPanel({ summary, loading, clearing, refreshingQuotes, confirmRe
                 <td className={signedClass(item.today_pnl)}>{money(item.today_pnl)}</td>
               </tr>
             ))}
-            {!loading && (summary?.positions.length ?? 0) === 0 ? <tr><td colSpan={11} className="emptyCell">暂无持仓</td></tr> : null}
-            {loading ? <tr><td colSpan={11} className="emptyCell">加载中...</td></tr> : null}
+            {!loading && (summary?.positions.length ?? 0) === 0 ? <tr><td colSpan={12} className="emptyCell">暂无持仓</td></tr> : null}
+            {loading ? <tr><td colSpan={12} className="emptyCell">加载中...</td></tr> : null}
           </tbody>
         </table>
       </div>

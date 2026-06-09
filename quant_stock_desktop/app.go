@@ -3299,7 +3299,12 @@ func (app *App) GetPositionSummary() (position.Summary, error) {
 	if err := app.ensurePositionService(); err != nil {
 		return position.Summary{}, err
 	}
-	return app.positionService.GetSummary(app.settings.DataPath)
+	summary, err := app.positionService.GetSummary(app.settings.DataPath)
+	if err != nil {
+		return position.Summary{}, err
+	}
+	app.enrichPositionSources(&summary)
+	return summary, nil
 }
 
 func (app *App) GetPositionHistory() ([]position.HistoryPoint, error) {
@@ -3313,7 +3318,12 @@ func (app *App) GetPositionHoldings() ([]position.Position, error) {
 	if err := app.ensurePositionService(); err != nil {
 		return nil, err
 	}
-	return app.positionService.GetHoldings()
+	summary, err := app.positionService.GetSummary(app.settings.DataPath)
+	if err != nil {
+		return nil, err
+	}
+	app.enrichPositionSources(&summary)
+	return summary.Positions, nil
 }
 
 func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
@@ -3994,7 +4004,7 @@ func (app *App) buildAccountRebalanceRecommendation() (position.Recommendation, 
 	app.mergeLimitUpModelTargets(targets)
 	app.mergeBreakoutModelTargets(targets)
 	app.mergeT0Targets(targets, summary)
-	rows := app.buildAccountRebalanceRows(targets, summary)
+	rows := app.buildAccountRebalanceRows(targets, summary, date)
 	totalWeight := targetWeightSum(targets)
 	nBuy := 0
 	nSell := 0
@@ -4030,8 +4040,32 @@ func (app *App) buildAccountRebalanceRecommendation() (position.Recommendation, 
 		}
 		rec.Rebalanced = count > 0
 		rec.RebalanceTrades = count
+		if rec.Rebalanced {
+			rec.Rows = []position.RecommendationItem{}
+			rec.NBuy = 0
+			rec.NSell = 0
+		}
 	}
 	return rec, nil
+}
+
+func (app *App) enrichPositionSources(summary *position.Summary) {
+	if summary == nil || len(summary.Positions) == 0 || app.database == nil {
+		return
+	}
+	targets := map[string]*accountTarget{}
+	app.mergeFactorTargets(targets)
+	app.mergeLimitUpModelTargets(targets)
+	app.mergeBreakoutModelTargets(targets)
+	app.mergeT0Targets(targets, *summary)
+	for i := range summary.Positions {
+		item := &summary.Positions[i]
+		if target := targets[item.TSCode]; target != nil && len(target.Sources) > 0 {
+			item.Sources = compactSources(target.Sources)
+			continue
+		}
+		item.Sources = []position.Source{{Strategy: "account_rebalance", Weight: item.Weight}}
+	}
 }
 
 func targetWeightSum(targets map[string]*accountTarget) float64 {
@@ -4357,7 +4391,7 @@ func (app *App) mergeT0Targets(targets map[string]*accountTarget, summary positi
 	}
 }
 
-func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, summary position.Summary) []position.RecommendationItem {
+func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, summary position.Summary, decisionDate string) []position.RecommendationItem {
 	current := map[string]position.Position{}
 	for _, item := range summary.Positions {
 		current[item.TSCode] = item
@@ -4403,6 +4437,11 @@ func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, sum
 		if price > 0 && targetAmount > 0 {
 			targetShares = int(targetAmount/price/100) * 100
 		}
+		if holding.Shares > 0 && targetShares > holding.Shares && isNewlyOpenedPosition(holding.FirstEntryDate, decisionDate) {
+			targetShares = holding.Shares
+			toWeight = fromWeight
+			targetAmount = float64(targetShares) * price
+		}
 		if holding.Shares > 0 && targetShares > 0 && math.Abs(float64(targetShares-holding.Shares)) < 100 {
 			targetShares = holding.Shares
 			toWeight = fromWeight
@@ -4437,6 +4476,36 @@ func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, sum
 		})
 	}
 	return rows
+}
+
+func isNewlyOpenedPosition(openDate string, decisionDate string) bool {
+	openDate = normalizeDateText(openDate)
+	decisionDate = normalizeDateText(decisionDate)
+	if openDate == "" || decisionDate == "" {
+		return false
+	}
+	openTime, err := time.Parse("20060102", openDate)
+	if err != nil {
+		return false
+	}
+	decisionTime, err := time.Parse("20060102", decisionDate)
+	if err != nil {
+		return false
+	}
+	days := int(decisionTime.Sub(openTime).Hours() / 24)
+	return days >= 0 && days <= 3
+}
+
+func normalizeDateText(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	text = strings.ReplaceAll(text, "-", "")
+	if len(text) > 8 {
+		return text[:8]
+	}
+	return text
 }
 
 func firstNonEmpty(values ...string) string {
