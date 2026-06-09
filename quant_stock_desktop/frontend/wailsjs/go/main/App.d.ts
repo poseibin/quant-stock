@@ -8,6 +8,8 @@ import {market} from '../models';
 import {result} from '../models';
 import {config} from '../models';
 
+export function ActivateStrategyModelRun(arg1:main.StrategyModelRunRequest):Promise<main.ActiveStrategyModelRun>;
+
 export function ActivateStrategyVersion(arg1:main.StrategyVersionActivateRequest):Promise<main.SettingsResponse>;
 
 export function AnalyzePortfolioTask(arg1:string):Promise<task.DTO>;
@@ -31,6 +33,8 @@ export function CreateTask(arg1:task.CreateRequest):Promise<task.DTO>;
 export function DeleteTask(arg1:string):Promise<void>;
 
 export function GeneratePositionSignal(arg1:position.GenerateSignalRequest):Promise<position.GenerateSignalResponse>;
+
+export function GetActiveStrategyModelRun(arg1:string):Promise<main.ActiveStrategyModelRun>;
 
 export function GetAppInfo():Promise<main.AppInfo>;
 

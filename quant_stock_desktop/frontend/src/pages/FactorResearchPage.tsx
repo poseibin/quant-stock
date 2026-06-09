@@ -311,7 +311,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
           <div>
             <div className="sectionLabel">STOCK LIST</div>
             <h2>今日推荐股票列表</h2>
-            <p className="recommendationMeta">观察池会保留入池日期、保留次数和刷新原因；Top5 给小仓建仓计划，后续候选只观察，不自动下单。</p>
+            <p className="recommendationMeta">观察池会保留入池日期、保留次数和刷新原因；Top10 给小仓建仓计划，后续候选只观察，不自动下单。</p>
           </div>
           <span>{latestPredictionDate ? `${formatTradeDate(latestPredictionDate)} · ${shortRunID(latestPredictions[0]?.run_id || '')}` : '暂无推荐截面'}</span>
         </div>
@@ -335,7 +335,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
                 <tr><td colSpan={9} className="emptyCell">暂无每日通用策略推荐，请先在模型训练页完成正式全量并生成最新截面推理</td></tr>
               ) : dailyRecommendations.map((row, index) => {
                 const plan = generalStrategyPlan(row, index)
-                const executable = index < 5 && plan.shares > 0
+                const executable = index < 10 && plan.shares > 0
                 const displayAction = executable ? '可试仓' : '观察'
                 return (
                   <tr key={`${row.run_id}-${row.trade_date}-${row.ts_code}`}>
@@ -352,7 +352,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
                     </td>
                     <td>
                       <span className={`badge ${executable ? 'success' : 'running'}`}>{displayAction}</span>
-                      <div className="recommendationMeta">{executable ? 'Top5 可按计划试仓' : '等组合和仓位确认'}</div>
+                      <div className="recommendationMeta">{executable ? 'Top10 可按计划试仓' : '等组合和仓位确认'}</div>
                       <div className="recommendationMeta">今日 {percentFromPct(row.pct_chg, true)}</div>
                       <div className="recommendationMeta">保留原因：{row.observation_reason || 'Top20%模型候选'}</div>
                     </td>
@@ -1059,6 +1059,10 @@ function buildPipelineSteps(input: {
   const rows = taskRows(input.task)
   const rowsByStage = new Map(rows.map((row) => [String(row.stage || ''), row]))
   const activeRow = rows.find((row) => ['running', 'queued'].includes(String(row.status || row.task_status || '')))
+  const hasTaskRows = rows.length > 0
+  const taskStatus = input.task?.status || ''
+  const liveTask = input.task && ['created', 'queued', 'running'].includes(taskStatus) ? input.task : null
+  const hasLiveTask = Boolean(liveTask)
   const allArtifactsDone = Boolean(
     input.latestRun?.sample_rows &&
     input.icRows.length &&
@@ -1071,13 +1075,16 @@ function buildPipelineSteps(input: {
 
   return pipelineBase.map((step, index) => {
     const row = rowsByStage.get(step.key)
-    let status = row ? stageStatusLabel(String(row.status || row.task_status || '')) : inferredStageStatus(step.key, input, allArtifactsDone)
-    if (status === '待执行' && input.task && ['created', 'queued', 'running'].includes(input.task.status)) {
+    let status = row ? stageStatusLabel(String(row.status || row.task_status || '')) : '待执行'
+    if (!hasTaskRows && !hasLiveTask) {
+      status = inferredStageStatus(step.key, input, allArtifactsDone)
+    }
+    if (status === '待执行' && hasLiveTask) {
       const activeStage = String(activeRow?.stage || '')
       if (activeStage === step.key) {
-        status = stageStatusLabel(String(activeRow?.status || activeRow?.task_status || input.task.status))
+        status = stageStatusLabel(String(activeRow?.status || activeRow?.task_status || liveTask?.status || ''))
       } else if (!activeStage && index === 0) {
-        status = stageStatusLabel(input.task.status)
+        status = stageStatusLabel(liveTask?.status || '')
       }
     }
     return { ...step, status }
@@ -1225,7 +1232,7 @@ function generalStrategyPlan(row: FactorLatestPrediction, index: number): Genera
   const buyBand = Math.max(0.006, Math.min(0.025, 0.026 - rank * 0.014))
   const sellBand = Math.max(0.025, Math.min(0.08, 0.028 + rank * 0.04))
   const stopBand = Math.max(0.035, Math.min(0.08, 0.075 - Math.min(rank, 1) * 0.025))
-  const cash = index < 3 ? 10000 : index < 5 ? 6000 : 0
+  const cash = index < 3 ? 10000 : index < 10 ? 6000 : 0
   const buy = price * (1 - buyBand)
   return {
     buy,

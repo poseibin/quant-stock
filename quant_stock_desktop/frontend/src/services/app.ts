@@ -11,6 +11,8 @@ declare global {
           ListStrategyVersions: (strategy: string) => Promise<StrategyVersion[]>
           ActivateStrategyVersion: (request: StrategyVersionActivateRequest) => Promise<SettingsResponse>
           SetStrategyVersionStatus: (request: StrategyVersionStatusRequest) => Promise<StrategyVersion[]>
+          GetActiveStrategyModelRun: (strategy: string) => Promise<ActiveStrategyModelRun>
+          ActivateStrategyModelRun: (request: StrategyModelRunRequest) => Promise<ActiveStrategyModelRun>
           ReviewStrategyVersion: (request: StrategyVersionActivateRequest) => Promise<ValidationReview>
           ListValidationEvidence: (query: ValidationEvidenceQuery) => Promise<ValidationEvidence>
           RefreshRecommendationHindsight: () => Promise<RecommendationHindsight[]>
@@ -158,6 +160,17 @@ export interface StrategyVersionActivateRequest {
 
 export interface StrategyVersionStatusRequest extends StrategyVersionActivateRequest {
   status: string
+}
+
+export interface StrategyModelRunRequest {
+  strategy: string
+  run_id: string
+}
+
+export interface ActiveStrategyModelRun {
+  strategy: string
+  run_id: string
+  updated_at: string
 }
 
 export interface ValidationReview {
@@ -1252,6 +1265,20 @@ export async function setStrategyVersionStatus(request: StrategyVersionStatusReq
   return []
 }
 
+export async function getActiveStrategyModelRun(strategy: string): Promise<ActiveStrategyModelRun> {
+  if (window.go?.main?.App?.GetActiveStrategyModelRun) {
+    return window.go.main.App.GetActiveStrategyModelRun(strategy)
+  }
+  return { strategy, run_id: '', updated_at: '' }
+}
+
+export async function activateStrategyModelRun(request: StrategyModelRunRequest): Promise<ActiveStrategyModelRun> {
+  if (window.go?.main?.App?.ActivateStrategyModelRun) {
+    return window.go.main.App.ActivateStrategyModelRun(request)
+  }
+  return { strategy: request.strategy, run_id: request.run_id, updated_at: new Date().toISOString() }
+}
+
 export async function reviewStrategyVersion(request: StrategyVersionActivateRequest): Promise<ValidationReview> {
   if (window.go?.main?.App?.ReviewStrategyVersion) {
     return window.go.main.App.ReviewStrategyVersion(request)
@@ -1720,6 +1747,8 @@ export interface TradeRequest {
   date?: string
   exit_reason?: string
   exit_pct?: number
+  trigger_type?: string
+  trigger_price?: number
   sources?: Array<{ strategy: string; weight: number }>
 }
 
@@ -1767,6 +1796,9 @@ export interface PositionRecommendationItem {
   pct_chg: number
   target_shares: number
   target_amount: number
+  buy_trigger_price: number
+  sell_target_price: number
+  stop_price: number
   sources?: Array<{ strategy: string; weight: number }>
 }
 

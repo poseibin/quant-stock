@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  activateStrategyModelRun,
+  getActiveStrategyModelRun,
   getLimitBreakoutModelRunStatus,
   getLimitUpModelRunStatus,
   listLimitBreakoutModelFeatures,
@@ -163,6 +165,9 @@ function featureLabel(value: string) {
     amount_chg20: '20日成交放大',
     volume_surge_120: '120日量能放大',
     limit_up_count10: '10日涨停数',
+    prior_limit_up_count10: '前10日涨停数',
+    prior_limit_up_count20: '前20日涨停数',
+    post_limit_drawdown20: '多板后20日回撤',
     circ_mv_log: '流通市值',
     roe: 'ROE',
     netprofit_margin: '净利率',
@@ -340,7 +345,7 @@ function TopTierExecutionSummary({ run, variant }: { run?: LimitUpModelRunSummar
         <div className={`metricCard ${tradePass && tier.avg_return > 0 ? 'good' : ''}`} key={`${variant}-${tier.top_k}`}>
           <span>Top{tier.top_k}</span>
           <b className={marketTone(tier.avg_return)}>{pct(tier.avg_return)}</b>
-          <em>{tierActionConclusion(tier, variant, tradePass)} · 超额 {pct(tier.excess_return)} · 再板 {pctNoSign(tier.limit_up_hit_rate)}</em>
+          <em>{tierActionConclusion(tier, variant, tradePass)} · 超额 {pct(tier.excess_return)} · {variant === 'breakout' ? '次日板' : '再板'} {pctNoSign(tier.limit_up_hit_rate)}</em>
         </div>
       ))}
     </div>
@@ -443,7 +448,7 @@ function SignalSummaryPanel({
           <em>模型页更新验证结果</em>
         </div>
         <div className="metricCard">
-          <span>再涨停率</span>
+          <span>{variant === 'breakout' ? '次日涨停率' : '再涨停率'}</span>
           <b>{run ? pctNoSign(run.top_limit_up_rate) : '—'}</b>
           <em>实验页看分年和交易层</em>
         </div>
@@ -619,7 +624,7 @@ function StrategyAssumptionPanel({
     ? {
         title: '横盘策略假设',
         label: '横盘爆点',
-        target: '标签用未来 5 日最高收益或 5 日内涨停命中，并约束最大回撤；推荐页只做预警，机械交易必须等回踩确认。',
+        target: '标签只看次日首板命中，并过滤近期多板高位；只有充分回撤后的再启动才重新纳入观察。',
         trade: '交易层按突破后回踩/确认近似，日线只能确认是否触价，不能还原真实盘口排队和日内先后。',
       }
     : {
@@ -694,18 +699,21 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
   const [modelPredictions, setModelPredictions] = useState<LimitUpModelPrediction[]>([])
   const [modelSlices, setModelSlices] = useState<LimitUpModelTimeMachineSlice[]>([])
   const [modelFeatures, setModelFeatures] = useState<LimitUpModelFeature[]>([])
+  const [activeModelRunID, setActiveModelRunID] = useState('')
   const [modelError, setModelError] = useState('')
   const [modelLoading, setModelLoading] = useState(false)
 
   const loadModel = async () => {
     try {
-      const [runs, status] = await Promise.all([
+      const [runs, status, active] = await Promise.all([
         listLimitUpModelRuns(5),
-        getLimitUpModelRunStatus()
+        getLimitUpModelRunStatus(),
+        getActiveStrategyModelRun('limit_up_model')
       ])
       setModelRuns(runs)
       setModelStatus(status)
-      const runID = runs[0]?.run_id || ''
+      const runID = active.run_id || runs[0]?.run_id || ''
+      setActiveModelRunID(active.run_id || '')
       const [predictions, slices, features] = await Promise.all([
         listLimitUpModelPredictions(runID, 10),
         listLimitUpModelTimeMachineSlices(runID, 20),
@@ -747,6 +755,20 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
     }
   }
 
+  const activateRun = async (runID: string) => {
+    setModelLoading(true)
+    setModelError('')
+    try {
+      const active = await activateStrategyModelRun({ strategy: 'limit_up_model', run_id: runID })
+      setActiveModelRunID(active.run_id)
+      await loadModel()
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setModelLoading(false)
+    }
+  }
+
   useEffect(() => {
     loadModel().catch((error) => console.error('[limit-up-model] load failed', error))
   }, [])
@@ -759,12 +781,14 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
     }
   }, [modelStatus?.state])
 
+  const activeRun = modelRuns.find((run) => run.run_id === (activeModelRunID || modelPredictions[0]?.run_id)) || modelRuns[0]
+
   return (
     <>
       {view === 'recommend' && (
         <SignalSummaryPanel
           predictions={modelPredictions}
-          run={modelRuns[0]}
+          run={activeRun}
           variant="momentum"
           error={modelError}
           loading={modelLoading || modelStatus?.state === 'running'}
@@ -775,7 +799,7 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
       {view === 'recommend' && (
         <SignalActionList
           predictions={modelPredictions}
-          run={modelRuns[0]}
+          run={activeRun}
           variant="momentum"
           onOpenResearch={onOpenResearch}
           selectedCode={selectedCode}
@@ -785,19 +809,22 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
 
       {view === 'training' && (
         <LimitUpModelTrainingPanel
-          run={modelRuns[0]}
+          run={activeRun}
+          runs={modelRuns}
+          activeRunID={activeModelRunID || activeRun?.run_id || ''}
           status={modelStatus}
           features={modelFeatures}
           error={modelError}
           loading={modelLoading}
           onTrain={trainModel}
+          onActivateRun={activateRun}
           variant="momentum"
         />
       )}
 
       {view === 'evaluation' && (
         <LimitUpModelEvaluationPanel
-          run={modelRuns[0]}
+          run={activeRun}
           status={modelStatus}
           slices={modelSlices}
           features={modelFeatures}
@@ -812,19 +839,25 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
 
 function LimitUpModelTrainingPanel({
   run,
+  runs,
+  activeRunID,
   status,
   features,
   error,
   loading,
   onTrain,
+  onActivateRun,
   variant = 'momentum'
 }: {
   run?: LimitUpModelRunSummary
+  runs?: LimitUpModelRunSummary[]
+  activeRunID?: string
   status: RunStatus | null
   features: LimitUpModelFeature[]
   error: string
   loading: boolean
   onTrain: () => void
+  onActivateRun?: (runID: string) => void
   variant?: 'momentum' | 'breakout'
 }) {
   const running = status?.state === 'running'
@@ -832,11 +865,11 @@ function LimitUpModelTrainingPanel({
     ? {
         section: 'FLAT BREAKOUT MODEL',
         title: '横盘预警模型',
-        hint: '基于长期箱体、低波动、近期启动、市场热度和财务质量训练 LightGBM；按年份 walk-forward 验证，重点看 Top1/Top3 的爆发命中。',
+        hint: '基于长期箱体、低波动、近期启动、市场热度和财务质量训练 LightGBM；按年份 walk-forward 验证，重点看 Top1/Top3 的次日首板命中。',
         empty: '还没有横盘预警模型结果。先更新模型，完成后才有模型推荐和时光机评测。',
         good: 'Top3 平均收益',
         train: '更新模型',
-        target: '未来5日最高收益或再涨停命中，且5日回撤可控；辅助统计再涨停率和 Rank IC。'
+        target: '目标标签只看次日首板命中；近期多板高位默认过滤，除非已出现明显回撤；辅助统计5日收益、回撤和 Rank IC。'
       }
     : {
         section: 'LIMIT-UP MODEL',
@@ -867,6 +900,14 @@ function LimitUpModelTrainingPanel({
       </div>
       {(error || status?.message) && <div className={error ? 'errorBox' : 'cardHint'}>{error || status?.message}</div>}
       <RunStatusProgress status={status} />
+      <ModelVersionPanel
+        runs={runs || []}
+        activeRunID={activeRunID || run?.run_id || ''}
+        features={features}
+        loading={loading}
+        onActivateRun={onActivateRun}
+        variant={variant}
+      />
       <div className="limitModelVerdict">
         <div>
           <span className={verdict.tone}>{verdict.label}</span>
@@ -877,7 +918,7 @@ function LimitUpModelTrainingPanel({
           <Mini label="样本" value={run ? `${run.rows}/${run.candidate_rows}` : '—'} />
           <Mini label={`${variant === 'breakout' ? 'Top3' : 'Top10'}收益`} value={run ? pct(run.top_return) : '—'} valueClassName={run ? marketTone(run.top_return) : ''} />
           <Mini label="候选池收益" value={run ? pct(run.baseline_return) : '—'} valueClassName={run ? marketTone(run.baseline_return) : ''} />
-          <Mini label="再涨停率" value={run ? pctNoSign(run.top_limit_up_rate) : '—'} valueClassName={run ? rateTone(run.top_limit_up_rate, variant === 'breakout' ? 0.35 : 0.45) : ''} />
+          <Mini label={variant === 'breakout' ? '次日涨停率' : '再涨停率'} value={run ? pctNoSign(run.top_limit_up_rate) : '—'} valueClassName={run ? rateTone(run.top_limit_up_rate, variant === 'breakout' ? 0.35 : 0.45) : ''} />
           <Mini label="最大回撤" value={run ? pct(run.top_drawdown) : '—'} valueClassName={run ? drawdownTone(run.top_drawdown) : ''} />
           <Mini label="Rank IC" value={run ? run.rank_ic.toFixed(3) : '—'} valueClassName={run ? icTone(run.rank_ic) : ''} />
         </div>
@@ -928,6 +969,61 @@ function LimitUpModelTrainingPanel({
   )
 }
 
+function ModelVersionPanel({
+  runs,
+  activeRunID,
+  features,
+  loading,
+  onActivateRun,
+  variant
+}: {
+  runs: LimitUpModelRunSummary[]
+  activeRunID: string
+  features: LimitUpModelFeature[]
+  loading: boolean
+  onActivateRun?: (runID: string) => void
+  variant: 'momentum' | 'breakout'
+}) {
+  const title = variant === 'breakout' ? '横盘模型版本' : '涨停模型版本'
+  return (
+    <div className="limitModelColumns twoColumns">
+      <div>
+        <div className="formTitle">{title}</div>
+        <div className="limitModelList">
+          {runs.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无模型版本</div> : runs.map((item) => {
+            const active = item.run_id === activeRunID
+            return (
+              <div className="limitModelSliceRow" key={item.run_id}>
+                <b>{active ? '当前版本' : '历史版本'} · {dateLabel(item.updated_at || item.end_date)}</b>
+                <span>
+                  <span className="mono">{shortRunID(item.run_id)}</span>
+                  {' · '}{dateLabel(item.start_date)} - {dateLabel(item.end_date)}
+                  {' · '}{item.status}
+                  {' · '}Top{variant === 'breakout' ? '3' : '10'} {pct(item.top_return)}
+                  {' · '}Rank IC {Number.isFinite(item.rank_ic) ? item.rank_ic.toFixed(3) : '—'}
+                </span>
+                {!active ? (
+                  <button className="secondaryButton compactButton" onClick={() => onActivateRun?.(item.run_id)} disabled={loading || !onActivateRun}>
+                    设为当前版本
+                  </button>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+      <div>
+        <div className="formTitle">当前版本因子</div>
+        <div className="limitModelFeatureList">
+          {features.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无特征重要性</div> : features.map((item) => (
+            <span key={`${item.run_id}-${item.feature}`}>{item.rank_no}. {featureLabel(item.feature)} · {item.importance.toFixed(1)}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function LimitUpModelEvaluationPanel({
   run,
   status,
@@ -967,14 +1063,14 @@ function LimitUpModelEvaluationPanel({
     ? { tone: 'warningText', label: '未更新', text: '还没有模型评估结果。先去模型训练页更新模型。' }
     : run.top_return <= 0 || run.top_excess_return <= 0
       ? { tone: 'negativeText', label: '不通过', text: `${variant === 'breakout' ? 'Top3' : 'Top10'} 超额 ${pct(run.top_excess_return)}，模型暂不适合作为推荐入口。` }
-      : { tone: 'positiveText', label: '可观察', text: `${variant === 'breakout' ? 'Top3' : 'Top10'} 平均收益 ${pct(run.top_return)}，候选池收益 ${pct(run.baseline_return)}，再涨停率 ${pctNoSign(run.top_limit_up_rate)}。` }
+      : { tone: 'positiveText', label: '可观察', text: `${variant === 'breakout' ? 'Top3' : 'Top10'} 平均收益 ${pct(run.top_return)}，候选池收益 ${pct(run.baseline_return)}，${variant === 'breakout' ? '次日涨停率' : '再涨停率'} ${pctNoSign(run.top_limit_up_rate)}。` }
   return (
     <section className="limitModelPanel">
       <div className="tableHeader">
         <div>
           <div className="sectionLabel">MODEL EVALUATION</div>
           <div className="dashboardPanelTitle">{variant === 'breakout' ? '横盘模型评估' : '涨停模型评估'}</div>
-          <div className="cardHint">{variant === 'breakout' ? '这里看横盘模型固定后的时光机表现、Top1/Top3/Top10收益、回撤、再涨停率和 Rank IC，不展示旧规则评估。' : '这里看模型固定后的时光机表现、Top10收益、回撤、再涨停率和 Rank IC，不展示旧规则评估。'}</div>
+          <div className="cardHint">{variant === 'breakout' ? '这里看横盘模型固定后的时光机表现、Top1/Top3/Top10收益、回撤、次日涨停率和 Rank IC，不展示旧规则评估。' : '这里看模型固定后的时光机表现、Top10收益、回撤、再涨停率和 Rank IC，不展示旧规则评估。'}</div>
         </div>
       </div>
       {(error || status?.message) && <div className={error ? 'errorBox' : 'cardHint'}>{error || status?.message}</div>}
@@ -989,7 +1085,7 @@ function LimitUpModelEvaluationPanel({
           <Mini label="样本" value={run ? `${run.rows}/${run.candidate_rows}` : '—'} />
           <Mini label={`${variant === 'breakout' ? 'Top3' : 'Top10'}收益`} value={run ? pct(run.top_return) : '—'} valueClassName={run ? marketTone(run.top_return) : ''} />
           <Mini label="超额收益" value={run ? pct(run.top_excess_return) : '—'} valueClassName={run ? marketTone(run.top_excess_return) : ''} />
-          <Mini label="再涨停率" value={run ? pctNoSign(run.top_limit_up_rate) : '—'} valueClassName={run ? rateTone(run.top_limit_up_rate, variant === 'breakout' ? 0.35 : 0.45) : ''} />
+          <Mini label={variant === 'breakout' ? '次日涨停率' : '再涨停率'} value={run ? pctNoSign(run.top_limit_up_rate) : '—'} valueClassName={run ? rateTone(run.top_limit_up_rate, variant === 'breakout' ? 0.35 : 0.45) : ''} />
           <Mini label="最大回撤" value={run ? pct(run.top_drawdown) : '—'} valueClassName={run ? drawdownTone(run.top_drawdown) : ''} />
           <Mini label="Rank IC" value={run ? run.rank_ic.toFixed(3) : '—'} valueClassName={run ? icTone(run.rank_ic) : ''} />
         </div>
@@ -1043,7 +1139,7 @@ function LimitUpModelEvaluationPanel({
                   <th>超额</th>
                   <th>5日最高</th>
                   <th>命中率</th>
-                  <th>再涨停率</th>
+                  <th>{variant === 'breakout' ? '次日涨停率' : '再涨停率'}</th>
                   <th>回撤</th>
                 </tr>
               </thead>
@@ -1074,7 +1170,7 @@ function LimitUpModelEvaluationPanel({
                   <th>年份</th>
                   <th>{variant === 'breakout' ? 'Top3' : 'Top10'}</th>
                   <th>超额</th>
-                  <th>再涨停</th>
+                  <th>{variant === 'breakout' ? '次日涨停' : '再涨停'}</th>
                   <th>回撤</th>
                   <th>AUC</th>
                 </tr>
@@ -1138,7 +1234,7 @@ function LimitUpModelEvaluationPanel({
             {recentSlices.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无时光机切面</div> : recentSlices.map((item) => (
               <div className="limitModelSliceRow" key={item.trade_date}>
                 <b>{dateLabel(item.trade_date)}</b>
-                <span>候选 {item.candidate_count} · Top{item.top_count} {pct(item.avg_return)} · 涨停 {pctNoSign(item.limit_up_hit_rate)} · IC {item.rank_ic.toFixed(2)}</span>
+                <span>候选 {item.candidate_count} · Top{item.top_count} {pct(item.avg_return)} · {variant === 'breakout' ? '次日板' : '涨停'} {pctNoSign(item.limit_up_hit_rate)} · IC {item.rank_ic.toFixed(2)}</span>
               </div>
             ))}
           </div>
@@ -1163,18 +1259,21 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
   const [modelPredictions, setModelPredictions] = useState<LimitUpModelPrediction[]>([])
   const [modelSlices, setModelSlices] = useState<LimitUpModelTimeMachineSlice[]>([])
   const [modelFeatures, setModelFeatures] = useState<LimitUpModelFeature[]>([])
+  const [activeModelRunID, setActiveModelRunID] = useState('')
   const [modelError, setModelError] = useState('')
   const [modelLoading, setModelLoading] = useState(false)
 
   const loadModel = async () => {
     try {
-      const [runs, status] = await Promise.all([
+      const [runs, status, active] = await Promise.all([
         listLimitBreakoutModelRuns(5),
-        getLimitBreakoutModelRunStatus()
+        getLimitBreakoutModelRunStatus(),
+        getActiveStrategyModelRun('limit_breakout_model')
       ])
       setModelRuns(runs)
       setModelStatus(status)
-      const runID = runs[0]?.run_id || ''
+      const runID = active.run_id || runs[0]?.run_id || ''
+      setActiveModelRunID(active.run_id || '')
       const [predictions, slices, features] = await Promise.all([
         listLimitBreakoutModelPredictions(runID, 10),
         listLimitBreakoutModelTimeMachineSlices(runID, 20),
@@ -1216,6 +1315,20 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
     }
   }
 
+  const activateRun = async (runID: string) => {
+    setModelLoading(true)
+    setModelError('')
+    try {
+      const active = await activateStrategyModelRun({ strategy: 'limit_breakout_model', run_id: runID })
+      setActiveModelRunID(active.run_id)
+      await loadModel()
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setModelLoading(false)
+    }
+  }
+
   useEffect(() => {
     loadModel().catch((error) => console.error('[breakout-model] load failed', error))
   }, [])
@@ -1226,23 +1339,28 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
     return () => window.clearInterval(modelTimer)
   }, [modelStatus?.state])
 
+  const activeRun = modelRuns.find((run) => run.run_id === (activeModelRunID || modelPredictions[0]?.run_id)) || modelRuns[0]
+
   return (
     <>
       {view === 'training' && (
         <LimitUpModelTrainingPanel
-          run={modelRuns[0]}
+          run={activeRun}
+          runs={modelRuns}
+          activeRunID={activeModelRunID || activeRun?.run_id || ''}
           status={modelStatus}
           features={modelFeatures}
           error={modelError}
           loading={modelLoading}
           onTrain={trainModel}
+          onActivateRun={activateRun}
           variant="breakout"
         />
       )}
 
       {view === 'evaluation' && (
         <LimitUpModelEvaluationPanel
-          run={modelRuns[0]}
+          run={activeRun}
           status={modelStatus}
           slices={modelSlices}
           features={modelFeatures}
@@ -1254,7 +1372,7 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
       {view === 'recommend' && (
         <SignalSummaryPanel
           predictions={modelPredictions}
-          run={modelRuns[0]}
+          run={activeRun}
           variant="breakout"
           error={modelError}
           loading={modelLoading || modelStatus?.state === 'running'}
@@ -1265,7 +1383,7 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
       {view === 'recommend' && (
         <SignalActionList
           predictions={modelPredictions}
-          run={modelRuns[0]}
+          run={activeRun}
           variant="breakout"
           onOpenResearch={onOpenResearch}
           selectedCode={selectedCode}
@@ -1279,6 +1397,11 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
 
 function Mini({ label, value, valueClassName = '' }: { label: string; value: string; valueClassName?: string }) {
   return <div className="miniMetric compact"><span>{label}</span><b className={valueClassName}>{value}</b></div>
+}
+
+function shortRunID(runID: string) {
+  if (!runID) return '-'
+  return runID.length > 24 ? `${runID.slice(0, 10)}…${runID.slice(-8)}` : runID
 }
 
 function ReasonBlocks({ reasons, risks }: { reasons: string[]; risks: string[] }) {

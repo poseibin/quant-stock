@@ -187,6 +187,22 @@ export namespace datafetch {
 
 export namespace main {
 	
+	export class ActiveStrategyModelRun {
+	    strategy: string;
+	    run_id: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ActiveStrategyModelRun(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.run_id = source["run_id"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class AppInfo {
 	    name: string;
 	    version: string;
@@ -1336,6 +1352,20 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class StrategyModelRunRequest {
+	    strategy: string;
+	    run_id: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StrategyModelRunRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.run_id = source["run_id"];
+	    }
 	}
 	export class StrategyVersionActivateRequest {
 	    strategy: string;
@@ -2529,6 +2559,9 @@ export namespace position {
 	    pct_chg: number;
 	    target_shares: number;
 	    target_amount: number;
+	    buy_trigger_price: number;
+	    sell_target_price: number;
+	    stop_price: number;
 	    sources: Source[];
 	
 	    static createFrom(source: any = {}) {
@@ -2548,6 +2581,9 @@ export namespace position {
 	        this.pct_chg = source["pct_chg"];
 	        this.target_shares = source["target_shares"];
 	        this.target_amount = source["target_amount"];
+	        this.buy_trigger_price = source["buy_trigger_price"];
+	        this.sell_target_price = source["sell_target_price"];
+	        this.stop_price = source["stop_price"];
 	        this.sources = this.convertValues(source["sources"], Source);
 	    }
 	
@@ -2745,6 +2781,8 @@ export namespace position {
 	    date: string;
 	    exit_reason: string;
 	    exit_pct: number;
+	    trigger_type: string;
+	    trigger_price: number;
 	    sources: Source[];
 	
 	    static createFrom(source: any = {}) {
@@ -2760,6 +2798,8 @@ export namespace position {
 	        this.date = source["date"];
 	        this.exit_reason = source["exit_reason"];
 	        this.exit_pct = source["exit_pct"];
+	        this.trigger_type = source["trigger_type"];
+	        this.trigger_price = source["trigger_price"];
 	        this.sources = this.convertValues(source["sources"], Source);
 	    }
 	

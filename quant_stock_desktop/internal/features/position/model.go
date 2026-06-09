@@ -64,14 +64,16 @@ type TradeRecord struct {
 }
 
 type TradeRequest struct {
-	TSCode     string   `json:"ts_code"`
-	Action     string   `json:"action"`
-	Shares     int      `json:"shares"`
-	Price      float64  `json:"price"`
-	Date       string   `json:"date"`
-	ExitReason string   `json:"exit_reason"`
-	ExitPct    float64  `json:"exit_pct"`
-	Sources    []Source `json:"sources"`
+	TSCode       string   `json:"ts_code"`
+	Action       string   `json:"action"`
+	Shares       int      `json:"shares"`
+	Price        float64  `json:"price"`
+	Date         string   `json:"date"`
+	ExitReason   string   `json:"exit_reason"`
+	ExitPct      float64  `json:"exit_pct"`
+	TriggerType  string   `json:"trigger_type"`
+	TriggerPrice float64  `json:"trigger_price"`
+	Sources      []Source `json:"sources"`
 }
 
 type Signal struct {
@@ -158,18 +160,21 @@ type RunStatus struct {
 }
 
 type RecommendationItem struct {
-	Action       string   `json:"action"`
-	TSCode       string   `json:"ts_code"`
-	Name         string   `json:"name"`
-	Industry     string   `json:"industry"`
-	FromWeight   float64  `json:"from_weight"`
-	ToWeight     float64  `json:"to_weight"`
-	DeltaWeight  float64  `json:"delta_weight"`
-	Price        float64  `json:"price"`
-	PctChg       float64  `json:"pct_chg"`
-	TargetShares int      `json:"target_shares"`
-	TargetAmount float64  `json:"target_amount"`
-	Sources      []Source `json:"sources"`
+	Action          string   `json:"action"`
+	TSCode          string   `json:"ts_code"`
+	Name            string   `json:"name"`
+	Industry        string   `json:"industry"`
+	FromWeight      float64  `json:"from_weight"`
+	ToWeight        float64  `json:"to_weight"`
+	DeltaWeight     float64  `json:"delta_weight"`
+	Price           float64  `json:"price"`
+	PctChg          float64  `json:"pct_chg"`
+	TargetShares    int      `json:"target_shares"`
+	TargetAmount    float64  `json:"target_amount"`
+	BuyTriggerPrice float64  `json:"buy_trigger_price"`
+	SellTargetPrice float64  `json:"sell_target_price"`
+	StopPrice       float64  `json:"stop_price"`
+	Sources         []Source `json:"sources"`
 }
 
 type Summary struct {

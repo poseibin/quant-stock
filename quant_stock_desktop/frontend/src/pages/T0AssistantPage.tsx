@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
-import { getT0DailyResearchStatus, getT0TimeMachineStatus, listT0DailyBacktests, listT0DailyRuns, listT0DataPullCandidates, listT0Recommendations, listT0TimeMachineResults, runT0DailyResearch, runT0TimeMachine, type RunStatus, type T0DailyBacktest, type T0DailyRunSummary, type T0DataPullCandidate, type T0Recommendation, type T0TimeMachineResult } from '../services/app'
+import { activateStrategyModelRun, getActiveStrategyModelRun, getT0DailyResearchStatus, getT0TimeMachineStatus, listT0DailyBacktests, listT0DailyRuns, listT0DataPullCandidates, listT0Recommendations, listT0TimeMachineResults, runT0DailyResearch, runT0TimeMachine, type RunStatus, type T0DailyBacktest, type T0DailyRunSummary, type T0DataPullCandidate, type T0Recommendation, type T0TimeMachineResult } from '../services/app'
 
 function money(value: number) {
   if (!Number.isFinite(value) || value === 0) return '—'
@@ -352,6 +352,13 @@ function actionPriority(action: string) {
   return 1
 }
 
+function isT0TrialCandidate(row: T0PlanRow) {
+  if (row.action === '可试仓' || row.action === '优先计划') return true
+  if (row.action === '暂缓' || row.action === '不建议' || row.action === '放弃') return false
+  if (row.risks?.some((risk) => risk.includes('剔除') || risk.includes('停手') || risk.includes('为负'))) return false
+  return row.score >= 76 && (row.expected_edge || 0) > 0 && (row.t_ratio || 0) > 0
+}
+
 function countBy<T>(rows: T[], pick: (row: T) => string) {
   const counts = new Map<string, number>()
   rows.forEach((row) => {
@@ -383,12 +390,13 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
   const [cycleRunning, setCycleRunning] = useState(false)
   const [activeView, setActiveView] = useState<T0AssistantView>('recommend')
   const [error, setError] = useState('')
+  const [activeModelRunID, setActiveModelRunID] = useState('')
 
   const load = () => {
     setLoading(true)
     setError('')
-    return Promise.all([listT0Recommendations(80), listT0DataPullCandidates(80), listT0DailyRuns(5), listT0DailyBacktests(80), listT0TimeMachineResults(80), getT0DailyResearchStatus(), getT0TimeMachineStatus()])
-      .then(([nextRows, nextPullCandidates, nextDailyRuns, nextBacktests, nextTimeMachineRows, nextStatus, nextTimeMachineStatus]) => {
+    return Promise.all([listT0Recommendations(80), listT0DataPullCandidates(80), listT0DailyRuns(5), listT0DailyBacktests(80), listT0TimeMachineResults(80), getT0DailyResearchStatus(), getT0TimeMachineStatus(), getActiveStrategyModelRun('t0_daily')])
+      .then(([nextRows, nextPullCandidates, nextDailyRuns, nextBacktests, nextTimeMachineRows, nextStatus, nextTimeMachineStatus, active]) => {
         setRows(nextRows)
         setPullCandidates(nextPullCandidates)
         setDailyRuns(nextDailyRuns)
@@ -396,8 +404,21 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
         setTimeMachineRows(nextTimeMachineRows)
         setRunStatus(nextStatus)
         setTimeMachineStatus(nextTimeMachineStatus)
+        setActiveModelRunID(active.run_id || '')
       })
       .catch((err: Error) => setError(err.message || '加载做T建议失败'))
+      .finally(() => setLoading(false))
+  }
+
+  const activateRun = (runID: string) => {
+    setLoading(true)
+    setError('')
+    activateStrategyModelRun({ strategy: 't0_daily', run_id: runID })
+      .then((active) => {
+        setActiveModelRunID(active.run_id)
+        return load()
+      })
+      .catch((err: Error) => setError(err.message || '切换做T模型版本失败'))
       .finally(() => setLoading(false))
   }
 
@@ -537,8 +558,12 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
     const bestRecentTotal = recentRows.length ? Math.max(...recentRows.map((row) => row.total_edge)) : Number.NaN
     return { avgRecentTotal, avgTwoSided, avgStopHit, bestRecentTotal, count: recentRows.length }
   }, [operationTop10, backtestByCode])
+  const activeDailyRun = useMemo(
+    () => dailyRuns.find((item) => item.run_id === activeModelRunID) || dailyRuns[0],
+    [activeModelRunID, dailyRuns]
+  )
   const modelExplainSummary = useMemo(() => {
-    const model = parseT0ModelSummary(dailyRuns[0])
+    const model = parseT0ModelSummary(activeDailyRun)
     const count = pullCandidates.length
     const avgRange = count ? pullCandidates.reduce((sum, row) => sum + row.avg_range_20d, 0) / count : Number.NaN
     const avgAmount = count ? pullCandidates.reduce((sum, row) => sum + row.avg_amount_20d, 0) / count : Number.NaN
@@ -569,7 +594,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
       top10AvgEdge: Number(model?.top10_avg_edge ?? Number.NaN),
       top10TwoSided: Number(model?.top10_two_sided ?? Number.NaN),
     }
-  }, [dailyRuns, pullCandidates])
+  }, [activeDailyRun, pullCandidates])
   const timeMachineSummary = useMemo(() => {
     const grid = parseTimeMachineGrid(timeMachineRows)
     if (timeMachineRows.length === 0) {
@@ -845,7 +870,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                 const held = Boolean(position)
                 const tShares = position?.max_t0_shares || 0
                 const buildShares = roundLotShares(plan.buy, 10000)
-                const executable = index < 3
+                const executable = isT0TrialCandidate(row)
                 const buyShares = executable ? held ? tShares : buildShares : 0
                 const sellShares = executable && held ? tShares : 0
                 const displayAction = executable ? '可试仓' : '观察'
@@ -866,7 +891,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
                     <td>
                       <span className={`badge ${pullBadge(displayAction)}`}>{displayAction}</span>
                       <div className="recommendationMeta">{row.setup || row.state || '交易员模型'}</div>
-                      <div className="recommendationMeta">{executable ? row.first_action || '挂单等待' : 'Top4-10 不执行'}</div>
+                      <div className="recommendationMeta">{executable ? row.first_action || '挂单等待' : row.action || '观察，不执行'}</div>
                       <div className="recommendationMeta">{flow.label} · 今日 {percent(row.today_pct, true)}</div>
                       <div className="recommendationMeta">保留原因：{row.observation_reason || row.setup || row.action || '做T候选'}</div>
                     </td>
@@ -1117,6 +1142,13 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           </div>
         </div>
         {(error || runStatus?.message) && <div className={error ? 'errorBox' : 'cardHint'}>{error || runStatus?.message}</div>}
+        <T0ModelVersionPanel
+          runs={dailyRuns}
+          activeRunID={activeModelRunID || activeDailyRun?.run_id || ''}
+          featureImportance={modelExplainSummary.featureImportance}
+          loading={loading || running || cycleRunning}
+          onActivateRun={activateRun}
+        />
         <div className="limitModelVerdict">
           <div>
             <span className={isT0ModelTrained(modelExplainSummary.model) ? 'positiveText' : profitSummary.avgRecentTotal > 0 ? 'warningText' : 'negativeText'}>
@@ -1245,4 +1277,62 @@ function pullBadge(action: string) {
 
 function Mini({ label, value, valueClassName = '' }: { label: string; value: string; valueClassName?: string }) {
   return <div className="miniMetric compact"><span>{label}</span><b className={valueClassName}>{value}</b></div>
+}
+
+function T0ModelVersionPanel({
+  runs,
+  activeRunID,
+  featureImportance,
+  loading,
+  onActivateRun
+}: {
+  runs: T0DailyRunSummary[]
+  activeRunID: string
+  featureImportance: T0ModelFeatureImportance[]
+  loading: boolean
+  onActivateRun: (runID: string) => void
+}) {
+  return (
+    <div className="limitModelColumns twoColumns">
+      <div>
+        <div className="formTitle">做T模型版本</div>
+        <div className="limitModelList">
+          {runs.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无模型版本</div> : runs.map((item) => {
+            const model = parseT0ModelSummary(item)
+            const active = item.run_id === activeRunID
+            return (
+              <div className="limitModelSliceRow" key={item.run_id}>
+                <b>{active ? '当前版本' : '历史版本'} · {formatDateTime(item.updated_at || item.trade_date)}</b>
+                <span>
+                  <span className="mono">{shortRunID(item.run_id)}</span>
+                  {' · '}{item.status}
+                  {' · '}候选 {item.candidate_count}
+                  {' · '}Top10价差 {percent(Number(model?.top10_avg_edge ?? Number.NaN), true)}
+                  {' · '}Rank IC {Number.isFinite(Number(model?.rank_ic)) ? Number(model?.rank_ic).toFixed(3) : '—'}
+                </span>
+                {!active ? (
+                  <button className="secondaryButton compactButton" onClick={() => onActivateRun(item.run_id)} disabled={loading}>
+                    设为当前版本
+                  </button>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+      <div>
+        <div className="formTitle">当前版本因子</div>
+        <div className="limitModelFeatureList">
+          {featureImportance.length === 0
+            ? <div className="taskGridEmpty compactEmpty">暂无特征重要性</div>
+            : featureImportance.map((item, index) => <span key={item.feature}>{index + 1}. {t0FeatureLabel(item.feature)} · {item.importance.toFixed(1)}</span>)}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function shortRunID(runID: string) {
+  if (!runID) return '-'
+  return runID.length > 24 ? `${runID.slice(0, 10)}…${runID.slice(-8)}` : runID
 }

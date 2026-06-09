@@ -578,6 +578,17 @@ type StrategyVersionStatusRequest struct {
 	Status   string `json:"status"`
 }
 
+type StrategyModelRunRequest struct {
+	Strategy string `json:"strategy"`
+	RunID    string `json:"run_id"`
+}
+
+type ActiveStrategyModelRun struct {
+	Strategy  string `json:"strategy"`
+	RunID     string `json:"run_id"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 type PolicySupportSignalDTO struct {
 	TradeDate          string  `json:"trade_date"`
 	SignalLevel        string  `json:"signal_level"`
@@ -992,6 +1003,93 @@ func (app *App) SetStrategyVersionStatus(req StrategyVersionStatusRequest) ([]St
 		}
 	}
 	return app.ListStrategyVersions(strategyName)
+}
+
+func (app *App) GetActiveStrategyModelRun(strategy string) (ActiveStrategyModelRun, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return ActiveStrategyModelRun{}, err
+	}
+	if err := app.ensureStrategyModelActiveTable(); err != nil {
+		return ActiveStrategyModelRun{}, err
+	}
+	strategy = strings.TrimSpace(strategy)
+	if strategy == "" {
+		return ActiveStrategyModelRun{}, errors.New("strategy is required")
+	}
+	var item ActiveStrategyModelRun
+	err := app.database.Conn().QueryRow(`SELECT strategy, run_id, updated_at FROM strategy_model_active WHERE strategy = ?`, strategy).
+		Scan(&item.Strategy, &item.RunID, &item.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return ActiveStrategyModelRun{Strategy: strategy}, nil
+	}
+	return item, err
+}
+
+func (app *App) ActivateStrategyModelRun(req StrategyModelRunRequest) (ActiveStrategyModelRun, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return ActiveStrategyModelRun{}, err
+	}
+	if err := app.ensureStrategyModelActiveTable(); err != nil {
+		return ActiveStrategyModelRun{}, err
+	}
+	strategy := strings.TrimSpace(req.Strategy)
+	runID := strings.TrimSpace(req.RunID)
+	if strategy == "" || runID == "" {
+		return ActiveStrategyModelRun{}, errors.New("strategy and run_id are required")
+	}
+	if !app.strategyModelRunExists(strategy, runID) {
+		return ActiveStrategyModelRun{}, errors.New("model run not found")
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, err := app.database.Conn().Exec(
+		app.database.UpsertSQL("strategy_model_active", []string{"strategy", "run_id", "updated_at"}, []string{"strategy"}, []string{"run_id", "updated_at"}),
+		strategy, runID, now,
+	)
+	if err != nil {
+		return ActiveStrategyModelRun{}, err
+	}
+	return ActiveStrategyModelRun{Strategy: strategy, RunID: runID, UpdatedAt: now}, nil
+}
+
+func (app *App) ensureStrategyModelActiveTable() error {
+	if app.database == nil || app.database.Conn() == nil {
+		return errors.New("database is not initialized")
+	}
+	_, err := app.database.Conn().Exec(`CREATE TABLE IF NOT EXISTS strategy_model_active (
+		strategy VARCHAR(191) PRIMARY KEY,
+		run_id VARCHAR(191) NOT NULL,
+		updated_at VARCHAR(191) NOT NULL
+	)`)
+	return err
+}
+
+func (app *App) activeStrategyModelRunID(strategy string) string {
+	if app.database == nil || app.database.Conn() == nil {
+		return ""
+	}
+	if err := app.ensureStrategyModelActiveTable(); err != nil {
+		return ""
+	}
+	var runID string
+	_ = app.database.Conn().QueryRow(`SELECT run_id FROM strategy_model_active WHERE strategy = ?`, strings.TrimSpace(strategy)).Scan(&runID)
+	return strings.TrimSpace(runID)
+}
+
+func (app *App) strategyModelRunExists(strategy string, runID string) bool {
+	table := ""
+	switch strings.TrimSpace(strategy) {
+	case "limit_up_model":
+		table = "limit_up_model_runs"
+	case "limit_breakout_model":
+		table = "limit_breakout_model_runs"
+	case "t0_daily":
+		table = "t0_daily_runs"
+	default:
+		return false
+	}
+	var count int
+	_ = app.database.Conn().QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE run_id = ?`, table), runID).Scan(&count)
+	return count > 0
 }
 
 func (app *App) ApplyPortfolioCandidate(req ApplyPortfolioCandidateRequest) (SettingsResponse, error) {
@@ -2100,11 +2198,7 @@ func (app *App) ListFactorLatestPredictions(runID string, limit int) ([]FactorLa
 	}
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
-		latest, err := app.latestFactorRunID()
-		if err != nil {
-			return []FactorLatestPrediction{}, err
-		}
-		runID = latest
+		runID = app.latestFactorRunIDValue()
 	}
 	if runID == "" {
 		return []FactorLatestPrediction{}, nil
@@ -2847,15 +2941,19 @@ func (app *App) ListLimitUpModelRuns(limit int) ([]LimitUpModelRunSummary, error
 	out := []LimitUpModelRunSummary{}
 	for rows.Next() {
 		var item LimitUpModelRunSummary
+		var rowsValue, candidateRowsValue, latestCountValue any
 		if err := rows.Scan(
 			&item.RunID, &item.StartDate, &item.EndDate, &item.Horizon, &item.ModelType,
-			&item.FeatureCount, &item.Status, &item.ModelPath, &item.Rows, &item.CandidateRows,
-			&item.LatestDate, &item.LatestCount, &item.PositiveRate, &item.BaselineReturn,
+			&item.FeatureCount, &item.Status, &item.ModelPath, &rowsValue, &candidateRowsValue,
+			&item.LatestDate, &latestCountValue, &item.PositiveRate, &item.BaselineReturn,
 			&item.TopReturn, &item.TopExcessReturn, &item.TopHitRate, &item.TopLimitUpRate,
 			&item.TopDrawdown, &item.RankIC, &item.SummaryJSON, &item.UpdatedAt,
 		); err != nil {
 			return out, err
 		}
+		item.Rows = int(anyToFloat(rowsValue))
+		item.CandidateRows = int(anyToFloat(candidateRowsValue))
+		item.LatestCount = int(anyToFloat(latestCountValue))
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -2984,6 +3082,9 @@ func (app *App) resolveLatestLimitUpModelRunID(runID string) string {
 	if runID != "" || app.database == nil {
 		return runID
 	}
+	if active := app.activeStrategyModelRunID("limit_up_model"); active != "" && app.strategyModelRunExists("limit_up_model", active) {
+		return active
+	}
 	_ = app.database.Conn().QueryRow(`SELECT run_id FROM limit_up_model_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
 	return runID
 }
@@ -3056,15 +3157,19 @@ func (app *App) ListLimitBreakoutModelRuns(limit int) ([]LimitUpModelRunSummary,
 	out := []LimitUpModelRunSummary{}
 	for rows.Next() {
 		var item LimitUpModelRunSummary
+		var rowsValue, candidateRowsValue, latestCountValue any
 		if err := rows.Scan(
 			&item.RunID, &item.StartDate, &item.EndDate, &item.Horizon, &item.ModelType,
-			&item.FeatureCount, &item.Status, &item.ModelPath, &item.Rows, &item.CandidateRows,
-			&item.LatestDate, &item.LatestCount, &item.PositiveRate, &item.BaselineReturn,
+			&item.FeatureCount, &item.Status, &item.ModelPath, &rowsValue, &candidateRowsValue,
+			&item.LatestDate, &latestCountValue, &item.PositiveRate, &item.BaselineReturn,
 			&item.TopReturn, &item.TopExcessReturn, &item.TopHitRate, &item.TopLimitUpRate,
 			&item.TopDrawdown, &item.RankIC, &item.SummaryJSON, &item.UpdatedAt,
 		); err != nil {
 			return out, err
 		}
+		item.Rows = int(anyToFloat(rowsValue))
+		item.CandidateRows = int(anyToFloat(candidateRowsValue))
+		item.LatestCount = int(anyToFloat(latestCountValue))
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -3192,6 +3297,9 @@ func (app *App) resolveLatestLimitBreakoutModelRunID(runID string) string {
 	runID = strings.TrimSpace(runID)
 	if runID != "" || app.database == nil {
 		return runID
+	}
+	if active := app.activeStrategyModelRunID("limit_breakout_model"); active != "" && app.strategyModelRunExists("limit_breakout_model", active) {
+		return active
 	}
 	_ = app.database.Conn().QueryRow(`SELECT run_id FROM limit_breakout_model_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
 	return runID
@@ -3330,6 +3438,7 @@ func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
 	if err := app.ensureDatabase(); err != nil {
 		return nil, err
 	}
+	runID := app.resolveLatestT0DailyRunID("")
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
@@ -3344,10 +3453,10 @@ func (app *App) ListT0Recommendations(limit int) ([]T0Recommendation, error) {
 		       COALESCE(c.expected_edge,0), COALESCE(c.plan_json,''), COALESCE(c.reasons_json,'[]'), COALESCE(c.risks_json,'[]'), COALESCE(c.generated_at,'')
 		FROM portfolio_pool_holdings h
 		LEFT JOIN t0_daily_candidates c ON c.ts_code = h.ts_code
-			AND c.run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
+			AND c.run_id = ?
 		WHERE h.shares > 0
 		ORDER BY COALESCE(c.score,0) DESC, h.weight DESC, h.market_value DESC
-		LIMIT ?`, limit)
+		LIMIT ?`, runID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -3407,6 +3516,7 @@ func (app *App) ListT0DataPullCandidates(limit int) ([]T0DataPullCandidate, erro
 	if err := app.ensureDatabase(); err != nil {
 		return nil, err
 	}
+	runID := app.resolveLatestT0DailyRunID("")
 	if limit <= 0 || limit > 300 {
 		limit = 100
 	}
@@ -3416,9 +3526,9 @@ func (app *App) ListT0DataPullCandidates(limit int) ([]T0DataPullCandidate, erro
 		       avg_range_20d, drawdown_20d, amount, avg_amount_20d, expected_edge, target_freq, lookback_days,
 		       plan_json, reasons_json, risks_json, generated_at
 		FROM t0_daily_candidates
-		WHERE run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
+		WHERE run_id = ?
 		ORDER BY score DESC, avg_amount_20d DESC
-		LIMIT ?`, limit)
+		LIMIT ?`, runID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -3488,12 +3598,23 @@ func (app *App) ListT0DailyRuns(limit int) ([]T0DailyRunSummary, error) {
 	return out, nil
 }
 
+func (app *App) resolveLatestT0DailyRunID(runID string) string {
+	runID = strings.TrimSpace(runID)
+	if runID != "" || app.database == nil {
+		return runID
+	}
+	if active := app.activeStrategyModelRunID("t0_daily"); active != "" && app.strategyModelRunExists("t0_daily", active) {
+		return active
+	}
+	_ = app.database.Conn().QueryRow(`SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	return runID
+}
+
 func (app *App) syncT0DataPullObservation(items []T0DataPullCandidate) {
 	if len(items) == 0 || app.database == nil || app.database.Conn() == nil {
 		return
 	}
-	runID := ""
-	_ = app.database.Conn().QueryRow(`SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	runID := app.resolveLatestT0DailyRunID("")
 	if runID == "" {
 		runID = "t0_daily_latest"
 	}
@@ -3552,6 +3673,7 @@ func (app *App) ListT0DailyBacktests(limit int) ([]T0DailyBacktest, error) {
 	if err := app.ensureDatabase(); err != nil {
 		return nil, err
 	}
+	runID := app.resolveLatestT0DailyRunID("")
 	if limit <= 0 || limit > 300 {
 		limit = 100
 	}
@@ -3559,9 +3681,9 @@ func (app *App) ListT0DailyBacktests(limit int) ([]T0DailyBacktest, error) {
 		SELECT run_id, ts_code, name, industry, n_days, n_candidates, two_sided_rate, one_sided_rate,
 		       avg_edge, total_edge, avg_next_range, score, summary_json, updated_at
 		FROM t0_daily_backtests
-		WHERE run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
+		WHERE run_id = ?
 		ORDER BY score DESC, two_sided_rate DESC
-		LIMIT ?`, limit)
+		LIMIT ?`, runID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -3809,7 +3931,43 @@ func (app *App) ConfirmPositionTrades(trades []position.TradeRequest) (position.
 		return position.Summary{}, err
 	}
 	app.applyLatestExecutionPrices(trades)
+	trades = filterTriggeredTrades(trades)
+	if len(trades) == 0 {
+		return position.Summary{}, errors.New("没有达到条件价的调仓单，已跳过执行")
+	}
 	return app.positionService.ConfirmTrades(app.settings.DataPath, trades)
+}
+
+func filterTriggeredTrades(trades []position.TradeRequest) []position.TradeRequest {
+	out := make([]position.TradeRequest, 0, len(trades))
+	for _, trade := range trades {
+		if trade.Price <= 0 || trade.Shares <= 0 {
+			continue
+		}
+		triggerType := strings.TrimSpace(trade.TriggerType)
+		triggerPrice := trade.TriggerPrice
+		if triggerType == "" || triggerPrice <= 0 {
+			out = append(out, trade)
+			continue
+		}
+		switch triggerType {
+		case "buy_below":
+			if trade.Price <= triggerPrice {
+				out = append(out, trade)
+			}
+		case "sell_above":
+			if trade.Price >= triggerPrice {
+				out = append(out, trade)
+			}
+		case "stop_below":
+			if trade.Price <= triggerPrice {
+				out = append(out, trade)
+			}
+		default:
+			out = append(out, trade)
+		}
+	}
+	return out
 }
 
 func (app *App) RefreshPositionRealtimeQuotes() (position.Summary, error) {
@@ -3980,13 +4138,16 @@ func (app *App) GetPositionRecommendation() (position.Recommendation, error) {
 }
 
 type accountTarget struct {
-	TSCode       string
-	Name         string
-	Industry     string
-	Price        float64
-	PctChg       float64
-	TargetWeight float64
-	Sources      []position.Source
+	TSCode          string
+	Name            string
+	Industry        string
+	Price           float64
+	PctChg          float64
+	TargetWeight    float64
+	BuyTriggerPrice float64
+	SellTargetPrice float64
+	StopPrice       float64
+	Sources         []position.Source
 }
 
 func (app *App) buildAccountRebalanceRecommendation() (position.Recommendation, error) {
@@ -4040,11 +4201,6 @@ func (app *App) buildAccountRebalanceRecommendation() (position.Recommendation, 
 		}
 		rec.Rebalanced = count > 0
 		rec.RebalanceTrades = count
-		if rec.Rebalanced {
-			rec.Rows = []position.RecommendationItem{}
-			rec.NBuy = 0
-			rec.NSell = 0
-		}
 	}
 	return rec, nil
 }
@@ -4173,6 +4329,23 @@ func (app *App) addTargetWeight(targets map[string]*accountTarget, tsCode, name,
 	item.Sources = append(item.Sources, position.Source{Strategy: strategy, Weight: weight})
 }
 
+func (app *App) addTargetPlan(targets map[string]*accountTarget, tsCode, name, industry string, price, pctChg, weight float64, strategy string, buyTriggerPrice float64, sellTargetPrice float64, stopPrice float64) {
+	app.addTargetWeight(targets, tsCode, name, industry, price, pctChg, weight, strategy)
+	item := targets[strings.TrimSpace(tsCode)]
+	if item == nil {
+		return
+	}
+	if buyTriggerPrice > 0 && buyTriggerPrice > item.BuyTriggerPrice {
+		item.BuyTriggerPrice = buyTriggerPrice
+	}
+	if sellTargetPrice > 0 && (item.SellTargetPrice <= 0 || sellTargetPrice < item.SellTargetPrice) {
+		item.SellTargetPrice = sellTargetPrice
+	}
+	if stopPrice > 0 && stopPrice > item.StopPrice {
+		item.StopPrice = stopPrice
+	}
+}
+
 func (app *App) mergeBaseRecommendationTargets(targets map[string]*accountTarget) {
 	rec, err := app.positionService.GetRecommendation(app.settings.DataPath)
 	if err != nil {
@@ -4201,14 +4374,14 @@ func (app *App) mergeFactorTargets(targets map[string]*accountTarget) {
 		LEFT JOIN data_daily_bars d ON d.ts_code = p.ts_code AND d.trade_date = p.trade_date
 		WHERE p.run_id = ? AND COALESCE(p.is_top20, 0) = 1
 		ORDER BY p.pred_score DESC
-		LIMIT 8`, runID)
+		LIMIT 10`, runID)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
 	total := 0.0
 	for rows.Next() {
-		if total >= 0.16 {
+		if total >= 0.20 {
 			break
 		}
 		var tsCode, name, industry string
@@ -4225,12 +4398,26 @@ func (app *App) mergeFactorTargets(targets map[string]*accountTarget) {
 		} else if rankPct > 0 {
 			weight = clamp(rankPct/30, 0.015, 0.035)
 		}
-		if total+weight > 0.16 {
-			weight = 0.16 - total
+		if total+weight > 0.20 {
+			weight = 0.20 - total
 		}
-		app.addTargetWeight(targets, tsCode, name, industry, price, pctChg, weight, "ml_factor_ranker")
+		buyTrigger, sellTarget, stopPrice := factorTradePlanPrices(price, rankPct)
+		app.addTargetPlan(targets, tsCode, name, industry, price, pctChg, weight, "ml_factor_ranker", buyTrigger, sellTarget, stopPrice)
 		total += weight
 	}
+}
+
+func factorTradePlanPrices(price float64, rankPct float64) (float64, float64, float64) {
+	if price <= 0 {
+		return 0, 0, 0
+	}
+	if rankPct <= 0 {
+		rankPct = 0.8
+	}
+	buyBand := clamp(0.026-rankPct*0.014, 0.006, 0.025)
+	sellBand := clamp(0.028+rankPct*0.04, 0.025, 0.08)
+	stopBand := clamp(0.075-math.Min(rankPct, 1)*0.025, 0.035, 0.08)
+	return roundPrice(price * (1 - buyBand)), roundPrice(price * (1 + sellBand)), roundPrice(price * (1 - stopBand))
 }
 
 func (app *App) latestFactorRunIDValue() string {
@@ -4271,7 +4458,8 @@ func (app *App) mergeLimitUpModelTargets(targets map[string]*accountTarget) {
 		if total+weight > 0.12 {
 			weight = 0.12 - total
 		}
-		app.addTargetWeight(targets, item.TSCode, item.Name, item.Industry, item.Price, item.TodayPct, weight, "limit_up_model")
+		buyTrigger, sellTarget, stopPrice := limitModelTradePlanPrices(item.Price, "momentum")
+		app.addTargetPlan(targets, item.TSCode, item.Name, item.Industry, item.Price, item.TodayPct, weight, "limit_up_model", buyTrigger, sellTarget, stopPrice)
 		total += weight
 	}
 }
@@ -4297,23 +4485,50 @@ func (app *App) mergeBreakoutModelTargets(targets map[string]*accountTarget) {
 		if total+weight > 0.12 {
 			weight = 0.12 - total
 		}
-		app.addTargetWeight(targets, item.TSCode, item.Name, item.Industry, item.Price, item.TodayPct, weight, "limit_breakout_model")
+		buyTrigger, sellTarget, stopPrice := limitModelTradePlanPrices(item.Price, "breakout")
+		app.addTargetPlan(targets, item.TSCode, item.Name, item.Industry, item.Price, item.TodayPct, weight, "limit_breakout_model", buyTrigger, sellTarget, stopPrice)
 		total += weight
 	}
 }
 
+func limitModelTradePlanPrices(price float64, variant string) (float64, float64, float64) {
+	if price <= 0 {
+		return 0, 0, 0
+	}
+	if variant == "breakout" {
+		return roundPrice(price * 0.985), roundPrice(price * 1.08), roundPrice(price * 0.95)
+	}
+	return roundPrice(price * 1.015), roundPrice(price * 1.10), roundPrice(price * 0.95)
+}
+
 func (app *App) latestLimitUpModelRunSummary() *LimitUpModelRunSummary {
-	rows, err := app.ListLimitUpModelRuns(1)
+	runID := app.resolveLatestLimitUpModelRunID("")
+	rows, err := app.ListLimitUpModelRuns(20)
 	if err != nil || len(rows) == 0 {
 		return nil
+	}
+	if runID != "" {
+		for i := range rows {
+			if rows[i].RunID == runID {
+				return &rows[i]
+			}
+		}
 	}
 	return &rows[0]
 }
 
 func (app *App) latestLimitBreakoutModelRunSummary() *LimitUpModelRunSummary {
-	rows, err := app.ListLimitBreakoutModelRuns(1)
+	runID := app.resolveLatestLimitBreakoutModelRunID("")
+	rows, err := app.ListLimitBreakoutModelRuns(20)
 	if err != nil || len(rows) == 0 {
 		return nil
+	}
+	if runID != "" {
+		for i := range rows {
+			if rows[i].RunID == runID {
+				return &rows[i]
+			}
+		}
 	}
 	return &rows[0]
 }
@@ -4356,39 +4571,91 @@ func bestLimitTradingValidation(summaryJSON string) *limitTradingValidation {
 }
 
 func (app *App) mergeT0Targets(targets map[string]*accountTarget, summary position.Summary) {
-	if len(summary.Positions) == 0 {
-		return
-	}
 	currentWeight := map[string]float64{}
 	for _, holding := range summary.Positions {
 		currentWeight[holding.TSCode] = holding.Weight
 	}
+	runID := app.resolveLatestT0DailyRunID("")
 	rows, err := app.database.Conn().Query(`
-		SELECT ts_code, COALESCE(name,''), COALESCE(industry,''), COALESCE(score,0), COALESCE(action,''), COALESCE(price,0), COALESCE(today_pct,0)
+		SELECT ts_code, COALESCE(name,''), COALESCE(industry,''), COALESCE(score,0),
+		       COALESCE(action,''), COALESCE(price,0), COALESCE(today_pct,0),
+		       COALESCE(expected_edge,0), COALESCE(t_ratio,0), COALESCE(risks_json,'[]'),
+		       COALESCE(buy_price,0), COALESCE(reduce_price,0), COALESCE(stop_price,0)
 		FROM t0_daily_candidates
-		WHERE run_id = (SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1)
+		WHERE run_id = ?
 		ORDER BY score DESC
-		LIMIT 80`)
+		LIMIT 10`, runID)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var tsCode, name, industry, action string
-		var score, price, pctChg float64
-		if err := rows.Scan(&tsCode, &name, &industry, &score, &action, &price, &pctChg); err != nil {
+		var risksJSON string
+		var score, price, pctChg, expectedEdge, tRatio, buyTrigger, sellTarget, stopPrice float64
+		if err := rows.Scan(&tsCode, &name, &industry, &score, &action, &price, &pctChg, &expectedEdge, &tRatio, &risksJSON, &buyTrigger, &sellTarget, &stopPrice); err != nil {
 			continue
 		}
 		base, ok := currentWeight[tsCode]
-		if !ok || score < 58 {
-			continue
+		weight := 0.0
+		if ok {
+			if score < 58 {
+				continue
+			}
+			weight = math.Min(base, 0.08)
+			if strings.Contains(action, "不建议") || score < 65 {
+				weight = math.Min(base*0.7, weight)
+			}
+		} else {
+			if !isT0TrialCandidate(action, score, expectedEdge, tRatio, parseJSONStringList(risksJSON)) {
+				continue
+			}
+			assets := summary.TotalAssets
+			if assets <= 0 {
+				assets = app.settings.DefaultInitialCash
+			}
+			if assets <= 0 {
+				continue
+			}
+			weight = clamp(10000/assets, 0.005, 0.035)
 		}
-		weight := math.Min(base, 0.08)
-		if strings.Contains(action, "不建议") || score < 65 {
-			weight = math.Min(base*0.7, weight)
+		if buyTrigger <= 0 || sellTarget <= 0 || stopPrice <= 0 {
+			fallbackBuy, fallbackSell, fallbackStop := t0TradePlanPrices(price)
+			if buyTrigger <= 0 {
+				buyTrigger = fallbackBuy
+			}
+			if sellTarget <= 0 {
+				sellTarget = fallbackSell
+			}
+			if stopPrice <= 0 {
+				stopPrice = fallbackStop
+			}
 		}
-		app.addTargetWeight(targets, tsCode, name, industry, price, pctChg, weight, "t0_daily")
+		app.addTargetPlan(targets, tsCode, name, industry, price, pctChg, weight, "t0_daily", buyTrigger, sellTarget, stopPrice)
 	}
+}
+
+func t0TradePlanPrices(price float64) (float64, float64, float64) {
+	if price <= 0 {
+		return 0, 0, 0
+	}
+	return roundPrice(price * 0.98), roundPrice(price * 1.02), roundPrice(price * 0.96)
+}
+
+func isT0TrialCandidate(action string, score float64, expectedEdge float64, tRatio float64, risks []string) bool {
+	label := strings.TrimSpace(action)
+	if label == "可试仓" || label == "优先计划" {
+		return true
+	}
+	if label == "暂缓" || label == "不建议" || label == "放弃" {
+		return false
+	}
+	for _, risk := range risks {
+		if strings.Contains(risk, "剔除") || strings.Contains(risk, "停手") || strings.Contains(risk, "为负") {
+			return false
+		}
+	}
+	return score >= 76 && expectedEdge > 0 && tRatio > 0
 }
 
 func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, summary position.Summary, decisionDate string) []position.RecommendationItem {
@@ -4461,18 +4728,21 @@ func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, sum
 			continue
 		}
 		rows = append(rows, position.RecommendationItem{
-			Action:       action,
-			TSCode:       item.TSCode,
-			Name:         firstNonEmpty(item.Name, holding.Name),
-			Industry:     firstNonEmpty(item.Industry, holding.Industry),
-			FromWeight:   fromWeight,
-			ToWeight:     toWeight,
-			DeltaWeight:  toWeight - fromWeight,
-			Price:        price,
-			PctChg:       item.PctChg,
-			TargetShares: targetShares,
-			TargetAmount: targetAmount,
-			Sources:      compactSources(item.Sources),
+			Action:          action,
+			TSCode:          item.TSCode,
+			Name:            firstNonEmpty(item.Name, holding.Name),
+			Industry:        firstNonEmpty(item.Industry, holding.Industry),
+			FromWeight:      fromWeight,
+			ToWeight:        toWeight,
+			DeltaWeight:     toWeight - fromWeight,
+			Price:           price,
+			PctChg:          item.PctChg,
+			TargetShares:    targetShares,
+			TargetAmount:    targetAmount,
+			BuyTriggerPrice: item.BuyTriggerPrice,
+			SellTargetPrice: item.SellTargetPrice,
+			StopPrice:       item.StopPrice,
+			Sources:         compactSources(item.Sources),
 		})
 	}
 	return rows
