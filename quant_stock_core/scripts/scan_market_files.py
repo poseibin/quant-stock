@@ -34,132 +34,69 @@ def etl_file_id(dataset: str, path: Path) -> str:
 
 
 def ensure_tables(conn) -> None:
-    if conn.backend == "mysql":
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS data_market_files (
-                id VARCHAR(255) PRIMARY KEY,
-                data_type VARCHAR(255) NOT NULL,
-                partition_name VARCHAR(255) NOT NULL,
-                file_path VARCHAR(768) NOT NULL,
-                row_count BIGINT NOT NULL DEFAULT 0,
-                file_size BIGINT NOT NULL DEFAULT 0,
-                created_at VARCHAR(64) NOT NULL,
-                updated_at VARCHAR(64) NOT NULL,
-                UNIQUE KEY idx_data_market_files_path (file_path),
-                KEY idx_data_market_files_type (data_type)
-            )
-            """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_market_files (
+            id VARCHAR(255) PRIMARY KEY,
+            data_type VARCHAR(255) NOT NULL,
+            partition_name VARCHAR(255) NOT NULL,
+            file_path VARCHAR(768) NOT NULL,
+            row_count BIGINT NOT NULL DEFAULT 0,
+            file_size BIGINT NOT NULL DEFAULT 0,
+            created_at VARCHAR(64) NOT NULL,
+            updated_at VARCHAR(64) NOT NULL,
+            UNIQUE KEY idx_data_market_files_path (file_path),
+            KEY idx_data_market_files_type (data_type)
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS task_run_status (
-                task VARCHAR(255) PRIMARY KEY,
-                task_type VARCHAR(255) NOT NULL DEFAULT '',
-                state VARCHAR(64) NOT NULL,
-                idx BIGINT NOT NULL DEFAULT 0,
-                total BIGINT NOT NULL DEFAULT 0,
-                stage VARCHAR(255),
-                name VARCHAR(255),
-                message TEXT,
-                worker_pid BIGINT,
-                started_at VARCHAR(64),
-                updated_at VARCHAR(64) NOT NULL,
-                finished_at VARCHAR(64)
-            )
-            """
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_run_status (
+            task VARCHAR(255) PRIMARY KEY,
+            task_type VARCHAR(255) NOT NULL DEFAULT '',
+            state VARCHAR(64) NOT NULL,
+            idx BIGINT NOT NULL DEFAULT 0,
+            total BIGINT NOT NULL DEFAULT 0,
+            stage VARCHAR(255),
+            name VARCHAR(255),
+            message TEXT,
+            worker_pid BIGINT,
+            started_at VARCHAR(64),
+            updated_at VARCHAR(64) NOT NULL,
+            finished_at VARCHAR(64)
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS data_etl_versions (
-                dataset VARCHAR(255) PRIMARY KEY,
-                source_version VARCHAR(128) NOT NULL,
-                file_count BIGINT NOT NULL DEFAULT 0,
-                row_count BIGINT NOT NULL DEFAULT 0,
-                status VARCHAR(64) NOT NULL DEFAULT '',
-                message TEXT,
-                updated_at VARCHAR(64) NOT NULL
-            )
-            """
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_etl_versions (
+            dataset VARCHAR(255) PRIMARY KEY,
+            source_version VARCHAR(128) NOT NULL,
+            file_count BIGINT NOT NULL DEFAULT 0,
+            row_count BIGINT NOT NULL DEFAULT 0,
+            status VARCHAR(64) NOT NULL DEFAULT '',
+            message TEXT,
+            updated_at VARCHAR(64) NOT NULL
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS data_etl_files (
-                id VARCHAR(64) PRIMARY KEY,
-                dataset VARCHAR(255) NOT NULL,
-                file_path VARCHAR(768) NOT NULL,
-                source_version VARCHAR(128) NOT NULL,
-                row_count BIGINT NOT NULL DEFAULT 0,
-                status VARCHAR(64) NOT NULL DEFAULT '',
-                message TEXT,
-                updated_at VARCHAR(64) NOT NULL,
-                KEY idx_data_etl_files_dataset (dataset)
-            )
-            """
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_etl_files (
+            id VARCHAR(64) PRIMARY KEY,
+            dataset VARCHAR(255) NOT NULL,
+            file_path VARCHAR(768) NOT NULL,
+            source_version VARCHAR(128) NOT NULL,
+            row_count BIGINT NOT NULL DEFAULT 0,
+            status VARCHAR(64) NOT NULL DEFAULT '',
+            message TEXT,
+            updated_at VARCHAR(64) NOT NULL,
+            KEY idx_data_etl_files_dataset (dataset)
         )
-        ensure_mysql_data_tables(conn)
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS data_market_files (
-                id TEXT PRIMARY KEY,
-                data_type TEXT NOT NULL,
-                partition_name TEXT NOT NULL,
-                file_path TEXT NOT NULL UNIQUE,
-                row_count INTEGER NOT NULL DEFAULT 0,
-                file_size INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS data_etl_versions (
-                dataset TEXT PRIMARY KEY,
-                source_version TEXT NOT NULL,
-                file_count INTEGER NOT NULL DEFAULT 0,
-                row_count INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT '',
-                message TEXT,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS data_etl_files (
-                id TEXT PRIMARY KEY,
-                dataset TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                source_version TEXT NOT NULL,
-                row_count INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT '',
-                message TEXT,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        ensure_sqlite_data_tables(conn)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_data_market_files_type ON data_market_files(data_type)")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS task_run_status (
-                task TEXT PRIMARY KEY,
-                task_type TEXT NOT NULL DEFAULT '',
-                state TEXT NOT NULL,
-                idx INTEGER NOT NULL DEFAULT 0,
-                total INTEGER NOT NULL DEFAULT 0,
-                stage TEXT,
-                name TEXT,
-                message TEXT,
-                worker_pid INTEGER,
-                started_at TEXT,
-                updated_at TEXT NOT NULL,
-                finished_at TEXT
-            )
-            """
-        )
+        """
+    )
+    ensure_mysql_data_tables(conn)
     columns = table_columns(conn, "task_run_status")
     if "task_type" not in columns:
         add_column(conn, "task_run_status", "task_type", "TEXT NOT NULL DEFAULT ''")
@@ -240,29 +177,6 @@ def ensure_mysql_data_tables(conn) -> None:
         )
         """
     )
-
-
-def ensure_sqlite_data_tables(conn) -> None:
-    for stmt in (
-        """CREATE TABLE IF NOT EXISTS data_stock_basic (
-            ts_code TEXT PRIMARY KEY, symbol TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '',
-            area TEXT NOT NULL DEFAULT '', industry TEXT NOT NULL DEFAULT '', market TEXT NOT NULL DEFAULT '',
-            list_date TEXT NOT NULL DEFAULT '', list_status TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)""",
-        """CREATE TABLE IF NOT EXISTS data_daily_bars (
-            ts_code TEXT NOT NULL, trade_date TEXT NOT NULL, open REAL NOT NULL DEFAULT 0, high REAL NOT NULL DEFAULT 0,
-            low REAL NOT NULL DEFAULT 0, close REAL NOT NULL DEFAULT 0, pre_close REAL NOT NULL DEFAULT 0,
-            change_amount REAL NOT NULL DEFAULT 0, pct_chg REAL NOT NULL DEFAULT 0, vol REAL NOT NULL DEFAULT 0,
-            amount REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(ts_code, trade_date))""",
-        """CREATE TABLE IF NOT EXISTS data_daily_basic (
-            ts_code TEXT NOT NULL, trade_date TEXT NOT NULL, close REAL NOT NULL DEFAULT 0, pe REAL NOT NULL DEFAULT 0,
-            pe_ttm REAL NOT NULL DEFAULT 0, pb REAL NOT NULL DEFAULT 0, ps REAL NOT NULL DEFAULT 0, ps_ttm REAL NOT NULL DEFAULT 0,
-            total_mv REAL NOT NULL DEFAULT 0, circ_mv REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(ts_code, trade_date))""",
-        """CREATE TABLE IF NOT EXISTS data_fina_indicator (
-            ts_code TEXT NOT NULL, ann_date TEXT NOT NULL DEFAULT '', end_date TEXT NOT NULL, eps REAL NOT NULL DEFAULT 0,
-            roe REAL NOT NULL DEFAULT 0, grossprofit_margin REAL NOT NULL DEFAULT 0, netprofit_margin REAL NOT NULL DEFAULT 0,
-            debt_to_assets REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(ts_code, end_date))""",
-    ):
-        conn.execute(stmt)
 
 
 def set_status(conn, state: str, idx: int, total: int, stage: str, name: str, message: str = "") -> None:
@@ -622,10 +536,10 @@ def scan(data_root: Path, db_path: Path) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", required=True)
-    parser.add_argument("--db-path", required=True)
+    parser.add_argument("--db-path", default="")
     args = parser.parse_args()
     data_root = Path(args.data_root).expanduser().resolve()
-    db_path = Path(args.db_path).expanduser().resolve()
+    db_path = Path(args.db_path).expanduser().resolve() if args.db_path else None
     try:
         count = scan(data_root, db_path)
         print(f"scanned {count} parquet files")

@@ -42,6 +42,10 @@ type App struct {
 	datafetchService *datafetch.Service
 	schedulerMu      sync.Mutex
 	signalMu         sync.Mutex
+	scheduleMu       sync.Mutex
+	scheduleCancel   context.CancelFunc
+	scheduleLastRun  string
+	scheduleRunMu    sync.Mutex
 }
 
 func NewApp() *App {
@@ -67,15 +71,27 @@ func (app *App) startup(ctx context.Context) {
 		app.settings = settings
 		_ = app.configService.Save(app.settings)
 	}
+	app.restartStrategySchedule()
 }
 
 func (app *App) shutdown(ctx context.Context) {
+	app.stopStrategySchedule()
 	_ = app.database.Close()
 }
 
 type AppInfo struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
+}
+
+type ExternalDependencyStatus struct {
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	Category  string `json:"category"`
+	State     string `json:"state"`
+	LatencyMS int64  `json:"latency_ms"`
+	Message   string `json:"message"`
+	CheckedAt string `json:"checked_at"`
 }
 
 type T0Recommendation struct {
@@ -281,6 +297,45 @@ type FactorModelPrediction struct {
 	RealizedReturn float64 `json:"realized_return"`
 	PredRank       float64 `json:"pred_rank"`
 	TestYear       int     `json:"test_year"`
+}
+
+type FactorAutoTuneRun struct {
+	RunID          string  `json:"run_id"`
+	BaseModelRunID string  `json:"base_model_run_id"`
+	StartDate      string  `json:"start_date"`
+	EndDate        string  `json:"end_date"`
+	Status         string  `json:"status"`
+	BestTrialID    string  `json:"best_trial_id"`
+	BestModelRunID string  `json:"best_model_run_id"`
+	BestAdmission  string  `json:"best_admission"`
+	BestScore      float64 `json:"best_score"`
+	SummaryJSON    string  `json:"summary_json"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
+}
+
+type FactorAutoTuneTrial struct {
+	RunID                    string  `json:"run_id"`
+	TrialID                  string  `json:"trial_id"`
+	RoundNo                  int     `json:"round_no"`
+	Source                   string  `json:"source"`
+	ModelRunID               string  `json:"model_run_id"`
+	EvalRunID                string  `json:"eval_run_id"`
+	ParamsJSON               string  `json:"params_json"`
+	LLMDirectionJSON         string  `json:"llm_direction_json"`
+	Admission                string  `json:"admission"`
+	AdmissionScore           float64 `json:"admission_score"`
+	Reason                   string  `json:"reason"`
+	AnnualReturn             float64 `json:"annual_return"`
+	TotalReturn              float64 `json:"total_return"`
+	MaxDrawdown              float64 `json:"max_drawdown"`
+	Sharpe                   float64 `json:"sharpe"`
+	StressBadEventCount      int     `json:"stress_bad_event_count"`
+	StressCrashStateFailed   bool    `json:"stress_crash_state_failed"`
+	StressWeakDrawdownFailed bool    `json:"stress_weak_drawdown_failed"`
+	Passed                   bool    `json:"passed"`
+	CreatedAt                string  `json:"created_at"`
+	UpdatedAt                string  `json:"updated_at"`
 }
 
 type FactorCorrelationResult struct {
@@ -800,17 +855,8 @@ func (app *App) SaveSettings(settings config.Settings) SettingsResponse {
 	settings.DataPath = app.fixedDataPath()
 	backend, packagedDSN := config.PackagedDatabaseConfig()
 	settings.DatabaseBackend = backend
-	if backend != "mysql" {
-		settings.MySQLDSN = packagedDSN
-	} else if strings.TrimSpace(settings.MySQLDSN) == "" {
-		settings.MySQLDSN = packagedDSN
-	}
+	settings.MySQLDSN = packagedDSN
 	issues := app.configService.Validate(settings)
-	if app.databaseConfigChanged(settings) {
-		if running, message := app.hasActiveRuntimeWork(); running {
-			issues = append(issues, config.ValidationIssue{Field: "database_backend", Message: "当前有任务运行中，不能切换数据库配置：" + message})
-		}
-	}
 	if len(issues) > 0 {
 		return SettingsResponse{
 			Settings: settings,
@@ -845,11 +891,706 @@ func (app *App) SaveSettings(settings config.Settings) SettingsResponse {
 	if app.datafetchService != nil {
 		app.datafetchService.SetDataPath(app.settings.DataPath)
 	}
+	app.restartStrategySchedule()
 	issues = append(issues, app.configService.Validate(app.settings)...)
 	return SettingsResponse{
 		Settings: app.settings,
 		Issues:   issues,
 	}
+}
+
+type StrategyScheduleReport struct {
+	StartedAt      string                      `json:"started_at"`
+	FinishedAt     string                      `json:"finished_at"`
+	Success        bool                        `json:"success"`
+	Message        string                      `json:"message"`
+	WechatContent  string                      `json:"wechat_content"`
+	Rows           []StrategyScheduleReportRow `json:"rows"`
+	Recommendation position.Recommendation     `json:"recommendation"`
+}
+
+type StrategyScheduleReportRow struct {
+	Target  string `json:"target"`
+	Label   string `json:"label"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+func (app *App) RunStrategyScheduleNow() (StrategyScheduleReport, error) {
+	schedule := app.settings.StrategySchedule
+	report, _ := app.runScheduledStrategyRefresh(schedule)
+	if strings.TrimSpace(schedule.WechatWebhook) != "" {
+		content, notifyErr := app.sendStrategyScheduleWechat(schedule, report)
+		report.WechatContent = content
+		if notifyErr != nil {
+			report.Success = false
+			if report.Message == "" || report.Message == "策略定时刷新已提交" {
+				report.Message = "策略已提交，微信通知失败"
+			}
+			report.Rows = append(report.Rows, StrategyScheduleReportRow{Target: "wechat", Label: "微信通知", Status: "error", Message: notifyErr.Error()})
+			app.recordStrategyScheduleReport(report)
+			return report, nil
+		}
+		report.Rows = append(report.Rows, StrategyScheduleReportRow{Target: "wechat", Label: "微信通知", Status: "success", Message: "已发送企业微信通知"})
+	}
+	app.recordStrategyScheduleReport(report)
+	return report, nil
+}
+
+func (app *App) TestStrategyScheduleWechat() (StrategyScheduleReport, error) {
+	schedule := app.settings.StrategySchedule
+	report := StrategyScheduleReport{
+		StartedAt:  time.Now().Format(time.RFC3339),
+		FinishedAt: time.Now().Format(time.RFC3339),
+		Rows:       []StrategyScheduleReportRow{},
+	}
+	if strings.TrimSpace(schedule.WechatWebhook) == "" {
+		report.Success = false
+		report.Message = "企业微信 Webhook 未配置"
+		return report, nil
+	}
+	content := strings.Join([]string{
+		"## Quant Stock 微信通路测试",
+		"",
+		"- 时间: " + report.StartedAt,
+		"- 结果: 如果看到这条消息，定时器微信通路已连通。",
+	}, "\n")
+	if err := app.sendWechatMarkdown(schedule.WechatWebhook, content); err != nil {
+		report.Success = false
+		report.Message = "微信通路测试失败"
+		report.WechatContent = content
+		report.Rows = append(report.Rows, StrategyScheduleReportRow{Target: "wechat", Label: "微信通知", Status: "error", Message: err.Error()})
+		return report, nil
+	}
+	report.Success = true
+	report.Message = "微信通路测试成功"
+	report.WechatContent = content
+	report.Rows = append(report.Rows, StrategyScheduleReportRow{Target: "wechat", Label: "微信通知", Status: "success", Message: "测试消息已发送"})
+	return report, nil
+}
+
+func (app *App) ListStrategyScheduleReports() ([]StrategyScheduleReport, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []StrategyScheduleReport{}, err
+	}
+	if err := app.ensureStrategyScheduleRunsTable(); err != nil {
+		return []StrategyScheduleReport{}, err
+	}
+	reports, err := app.listStrategyScheduleReportsFromTable(30)
+	if err != nil {
+		return []StrategyScheduleReport{}, err
+	}
+	if len(reports) > 0 {
+		return reports, nil
+	}
+	legacyReports := app.migrateLegacyStrategyScheduleReports()
+	if len(legacyReports) > 0 {
+		return legacyReports, nil
+	}
+	return []StrategyScheduleReport{}, nil
+}
+
+func (app *App) restartStrategySchedule() {
+	app.stopStrategySchedule()
+	schedule := app.settings.StrategySchedule
+	if !schedule.Enabled {
+		return
+	}
+	baseCtx := app.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(baseCtx)
+	app.scheduleMu.Lock()
+	app.scheduleCancel = cancel
+	app.scheduleMu.Unlock()
+	go app.strategyScheduleLoop(ctx)
+}
+
+func (app *App) stopStrategySchedule() {
+	app.scheduleMu.Lock()
+	cancel := app.scheduleCancel
+	app.scheduleCancel = nil
+	app.scheduleMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (app *App) strategyScheduleLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	app.maybeRunStrategySchedule()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			app.maybeRunStrategySchedule()
+		}
+	}
+}
+
+func (app *App) maybeRunStrategySchedule() {
+	schedule := app.settings.StrategySchedule
+	if !schedule.Enabled || !strategyScheduleWeekdayEnabled(schedule, time.Now()) {
+		return
+	}
+	now := time.Now()
+	if now.Format("15:04") != schedule.TimeOfDay {
+		return
+	}
+	runKey := now.Format("2006-01-02") + " " + schedule.TimeOfDay
+	app.scheduleMu.Lock()
+	if app.scheduleLastRun == runKey {
+		app.scheduleMu.Unlock()
+		return
+	}
+	app.scheduleLastRun = runKey
+	app.scheduleMu.Unlock()
+	go func() {
+		report, _ := app.runScheduledStrategyRefresh(schedule)
+		if strings.TrimSpace(schedule.WechatWebhook) != "" {
+			content, err := app.sendStrategyScheduleWechat(schedule, report)
+			report.WechatContent = content
+			if err != nil {
+				report.Success = false
+				report.Rows = append(report.Rows, StrategyScheduleReportRow{Target: "wechat", Label: "微信通知", Status: "error", Message: err.Error()})
+			} else {
+				report.Rows = append(report.Rows, StrategyScheduleReportRow{Target: "wechat", Label: "微信通知", Status: "success", Message: "已发送企业微信通知"})
+			}
+		}
+		app.recordStrategyScheduleReport(report)
+	}()
+}
+
+func strategyScheduleWeekdayEnabled(schedule config.StrategyScheduleSettings, now time.Time) bool {
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	for _, item := range schedule.Weekdays {
+		if item == weekday {
+			return true
+		}
+	}
+	return false
+}
+
+func (app *App) runScheduledStrategyRefresh(schedule config.StrategyScheduleSettings) (StrategyScheduleReport, error) {
+	app.scheduleRunMu.Lock()
+	defer app.scheduleRunMu.Unlock()
+	started := time.Now()
+	report := StrategyScheduleReport{
+		StartedAt: started.Format(time.RFC3339),
+		Rows:      []StrategyScheduleReportRow{},
+	}
+	add := func(target, label string, err error, message string) {
+		status := "success"
+		if err != nil {
+			status = "error"
+			message = err.Error()
+		}
+		report.Rows = append(report.Rows, StrategyScheduleReportRow{Target: target, Label: label, Status: status, Message: message})
+	}
+	targets := schedule.Targets
+	if targets == nil {
+		targets = map[string]bool{}
+	}
+	if rec, reused, sourceAt, err := app.currentVersionRecommendation(); reused {
+		report.Recommendation = rec
+		add("reuse", "推荐版本", nil, "已检测到当前版本推荐，无需重复刷新策略，来源 "+sourceAt)
+		add("rebalance", "一键调仓", nil, fmt.Sprintf("已复用 %s 调仓计划，买入 %d，卖出 %d", firstNonEmpty(rec.Date, "今日"), rec.NBuy, rec.NSell))
+		report.FinishedAt = time.Now().Format(time.RFC3339)
+		report.Success = true
+		report.Message = "当前推荐版本已存在，直接发送微信消息"
+		return report, nil
+	} else if err != nil {
+		add("reuse", "推荐版本", err, "")
+	}
+	if err := app.runDataUpdateAndWait(); err != nil {
+		add("data_update", "股票数据", err, "")
+		report.FinishedAt = time.Now().Format(time.RFC3339)
+		report.Success = false
+		report.Message = "股票数据更新失败，已停止推荐刷新"
+		return report, err
+	}
+	add("data_update", "股票数据", nil, "已拉取最新股票数据")
+	if targets["t0"] {
+		err := app.RunT0DailyResearch()
+		if err == nil {
+			err = app.waitPositionRunStatus(app.GetT0DailyResearchStatus, 30*time.Minute)
+		}
+		add("t0", "做T助手", err, "已完成日线研究与推荐更新")
+	}
+	if targets["limit_up"] {
+		err := app.RunLimitUpModelTraining()
+		if err == nil {
+			err = app.waitPositionRunStatus(app.GetLimitUpModelRunStatus, 45*time.Minute)
+		}
+		add("limit_up", "涨停预警", err, "已完成涨停模型与推荐快照更新")
+	}
+	if targets["breakout"] {
+		err := app.RunLimitBreakoutModelTraining()
+		if err == nil {
+			err = app.waitPositionRunStatus(app.GetLimitBreakoutModelRunStatus, 45*time.Minute)
+		}
+		add("breakout", "横盘预警", err, "已完成横盘模型与推荐快照更新")
+	}
+	if targets["factor"] {
+		taskDTO, err := app.RunFactorLatestInference()
+		message := "已完成通用策略最新截面推理"
+		if err == nil && taskDTO.ID != "" {
+			err = app.waitTaskSuccess(taskDTO.ID, 30*time.Minute)
+			message = "已完成通用策略最新截面推理，任务 " + taskDTO.ID
+		}
+		add("factor", "通用策略", err, message)
+	}
+	rec, recErr := app.GetPositionRecommendation()
+	if recErr != nil {
+		add("rebalance", "一键调仓", recErr, "")
+	} else {
+		report.Recommendation = rec
+		add("rebalance", "一键调仓", nil, fmt.Sprintf("已生成 %d 条调仓计划，买入 %d，卖出 %d", len(rec.Rows), rec.NBuy, rec.NSell))
+	}
+	report.FinishedAt = time.Now().Format(time.RFC3339)
+	success := true
+	for _, row := range report.Rows {
+		if row.Status != "success" {
+			success = false
+			break
+		}
+	}
+	report.Success = success
+	if len(report.Rows) == 0 {
+		report.Success = false
+		report.Message = "没有勾选任何策略"
+		return report, errors.New(report.Message)
+	}
+	if success {
+		report.Message = "策略推荐与一键调仓已更新"
+		return report, nil
+	}
+	report.Message = "部分策略提交失败"
+	return report, errors.New(report.Message)
+}
+
+func (app *App) currentVersionRecommendation() (position.Recommendation, bool, string, error) {
+	if app.database == nil || app.database.Conn() == nil {
+		return position.Recommendation{}, false, "", nil
+	}
+	start, end := currentRecommendationVersionWindow(time.Now())
+	reports, err := app.ListStrategyScheduleReports()
+	if err != nil {
+		return position.Recommendation{}, false, "", err
+	}
+	for _, report := range reports {
+		if !reportHasSuccessfulRecommendation(report) {
+			continue
+		}
+		reportAt, ok := parseScheduleReportTime(firstNonEmpty(report.FinishedAt, report.StartedAt))
+		if !ok || reportAt.Before(start) || !reportAt.Before(end) {
+			continue
+		}
+		return report.Recommendation, true, reportAt.Format(time.RFC3339), nil
+	}
+	return position.Recommendation{}, false, "", nil
+}
+
+func reportHasSuccessfulRecommendation(report StrategyScheduleReport) bool {
+	if len(report.Recommendation.Rows) == 0 {
+		return false
+	}
+	for _, row := range report.Rows {
+		if row.Target == "rebalance" && row.Status == "success" {
+			return true
+		}
+	}
+	return false
+}
+
+func currentRecommendationVersionWindow(now time.Time) (time.Time, time.Time) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.Local
+	}
+	n := now.In(loc)
+	today15 := time.Date(n.Year(), n.Month(), n.Day(), 15, 0, 0, 0, loc)
+	if n.Before(today15) {
+		start := time.Date(n.Year(), n.Month(), n.Day(), 22, 0, 0, 0, loc).AddDate(0, 0, -1)
+		return start, today15
+	}
+	return today15, today15.Add(24 * time.Hour)
+}
+
+func parseScheduleReportTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02 15:04:05", "20060102"}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t, true
+		}
+		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func (app *App) runDataUpdateAndWait() error {
+	if err := app.RunDataUpdate(datafetch.UpdateRequest{Phase: "all", StartDate: "", Dataset: "", ExcludeDatasets: []string{"top10_holders"}}); err != nil {
+		if !errors.Is(err, datafetch.ErrAlreadyRunning) {
+			return err
+		}
+	}
+	return app.waitDataUpdateStatus(60 * time.Minute)
+}
+
+func (app *App) waitDataUpdateStatus(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		status, err := app.GetDataUpdateStatus()
+		if err != nil {
+			return err
+		}
+		switch strings.ToLower(status.State) {
+		case "done", "success", "idle":
+			return nil
+		case "error", "failed":
+			if strings.TrimSpace(status.Message) != "" {
+				return errors.New(status.Message)
+			}
+			return errors.New("数据更新失败")
+		}
+		if time.Now().After(deadline) {
+			return errors.New("数据更新超时")
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
+func (app *App) waitPositionRunStatus(getStatus func() (position.RunStatus, error), timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	sawRunning := false
+	for {
+		status, err := getStatus()
+		if err != nil {
+			return err
+		}
+		state := strings.ToLower(status.State)
+		switch state {
+		case "running", "queued":
+			sawRunning = true
+		case "done", "success":
+			return nil
+		case "error", "failed":
+			if strings.TrimSpace(status.Message) != "" {
+				return errors.New(status.Message)
+			}
+			return errors.New(status.Name + "失败")
+		case "idle":
+			if sawRunning {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return errors.New("任务等待超时")
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
+func (app *App) waitTaskSuccess(id string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		dto, err := app.RefreshTaskStatus(id)
+		if err != nil {
+			return err
+		}
+		switch dto.Status {
+		case task.StatusSuccess:
+			return nil
+		case task.StatusFailed, task.StatusCancelled, task.StatusInterrupted:
+			if strings.TrimSpace(dto.ErrorMessage) != "" {
+				return errors.New(dto.ErrorMessage)
+			}
+			return fmt.Errorf("任务 %s %s", id, dto.Status)
+		}
+		if time.Now().After(deadline) {
+			return errors.New("通用策略推理等待超时")
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
+func (app *App) recordStrategyScheduleReport(report StrategyScheduleReport) {
+	if app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	_ = app.ensureStrategyScheduleRunsTable()
+	data, err := json.Marshal(report)
+	if err != nil {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	success := 0
+	if report.Success {
+		success = 1
+	}
+	_, _ = app.database.Conn().Exec(
+		`INSERT INTO strategy_schedule_runs (started_at, finished_at, success, message, report_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		report.StartedAt, report.FinishedAt, success, report.Message, string(data), now,
+	)
+}
+
+func (app *App) ensureStrategyScheduleRunsTable() error {
+	if app.database == nil || app.database.Conn() == nil {
+		return errors.New("database is not initialized")
+	}
+	_, err := app.database.Conn().Exec(`CREATE TABLE IF NOT EXISTS strategy_schedule_runs (
+		id BIGINT PRIMARY KEY AUTO_INCREMENT,
+		started_at VARCHAR(191) NOT NULL,
+		finished_at VARCHAR(191) NOT NULL,
+		success BIGINT NOT NULL DEFAULT 0,
+		message LONGTEXT NOT NULL,
+		report_json LONGTEXT NOT NULL,
+		created_at VARCHAR(191) NOT NULL
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`)
+	return err
+}
+
+func (app *App) listStrategyScheduleReportsFromTable(limit int) ([]StrategyScheduleReport, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	rows, err := app.database.Conn().Query(`SELECT report_json FROM strategy_schedule_runs ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	reports := []StrategyScheduleReport{}
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var report StrategyScheduleReport
+		if err := json.Unmarshal([]byte(payload), &report); err == nil {
+			if isWechatConnectivityReport(report) {
+				continue
+			}
+			reports = append(reports, report)
+		}
+	}
+	return reports, rows.Err()
+}
+
+func isWechatConnectivityReport(report StrategyScheduleReport) bool {
+	if strings.Contains(report.Message, "微信通路测试") {
+		return true
+	}
+	if strings.Contains(report.WechatContent, "微信通路测试") {
+		return true
+	}
+	return len(report.Rows) == 1 &&
+		report.Rows[0].Target == "wechat" &&
+		strings.Contains(report.Rows[0].Message, "测试消息")
+}
+
+func (app *App) migrateLegacyStrategyScheduleReports() []StrategyScheduleReport {
+	var payload string
+	err := app.database.Conn().QueryRow(fmt.Sprintf(`SELECT value FROM cfg_app_settings WHERE %s = ?`, app.cfgAppSettingsKeyColumn()), "strategy_schedule_reports").Scan(&payload)
+	if err != nil {
+		return []StrategyScheduleReport{}
+	}
+	var reports []StrategyScheduleReport
+	if err := json.Unmarshal([]byte(payload), &reports); err != nil {
+		return []StrategyScheduleReport{}
+	}
+	for i := len(reports) - 1; i >= 0; i-- {
+		if isWechatConnectivityReport(reports[i]) {
+			continue
+		}
+		app.recordStrategyScheduleReport(reports[i])
+	}
+	_, _ = app.database.Conn().Exec(fmt.Sprintf(`DELETE FROM cfg_app_settings WHERE %s = ?`, app.cfgAppSettingsKeyColumn()), "strategy_schedule_reports")
+	migrated, err := app.listStrategyScheduleReportsFromTable(30)
+	if err != nil {
+		return reports
+	}
+	return migrated
+}
+
+func (app *App) sendStrategyScheduleWechat(schedule config.StrategyScheduleSettings, report StrategyScheduleReport) (string, error) {
+	webhook := strings.TrimSpace(schedule.WechatWebhook)
+	if webhook == "" {
+		return "", nil
+	}
+	content := app.strategyScheduleWechatContent(schedule, report)
+	return content, app.sendWechatMarkdown(webhook, content)
+}
+
+func (app *App) strategyScheduleWechatContent(schedule config.StrategyScheduleSettings, report StrategyScheduleReport) string {
+	statusText := "完成"
+	if !report.Success {
+		statusText = "需处理"
+	}
+	lines := []string{
+		"## Quant Stock 每日股票更新",
+		"",
+		fmt.Sprintf("> [%s] %s", statusText, firstNonEmpty(report.Message, "定时任务已结束")),
+		"",
+		fmt.Sprintf("**运行**：%s - %s", formatScheduleTime(report.StartedAt), formatScheduleTime(report.FinishedAt)),
+	}
+	if report.Recommendation.GeneratedAt != "" || len(report.Recommendation.Rows) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("**截面**：%s", formatScheduleTradeDate(report.Recommendation.Date)))
+		lines = append(lines, fmt.Sprintf("**调仓**：买入 %d｜卖出 %d｜计划 %d", report.Recommendation.NBuy, report.Recommendation.NSell, len(report.Recommendation.Rows)))
+		actionRows := scheduleRebalanceRows(report.Recommendation.Rows, 12)
+		if len(actionRows) == 0 {
+			lines = append(lines, "", "### 今日计划", "暂无需要调仓的股票。")
+		} else {
+			lines = append(lines, "", "### 今日计划")
+			for i, item := range actionRows {
+				lines = append(lines, formatScheduleRebalanceLine(i+1, item))
+			}
+			if len(report.Recommendation.Rows) > len(actionRows) {
+				lines = append(lines, fmt.Sprintf("> 还有 %d 条计划，请在桌面端查看完整列表。", len(report.Recommendation.Rows)-len(actionRows)))
+			}
+		}
+	}
+	lines = append(lines, "")
+	lines = append(lines, "### 执行状态")
+	for _, row := range report.Rows {
+		mark := "[成功]"
+		if row.Status != "success" {
+			mark = "[异常]"
+		}
+		lines = append(lines, fmt.Sprintf("- %s %s：%s", mark, row.Label, firstNonEmpty(row.Message, "-")))
+	}
+	if len(schedule.WechatUsers) > 0 {
+		mentions := make([]string, 0, len(schedule.WechatUsers))
+		for _, user := range schedule.WechatUsers {
+			user = strings.Trim(strings.TrimSpace(user), "@")
+			if user != "" {
+				mentions = append(mentions, "<@"+user+">")
+			}
+		}
+		if len(mentions) > 0 {
+			lines = append(lines, "", strings.Join(mentions, " "))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (app *App) sendWechatMarkdown(webhook string, content string) error {
+	webhook = strings.TrimSpace(webhook)
+	if webhook == "" {
+		return errors.New("企业微信 Webhook 未配置")
+	}
+	payload := map[string]any{
+		"msgtype": "markdown",
+		"markdown": map[string]string{
+			"content": content,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, webhook, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("企业微信通知失败: HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var result struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if len(body) > 0 && json.Unmarshal(body, &result) == nil && result.ErrCode != 0 {
+		return fmt.Errorf("企业微信通知失败: %d %s", result.ErrCode, result.ErrMsg)
+	}
+	return nil
+}
+
+func scheduleRebalanceRows(rows []position.RecommendationItem, limit int) []position.RecommendationItem {
+	out := make([]position.RecommendationItem, 0, len(rows))
+	for _, row := range rows {
+		switch row.Action {
+		case "新建", "加仓", "减仓", "清仓":
+			out = append(out, row)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		return out[:limit]
+	}
+	return out
+}
+
+func formatScheduleRebalanceLine(rank int, item position.RecommendationItem) string {
+	action := strings.TrimSpace(item.Action)
+	if action == "" {
+		action = "观察"
+	}
+	name := strings.TrimSpace(item.Name)
+	if name == "" {
+		name = item.TSCode
+	}
+	return fmt.Sprintf(
+		"%d. **%s** `%s`｜%s %d股\n   买≤%s｜卖≥%s｜止损 %s",
+		rank,
+		name,
+		item.TSCode,
+		action,
+		item.TargetShares,
+		formatSchedulePrice(item.BuyTriggerPrice),
+		formatSchedulePrice(item.SellTargetPrice),
+		formatSchedulePrice(item.StopPrice),
+	)
+}
+
+func formatScheduleTime(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	if t, ok := parseScheduleReportTime(value); ok {
+		loc, err := time.LoadLocation("Asia/Shanghai")
+		if err == nil {
+			t = t.In(loc)
+		}
+		return t.Format("01-02 15:04")
+	}
+	return value
+}
+
+func formatScheduleTradeDate(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) == 8 {
+		return value[:4] + "-" + value[4:6] + "-" + value[6:8]
+	}
+	return firstNonEmpty(value, "-")
+}
+
+func formatSchedulePrice(value float64) string {
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return "-"
+	}
+	return fmt.Sprintf("¥%.2f", value)
 }
 
 func (app *App) databaseConfigChanged(settings config.Settings) bool {
@@ -1020,6 +1761,12 @@ func (app *App) GetActiveStrategyModelRun(strategy string) (ActiveStrategyModelR
 	err := app.database.Conn().QueryRow(`SELECT strategy, run_id, updated_at FROM strategy_model_active WHERE strategy = ?`, strategy).
 		Scan(&item.Strategy, &item.RunID, &item.UpdatedAt)
 	if err == sql.ErrNoRows {
+		app.activateBestStrategyModelRun(strategy)
+		err = app.database.Conn().QueryRow(`SELECT strategy, run_id, updated_at FROM strategy_model_active WHERE strategy = ?`, strategy).
+			Scan(&item.Strategy, &item.RunID, &item.UpdatedAt)
+		if err == nil {
+			return item, nil
+		}
 		return ActiveStrategyModelRun{Strategy: strategy}, nil
 	}
 	return item, err
@@ -1040,6 +1787,9 @@ func (app *App) ActivateStrategyModelRun(req StrategyModelRunRequest) (ActiveStr
 	if !app.strategyModelRunExists(strategy, runID) {
 		return ActiveStrategyModelRun{}, errors.New("model run not found")
 	}
+	if !app.strategyModelRunAdmissible(strategy, runID) {
+		return ActiveStrategyModelRun{}, errors.New("model run has not passed admission checks")
+	}
 	now := time.Now().Format(time.RFC3339)
 	_, err := app.database.Conn().Exec(
 		app.database.UpsertSQL("strategy_model_active", []string{"strategy", "run_id", "updated_at"}, []string{"strategy"}, []string{"run_id", "updated_at"}),
@@ -1049,6 +1799,94 @@ func (app *App) ActivateStrategyModelRun(req StrategyModelRunRequest) (ActiveStr
 		return ActiveStrategyModelRun{}, err
 	}
 	return ActiveStrategyModelRun{Strategy: strategy, RunID: runID, UpdatedAt: now}, nil
+}
+
+func (app *App) activateBestStrategyModelRun(strategy string) {
+	if app.database == nil || app.database.Conn() == nil {
+		return
+	}
+	if err := app.ensureStrategyModelActiveTable(); err != nil {
+		return
+	}
+	strategy = strings.TrimSpace(strategy)
+	if strategy == "" {
+		return
+	}
+	query := ""
+	switch strategy {
+	case "limit_up_model":
+		query = `SELECT run_id FROM limit_up_model_runs
+			WHERE status = 'success'
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.candidate_rows') + 0, 0) >= 5000
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.latest_count') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.top_excess_return') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.top_drawdown') + 0, -1) >= -0.35
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.rank_ic') + 0, -1) > -0.02
+			  AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(summary_json, '$.latest_date')), '') >= COALESCE((SELECT MAX(trade_date) FROM limit_up_model_predictions WHERE is_latest = 1), '')
+			ORDER BY
+				COALESCE(JSON_EXTRACT(summary_json, '$.top_excess_return') + 0, 0) DESC,
+				COALESCE(JSON_EXTRACT(summary_json, '$.top_return') + 0, 0) DESC,
+				COALESCE(JSON_EXTRACT(summary_json, '$.top_limit_up_rate') + 0, 0) DESC,
+				COALESCE(JSON_EXTRACT(summary_json, '$.rank_ic') + 0, 0) DESC,
+				updated_at DESC
+			LIMIT 1`
+	case "limit_breakout_model":
+		query = `SELECT run_id FROM limit_breakout_model_runs
+			WHERE status = 'success'
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.candidate_rows') + 0, 0) >= 5000
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.latest_count') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.top_excess_return') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.top_drawdown') + 0, -1) >= -0.35
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.rank_ic') + 0, -1) > -0.02
+			  AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(summary_json, '$.latest_date')), '') >= COALESCE((SELECT MAX(trade_date) FROM limit_breakout_model_predictions WHERE is_latest = 1), '')
+			ORDER BY
+				COALESCE(JSON_EXTRACT(summary_json, '$.top_excess_return') + 0, 0) DESC,
+				COALESCE(JSON_EXTRACT(summary_json, '$.top_return') + 0, 0) DESC,
+				COALESCE(JSON_EXTRACT(summary_json, '$.top_limit_up_rate') + 0, 0) DESC,
+				COALESCE(JSON_EXTRACT(summary_json, '$.rank_ic') + 0, 0) DESC,
+				updated_at DESC
+			LIMIT 1`
+	case "t0_daily":
+		query = `SELECT run_id FROM t0_daily_runs
+			WHERE status = 'success'
+			  AND COALESCE(backtest_count, 0) >= 80
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.model.rows') + 0, 0) >= 5000
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.model.top10_avg_edge') + 0, 0) > 0.006
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.model.top10_two_sided') + 0, 0) >= 0.12
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.model.rank_ic') + 0, -1) > -0.02
+			  AND trade_date >= COALESCE((SELECT MAX(trade_date) FROM t0_daily_candidates), '')
+			ORDER BY
+				COALESCE(JSON_EXTRACT(summary_json, '$.model.top10_avg_edge') + 0, 0) DESC,
+				COALESCE(JSON_EXTRACT(summary_json, '$.model.rank_ic') + 0, 0) DESC,
+				updated_at DESC
+			LIMIT 1`
+	case "ml_factor_ranker":
+		query = `SELECT m.run_id
+			FROM eval_strategy_admission a
+			INNER JOIN factor_model_runs m ON m.run_id = CASE WHEN a.run_id LIKE 'eval_%' THEN SUBSTRING(a.run_id, 6) ELSE a.run_id END AND m.status = 'success'
+			WHERE a.strategy = 'ml_factor_ranker'
+			  AND a.admission IN ('可启用', '限制启用', '已启用')
+			  AND COALESCE(a.annual_return, 0) > 0
+			  AND COALESCE(a.max_drawdown, -1) >= -0.22
+			  AND COALESCE(a.effective_end, '') >= COALESCE((SELECT MAX(trade_date) FROM factor_latest_predictions), '')
+			  AND COALESCE(a.reason, '') NOT LIKE '%压力段失效%'
+			ORDER BY
+				COALESCE(a.admission_score, 0) DESC,
+				COALESCE(a.annual_return, 0) DESC,
+				COALESCE(a.generated_at, '') DESC
+			LIMIT 1`
+	default:
+		return
+	}
+	var runID string
+	if err := app.database.Conn().QueryRow(query).Scan(&runID); err != nil || strings.TrimSpace(runID) == "" {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = app.database.Conn().Exec(
+		app.database.UpsertSQL("strategy_model_active", []string{"strategy", "run_id", "updated_at"}, []string{"strategy"}, []string{"run_id", "updated_at"}),
+		strategy, strings.TrimSpace(runID), now,
+	)
 }
 
 func (app *App) ensureStrategyModelActiveTable() error {
@@ -1084,11 +1922,74 @@ func (app *App) strategyModelRunExists(strategy string, runID string) bool {
 		table = "limit_breakout_model_runs"
 	case "t0_daily":
 		table = "t0_daily_runs"
+	case "ml_factor_ranker":
+		table = "factor_model_runs"
 	default:
 		return false
 	}
 	var count int
 	_ = app.database.Conn().QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE run_id = ?`, table), runID).Scan(&count)
+	return count > 0
+}
+
+func (app *App) strategyModelRunAdmissible(strategy string, runID string) bool {
+	if app.database == nil || app.database.Conn() == nil {
+		return false
+	}
+	strategy = strings.TrimSpace(strategy)
+	runID = strings.TrimSpace(runID)
+	if strategy == "" || runID == "" {
+		return false
+	}
+	query := ""
+	switch strategy {
+	case "limit_up_model":
+		query = `SELECT COUNT(*) FROM limit_up_model_runs
+			WHERE run_id = ? AND status = 'success'
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.candidate_rows') + 0, 0) >= 5000
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.latest_count') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.top_excess_return') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.top_drawdown') + 0, -1) >= -0.35
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.rank_ic') + 0, -1) > -0.02
+			  AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(summary_json, '$.latest_date')), '') >= COALESCE((SELECT MAX(trade_date) FROM limit_up_model_predictions WHERE is_latest = 1), '')`
+	case "limit_breakout_model":
+		query = `SELECT COUNT(*) FROM limit_breakout_model_runs
+			WHERE run_id = ? AND status = 'success'
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.candidate_rows') + 0, 0) >= 5000
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.latest_count') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.top_excess_return') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.top_drawdown') + 0, -1) >= -0.35
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.rank_ic') + 0, -1) > -0.02
+			  AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(summary_json, '$.latest_date')), '') >= COALESCE((SELECT MAX(trade_date) FROM limit_breakout_model_predictions WHERE is_latest = 1), '')`
+	case "t0_daily":
+		query = `SELECT COUNT(*) FROM t0_daily_runs
+			WHERE run_id = ? AND status = 'success'
+			  AND COALESCE(backtest_count, 0) >= 80
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.model.rows') + 0, 0) >= 5000
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.model.top10_avg_edge') + 0, 0) > 0.006
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.model.top10_two_sided') + 0, 0) >= 0.12
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.model.rank_ic') + 0, -1) > -0.02
+			  AND trade_date >= COALESCE((SELECT MAX(trade_date) FROM t0_daily_candidates), '')`
+	case "ml_factor_ranker":
+		query = `SELECT COUNT(*)
+			FROM eval_strategy_admission a
+			INNER JOIN factor_model_runs m ON m.run_id = CASE WHEN a.run_id LIKE 'eval_%' THEN SUBSTRING(a.run_id, 6) ELSE a.run_id END AND m.status = 'success'
+			WHERE a.strategy = 'ml_factor_ranker'
+			  AND (a.run_id = ? OR m.run_id = ?)
+			  AND a.admission IN ('可启用', '限制启用', '已启用')
+			  AND COALESCE(a.annual_return, 0) > 0
+			  AND COALESCE(a.max_drawdown, -1) >= -0.22
+			  AND COALESCE(a.effective_end, '') >= COALESCE((SELECT MAX(trade_date) FROM factor_latest_predictions), '')
+			  AND COALESCE(a.reason, '') NOT LIKE '%压力段失效%'`
+	default:
+		return false
+	}
+	var count int
+	if strategy == "ml_factor_ranker" {
+		_ = app.database.Conn().QueryRow(query, runID, runID).Scan(&count)
+	} else {
+		_ = app.database.Conn().QueryRow(query, runID).Scan(&count)
+	}
 	return count > 0
 }
 
@@ -1283,7 +2184,6 @@ func (app *App) runMarketDataFileScan() error {
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
 	logDir := filepath.Join(dataPath, "logs", "data_file_scan")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return err
@@ -1297,13 +2197,12 @@ func (app *App) runMarketDataFileScan() error {
 	args := []string{
 		"scripts/scan_market_files.py",
 		"--data-root", dataPath,
-		"--db-path", dbPath,
 	}
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv()...)...)
 	if err := cmd.Run(); err != nil {
 		app.markPythonStatusTaskError("data_file_scan", "本地数据文件扫描失败: "+err.Error()+"，日志: "+logPath)
 		return fmt.Errorf("本地数据文件扫描失败: %w，请查看日志 %s", err, logPath)
@@ -1437,7 +2336,6 @@ func (app *App) RunPolicySupportAnalysis() error {
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
 	logDir := filepath.Join(dataPath, "logs", "policy_support")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return err
@@ -1461,14 +2359,13 @@ func (app *App) RunPolicySupportAnalysis() error {
 	args := []string{
 		"scripts/analyze_policy_support.py",
 		"--data-root", dataPath,
-		"--db-path", dbPath,
 		"--json",
 	}
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv()...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		finishedAt := time.Now().Format(time.RFC3339)
@@ -1533,7 +2430,16 @@ func (app *App) markGenericPythonWorkerStarted(taskName string, taskType string,
 func (app *App) waitGenericPythonWorker(cmd *exec.Cmd, logFile *os.File, taskName string, logPath string) {
 	err := cmd.Wait()
 	_ = logFile.Close()
-	if err == nil || app.database == nil {
+	if err == nil {
+		switch taskName {
+		case "limit_up_model":
+			app.activateBestStrategyModelRun("limit_up_model")
+		case "limit_breakout_model":
+			app.activateBestStrategyModelRun("limit_breakout_model")
+		}
+		return
+	}
+	if app.database == nil {
 		return
 	}
 	if app.positionService != nil {
@@ -1569,6 +2475,8 @@ func runStatusTaskType(taskName string) string {
 		return "model_training"
 	case "limit_breakout_model":
 		return "model_training"
+	case "factor_autotune":
+		return "model_training"
 	case "policy_support_analysis":
 		return "analysis"
 	default:
@@ -1576,7 +2484,7 @@ func runStatusTaskType(taskName string) string {
 	}
 }
 
-func (app *App) pythonDBEnv(dbPath string) []string {
+func (app *App) pythonDBEnv() []string {
 	backend := strings.TrimSpace(app.settings.DatabaseBackend)
 	if backend == "" {
 		backend, _ = config.PackagedDatabaseConfig()
@@ -1588,8 +2496,6 @@ func (app *App) pythonDBEnv(dbPath string) []string {
 	return []string{
 		"DESKTOP_DB_BACKEND=" + backend,
 		"DESKTOP_DB_DSN=" + dsn,
-		"DESKTOP_DB_PATH=" + dbPath,
-		"DESKTOP_CONFIG_DB_PATH=" + dbPath,
 	}
 }
 
@@ -1615,7 +2521,6 @@ func (app *App) RefreshLimitBreakoutCandidates(query market.BreakoutQuery) ([]ma
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
 	logDir := filepath.Join(dataPath, "logs", "limit_breakout")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return nil, err
@@ -1634,7 +2539,6 @@ func (app *App) RefreshLimitBreakoutCandidates(query market.BreakoutQuery) ([]ma
 	args := []string{
 		"scripts/limit_breakout_worker.py",
 		"--data-path", dataPath,
-		"--db-path", dbPath,
 		"--cache-key", market.BreakoutCacheKey(query),
 		"--limit", strconv.Itoa(scanLimit),
 		"--lookback", strconv.Itoa(query.Lookback),
@@ -1644,7 +2548,7 @@ func (app *App) RefreshLimitBreakoutCandidates(query market.BreakoutQuery) ([]ma
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv()...)...)
 	if err := cmd.Run(); err != nil {
 		app.markPythonStatusTaskError("limit_breakout", "涨停预警扫描失败: "+err.Error()+"，日志: "+logPath)
 		return nil, fmt.Errorf("涨停预警扫描失败: %w，请查看日志 %s", err, logPath)
@@ -1679,7 +2583,6 @@ func (app *App) RefreshLimitUpMomentumCandidates(query market.LimitUpMomentumQue
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
 	logDir := filepath.Join(dataPath, "logs", "limit_up_momentum")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return nil, err
@@ -1698,7 +2601,6 @@ func (app *App) RefreshLimitUpMomentumCandidates(query market.LimitUpMomentumQue
 	args := []string{
 		"scripts/limit_up_momentum_worker.py",
 		"--data-path", dataPath,
-		"--db-path", dbPath,
 		"--cache-key", market.LimitUpMomentumCacheKey(query),
 		"--limit", strconv.Itoa(scanLimit),
 		"--lookback", strconv.Itoa(query.Lookback),
@@ -1708,7 +2610,7 @@ func (app *App) RefreshLimitUpMomentumCandidates(query market.LimitUpMomentumQue
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv()...)...)
 	if err := cmd.Run(); err != nil {
 		app.markPythonStatusTaskError("limit_up_momentum", "涨停板推荐扫描失败: "+err.Error()+"，日志: "+logPath)
 		return nil, fmt.Errorf("涨停板推荐扫描失败: %w，请查看日志 %s", err, logPath)
@@ -1878,14 +2780,33 @@ func (app *App) ListFactorResearchRuns(limit int) ([]FactorResearchRunSummary, e
 		limit = 20
 	}
 	rows, err := app.database.Conn().Query(`
-		SELECT r.run_id, r.start_date, r.end_date, r.freq, r.label, r.status,
+		SELECT runs.run_id,
+		       COALESCE(p.start_date, r.start_date, ''), COALESCE(p.end_date, r.end_date, ''), COALESCE(p.freq, r.freq, 'monthly'),
+		       COALESCE(p.label, r.label, m.label, 'fwd20_excess_industry'),
+		       COALESCE(m.status, r.status, 'success'),
 		       COALESCE(p.factor_count, 0), COALESCE(p.sample_dates, 0), COALESCE(p.sample_rows, 0),
-		       COALESCE(p.panel_path, ''), r.updated_at,
+		       COALESCE(p.panel_path, ''),
+		       COALESCE(m.updated_at, p.updated_at, s.updated_at, r.updated_at, ''),
 		       COALESCE(m.status, ''), COALESCE(JSON_EXTRACT(m.summary_json, '$.oos_rank_ic_mean') + 0, 0)
-		FROM factor_research_runs r
-		LEFT JOIN factor_panel_meta p ON p.run_id = r.run_id
-		LEFT JOIN factor_model_runs m ON m.run_id = r.run_id
-		ORDER BY r.updated_at DESC
+		FROM (
+			SELECT run_id FROM factor_model_runs
+			UNION
+			SELECT run_id FROM factor_panel_meta
+			UNION
+			SELECT run_id FROM factor_research_stage_results
+			UNION
+			SELECT run_id FROM factor_research_runs
+		) runs
+		LEFT JOIN factor_research_runs r ON r.run_id = runs.run_id
+		LEFT JOIN factor_panel_meta p ON p.run_id = runs.run_id
+		LEFT JOIN factor_model_runs m ON m.run_id = runs.run_id
+		LEFT JOIN (
+			SELECT run_id, MAX(updated_at) AS updated_at
+			FROM factor_research_stage_results
+			GROUP BY run_id
+		) s ON s.run_id = runs.run_id
+		WHERE COALESCE(m.run_id, p.run_id, s.run_id) IS NOT NULL
+		ORDER BY COALESCE(m.updated_at, p.updated_at, s.updated_at, r.updated_at, '') DESC
 		LIMIT ?`, limit)
 	if err != nil {
 		return []FactorResearchRunSummary{}, nil
@@ -2805,48 +3726,21 @@ func (app *App) ListCrashWarningFeatures(runID string, limit int) ([]CrashWarnin
 }
 
 func (app *App) RunLimitUpModelTraining() error {
-	if err := app.ensureDatabase(); err != nil {
-		return err
-	}
-	dataPath := strings.TrimSpace(app.settings.DataPath)
-	if dataPath == "" {
-		return errors.New("数据路径未设置")
-	}
-	quantRoot := app.quantStockCorePath()
-	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
-	logDir := filepath.Join(dataPath, "logs", "limit_up_model")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return err
-	}
-	runID := "lum_" + time.Now().Format("20060102_150405")
-	logPath := filepath.Join(logDir, runID+".log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	dto, err := app.CreateTask(task.CreateRequest{
+		Name:     "涨停预警模型训练",
+		TaskType: task.TypeModelTraining,
+		Params: map[string]any{
+			"strategy":      "limit_up_model",
+			"start_date":    "20150101",
+			"end_date":      time.Now().Format("20060102"),
+			"min_test_year": 2019,
+			"threads":       4,
+		},
+	})
 	if err != nil {
 		return err
 	}
-	args := []string{
-		"scripts/limit_up_model_worker.py",
-		"--run-id", runID,
-		"--data-path", dataPath,
-		"--db-path", dbPath,
-		"--start", "20150101",
-		"--end", time.Now().Format("20060102"),
-		"--min-test-year", "2019",
-		"--threads", "4",
-	}
-	cmd := exec.Command(pythonPath, args...)
-	cmd.Dir = quantRoot
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		app.markPythonStatusTaskError("limit_up_model", "涨停模型训练启动失败: "+err.Error()+"，日志: "+logPath)
-		return err
-	}
-	app.markGenericPythonWorkerStarted("limit_up_model", "model_training", cmd.Process.Pid, logPath)
-	go app.waitGenericPythonWorker(cmd, logFile, "limit_up_model", logPath)
+	_, err = app.StartTask(dto.ID)
 	return nil
 }
 
@@ -2858,49 +3752,22 @@ func (app *App) GetLimitUpModelRunStatus() (position.RunStatus, error) {
 }
 
 func (app *App) RunLimitBreakoutModelTraining() error {
-	if err := app.ensureDatabase(); err != nil {
-		return err
-	}
-	dataPath := strings.TrimSpace(app.settings.DataPath)
-	if dataPath == "" {
-		return errors.New("数据路径未设置")
-	}
-	quantRoot := app.quantStockCorePath()
-	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
-	logDir := filepath.Join(dataPath, "logs", "limit_breakout_model")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return err
-	}
-	runID := "lbm_" + time.Now().Format("20060102_150405")
-	logPath := filepath.Join(logDir, runID+".log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	dto, err := app.CreateTask(task.CreateRequest{
+		Name:     "横盘预警模型训练",
+		TaskType: task.TypeModelTraining,
+		Params: map[string]any{
+			"strategy":      "limit_breakout_model",
+			"start_date":    "20150101",
+			"end_date":      time.Now().Format("20060102"),
+			"min_test_year": 2020,
+			"top_k":         3,
+			"threads":       4,
+		},
+	})
 	if err != nil {
 		return err
 	}
-	args := []string{
-		"scripts/limit_breakout_model_worker.py",
-		"--run-id", runID,
-		"--data-path", dataPath,
-		"--db-path", dbPath,
-		"--start", "20150101",
-		"--end", time.Now().Format("20060102"),
-		"--min-test-year", "2020",
-		"--top-k", "3",
-		"--threads", "4",
-	}
-	cmd := exec.Command(pythonPath, args...)
-	cmd.Dir = quantRoot
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		app.markPythonStatusTaskError("limit_breakout_model", "横盘预警模型训练启动失败: "+err.Error()+"，日志: "+logPath)
-		return err
-	}
-	app.markGenericPythonWorkerStarted("limit_breakout_model", "model_training", cmd.Process.Pid, logPath)
-	go app.waitGenericPythonWorker(cmd, logFile, "limit_breakout_model", logPath)
+	_, err = app.StartTask(dto.ID)
 	return nil
 }
 
@@ -3088,7 +3955,7 @@ func (app *App) resolveLatestLimitUpModelRunID(runID string) string {
 	if runID != "" || app.database == nil {
 		return runID
 	}
-	if active := app.activeStrategyModelRunID("limit_up_model"); active != "" && app.strategyModelRunExists("limit_up_model", active) {
+	if active := app.activeStrategyModelRunID("limit_up_model"); active != "" && app.strategyModelRunExists("limit_up_model", active) && app.strategyModelRunAdmissible("limit_up_model", active) {
 		return active
 	}
 	_ = app.database.Conn().QueryRow(`SELECT run_id FROM limit_up_model_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
@@ -3307,7 +4174,7 @@ func (app *App) resolveLatestLimitBreakoutModelRunID(runID string) string {
 	if runID != "" || app.database == nil {
 		return runID
 	}
-	if active := app.activeStrategyModelRunID("limit_breakout_model"); active != "" && app.strategyModelRunExists("limit_breakout_model", active) {
+	if active := app.activeStrategyModelRunID("limit_breakout_model"); active != "" && app.strategyModelRunExists("limit_breakout_model", active) && app.strategyModelRunAdmissible("limit_breakout_model", active) {
 		return active
 	}
 	_ = app.database.Conn().QueryRow(`SELECT run_id FROM limit_breakout_model_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
@@ -3343,7 +4210,6 @@ func (app *App) RunLimitSignalEvaluation() error {
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
 	logDir := filepath.Join(dataPath, "logs", "limit_signal_evaluation")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return err
@@ -3367,13 +4233,12 @@ func (app *App) RunLimitSignalEvaluation() error {
 	args := []string{
 		"scripts/evaluate_limit_signals.py",
 		"--data-path", dataPath,
-		"--db-path", dbPath,
 	}
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv()...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		finishedAt := time.Now().Format(time.RFC3339)
@@ -3618,7 +4483,7 @@ func (app *App) resolveLatestT0DailyRunID(runID string) string {
 	if runID != "" || app.database == nil {
 		return runID
 	}
-	if active := app.activeStrategyModelRunID("t0_daily"); active != "" && app.strategyModelRunExists("t0_daily", active) {
+	if active := app.activeStrategyModelRunID("t0_daily"); active != "" && app.strategyModelRunExists("t0_daily", active) && app.strategyModelRunAdmissible("t0_daily", active) {
 		return active
 	}
 	_ = app.database.Conn().QueryRow(`SELECT run_id FROM t0_daily_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
@@ -3766,7 +4631,6 @@ func (app *App) RunT0DailyResearch() error {
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
 	logDir := filepath.Join(dataPath, "logs", "t0_daily_research")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return err
@@ -3789,7 +4653,6 @@ func (app *App) RunT0DailyResearch() error {
 	args := []string{
 		"scripts/t0_daily_worker.py",
 		"--data-path", dataPath,
-		"--db-path", dbPath,
 		"--lookback", "120",
 		"--history-days", "520",
 		"--limit", "120",
@@ -3799,7 +4662,7 @@ func (app *App) RunT0DailyResearch() error {
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv()...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		finishedAt := time.Now().Format(time.RFC3339)
@@ -3828,7 +4691,6 @@ func (app *App) RunT0TimeMachine() error {
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
 	logDir := filepath.Join(dataPath, "logs", "t0_daily_timemachine")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return err
@@ -3852,7 +4714,6 @@ func (app *App) RunT0TimeMachine() error {
 		"scripts/t0_daily_worker.py",
 		"--mode", "time_machine",
 		"--data-path", dataPath,
-		"--db-path", dbPath,
 		"--lookback-grid", "40,60,80,120",
 		"--eval-days-grid", "10,20,40",
 		"--anchor-count", "4",
@@ -3863,7 +4724,7 @@ func (app *App) RunT0TimeMachine() error {
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv()...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		finishedAt := time.Now().Format(time.RFC3339)
@@ -3895,7 +4756,11 @@ func (app *App) waitT0TimeMachine(cmd *exec.Cmd, logFile *os.File, logPath strin
 func (app *App) waitT0DailyResearch(cmd *exec.Cmd, logFile *os.File, logPath string) {
 	err := cmd.Wait()
 	_ = logFile.Close()
-	if err == nil || app.database == nil {
+	if err == nil {
+		app.activateBestStrategyModelRun("t0_daily")
+		return
+	}
+	if app.database == nil {
 		return
 	}
 	status, statusErr := app.GetT0DailyResearchStatus()
@@ -3994,7 +4859,12 @@ func (app *App) RefreshPositionRealtimeQuotes() (position.Summary, error) {
 		return position.Summary{}, err
 	}
 	if len(holdings) == 0 {
-		return app.positionService.GetSummary(app.settings.DataPath)
+		summary, err := app.positionService.GetSummary(app.settings.DataPath)
+		if err != nil {
+			return position.Summary{}, err
+		}
+		app.enrichPositionSources(&summary)
+		return summary, nil
 	}
 	prices := map[string]float64{}
 	for _, holding := range holdings {
@@ -4002,7 +4872,7 @@ func (app *App) RefreshPositionRealtimeQuotes() (position.Summary, error) {
 		if code == "" {
 			continue
 		}
-		price, err := app.fetchDCRealtimePrice(code)
+		price, err := app.fetchRealtimePrice(code)
 		if err != nil {
 			continue
 		}
@@ -4012,9 +4882,14 @@ func (app *App) RefreshPositionRealtimeQuotes() (position.Summary, error) {
 		time.Sleep(150 * time.Millisecond)
 	}
 	if len(prices) == 0 {
-		return position.Summary{}, errors.New("东方财富 dc 实时行情未返回有效价格，已保留日线收盘价")
+		return position.Summary{}, errors.New("实时行情接口未返回有效价格，已保留日线收盘价")
 	}
-	return app.positionService.RefreshValuationWithPrices(prices, time.Now().Format("20060102"))
+	summary, err := app.positionService.RefreshValuationWithPrices(prices, time.Now().Format("20060102"))
+	if err != nil {
+		return position.Summary{}, err
+	}
+	app.enrichPositionSources(&summary)
+	return summary, nil
 }
 
 func (app *App) ClearPositionPool() (position.Summary, error) {
@@ -4025,18 +4900,53 @@ func (app *App) ClearPositionPool() (position.Summary, error) {
 }
 
 func (app *App) applyLatestExecutionPrices(trades []position.TradeRequest) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 6)
 	for i := range trades {
-		price := 0.0
-		if realtimePrice, err := app.fetchDCRealtimePrice(trades[i].TSCode); err == nil && realtimePrice > 0 {
-			price = realtimePrice
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(index int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			price := app.latestMarketPrice(trades[index].TSCode)
+			if price > 0 {
+				trades[index].Price = price
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+func (app *App) latestMarketPrice(tsCode string) float64 {
+	if realtimePrice, err := app.fetchRealtimePrice(tsCode); err == nil && realtimePrice > 0 {
+		return realtimePrice
+	}
+	return app.latestClosePrice(tsCode)
+}
+
+func (app *App) fetchRealtimePrice(tsCode string) (float64, error) {
+	type quoteSource struct {
+		name string
+		fn   func(string) (float64, error)
+	}
+	sources := []quoteSource{
+		{name: "东方财富", fn: app.fetchDCRealtimePrice},
+		{name: "腾讯", fn: app.fetchTencentRealtimePrice},
+		{name: "新浪", fn: app.fetchSinaRealtimePrice},
+	}
+	errs := make([]string, 0, len(sources))
+	for _, source := range sources {
+		price, err := source.fn(tsCode)
+		if err == nil && price > 0 {
+			return price, nil
 		}
-		if price <= 0 {
-			price = app.latestClosePrice(trades[i].TSCode)
-		}
-		if price > 0 {
-			trades[i].Price = price
+		if err != nil {
+			errs = append(errs, source.name+": "+err.Error())
+		} else {
+			errs = append(errs, source.name+": empty price")
 		}
 	}
+	return 0, errors.New(strings.Join(errs, "; "))
 }
 
 func (app *App) fetchDCRealtimePrice(tsCode string) (float64, error) {
@@ -4052,7 +4962,7 @@ func (app *App) fetchDCRealtimePrice(tsCode string) (float64, error) {
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(baseCtx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(baseCtx, 2500*time.Millisecond)
 	defer cancel()
 	url := fmt.Sprintf("https://push2.eastmoney.com/api/qt/stock/get?secid=%s&fields=f43,f58,f60", secID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -4061,11 +4971,10 @@ func (app *App) fetchDCRealtimePrice(tsCode string) (float64, error) {
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 1; attempt++ {
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			lastErr = err
-			time.Sleep(time.Duration(attempt+1) * 300 * time.Millisecond)
 			continue
 		}
 		var payload struct {
@@ -4075,12 +4984,10 @@ func (app *App) fetchDCRealtimePrice(tsCode string) (float64, error) {
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			lastErr = fmt.Errorf("dc quote http %d", resp.StatusCode)
-			time.Sleep(time.Duration(attempt+1) * 300 * time.Millisecond)
 			continue
 		}
 		if decodeErr != nil {
 			lastErr = decodeErr
-			time.Sleep(time.Duration(attempt+1) * 300 * time.Millisecond)
 			continue
 		}
 		raw := anyToFloat(payload.Data["f43"])
@@ -4090,6 +4997,140 @@ func (app *App) fetchDCRealtimePrice(tsCode string) (float64, error) {
 		lastErr = errors.New("dc quote price is empty")
 	}
 	return 0, lastErr
+}
+
+func (app *App) fetchSinaRealtimePrice(tsCode string) (float64, error) {
+	symbol := sinaQuoteSymbol(tsCode)
+	if symbol == "" {
+		return 0, fmt.Errorf("unsupported ts_code: %s", tsCode)
+	}
+	baseCtx := app.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseCtx, 2500*time.Millisecond)
+	defer cancel()
+	url := "https://hq.sinajs.cn/list=" + symbol
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Referer", "https://finance.sina.com.cn/")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("sina quote http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	text := string(body)
+	start := strings.Index(text, "\"")
+	end := strings.LastIndex(text, "\"")
+	if start < 0 || end <= start+1 {
+		return 0, errors.New("sina quote payload is empty")
+	}
+	fields := strings.Split(text[start+1:end], ",")
+	if len(fields) <= 3 {
+		return 0, errors.New("sina quote fields are incomplete")
+	}
+	price, err := strconv.ParseFloat(strings.TrimSpace(fields[3]), 64)
+	if err != nil || price <= 0 {
+		if err != nil {
+			return 0, err
+		}
+		return 0, errors.New("sina quote price is empty")
+	}
+	return price, nil
+}
+
+func (app *App) fetchTencentRealtimePrice(tsCode string) (float64, error) {
+	symbol := tencentQuoteSymbol(tsCode)
+	if symbol == "" {
+		return 0, fmt.Errorf("unsupported ts_code: %s", tsCode)
+	}
+	baseCtx := app.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseCtx, 2500*time.Millisecond)
+	defer cancel()
+	url := "https://qt.gtimg.cn/q=" + symbol
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Referer", "https://gu.qq.com/")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("tencent quote http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	text := string(body)
+	start := strings.Index(text, "\"")
+	end := strings.LastIndex(text, "\"")
+	if start < 0 || end <= start+1 {
+		return 0, errors.New("tencent quote payload is empty")
+	}
+	fields := strings.Split(text[start+1:end], "~")
+	if len(fields) <= 3 {
+		return 0, errors.New("tencent quote fields are incomplete")
+	}
+	price, err := strconv.ParseFloat(strings.TrimSpace(fields[3]), 64)
+	if err != nil || price <= 0 {
+		if err != nil {
+			return 0, err
+		}
+		return 0, errors.New("tencent quote price is empty")
+	}
+	return price, nil
+}
+
+func sinaQuoteSymbol(tsCode string) string {
+	parts := strings.Split(strings.TrimSpace(tsCode), ".")
+	if len(parts) != 2 || parts[0] == "" {
+		return ""
+	}
+	switch strings.ToUpper(parts[1]) {
+	case "SH":
+		return "sh" + parts[0]
+	case "SZ":
+		return "sz" + parts[0]
+	case "BJ":
+		return "bj" + parts[0]
+	default:
+		return ""
+	}
+}
+
+func tencentQuoteSymbol(tsCode string) string {
+	parts := strings.Split(strings.TrimSpace(tsCode), ".")
+	if len(parts) != 2 || parts[0] == "" {
+		return ""
+	}
+	switch strings.ToUpper(parts[1]) {
+	case "SH":
+		return "sh" + parts[0]
+	case "SZ":
+		return "sz" + parts[0]
+	case "BJ":
+		return "bj" + parts[0]
+	default:
+		return ""
+	}
 }
 
 func eastmoneySecID(tsCode string) string {
@@ -5513,6 +6554,18 @@ func readFactorResearchStageSummaryFromDB(db *sql.DB, runID string, stage string
 	return summary
 }
 
+func readSummaryJSON(db *sql.DB, query string, args ...any) string {
+	if db == nil {
+		return ""
+	}
+	row := db.QueryRow(query, args...)
+	var summary string
+	if err := row.Scan(&summary); err != nil {
+		return ""
+	}
+	return summary
+}
+
 func readFactorResearchSummaryFromDB(db *sql.DB, runID string) string {
 	if db == nil || strings.TrimSpace(runID) == "" {
 		return ""
@@ -5696,7 +6749,6 @@ func (app *App) RunDataUpdate(req datafetch.UpdateRequest) error {
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
 	logDir := filepath.Join(dataPath, "logs", "data_update")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return err
@@ -5711,15 +6763,15 @@ func (app *App) RunDataUpdate(req datafetch.UpdateRequest) error {
 		"--phase", strings.TrimSpace(req.Phase),
 		"--start-date", strings.TrimSpace(req.StartDate),
 		"--dataset", strings.TrimSpace(req.Dataset),
+		"--exclude-datasets", strings.Join(req.ExcludeDatasets, ","),
 		"--token", token,
 		"--data-path", dataPath,
-		"--db-path", dbPath,
 	}
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath, "TUSHARE_TOKEN=" + token}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath, "TUSHARE_TOKEN=" + token}, app.pythonDBEnv()...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		app.markPythonStatusTaskError("data_update", "数据更新进程启动失败: "+err.Error()+"，日志: "+logPath)
@@ -5878,6 +6930,185 @@ func (app *App) ListDatasetUpdateStatus() ([]datafetch.DatasetStatus, error) {
 	return items, err
 }
 
+func (app *App) CheckExternalDependencies() ([]ExternalDependencyStatus, error) {
+	return []ExternalDependencyStatus{
+		app.checkMySQLDependency(),
+		app.checkTushareDependency(),
+		app.checkDeepSeekDependency(),
+		app.checkRealtimeQuoteDependency(),
+		app.checkWechatDependency(),
+	}, nil
+}
+
+func (app *App) checkMySQLDependency() ExternalDependencyStatus {
+	return app.measureDependency("mysql", "MySQL 数据库", "基础设施", func() error {
+		if err := app.ensureDatabase(); err != nil {
+			return err
+		}
+		if app.database == nil || app.database.Conn() == nil {
+			return errors.New("数据库连接未初始化")
+		}
+		return app.database.Conn().Ping()
+	})
+}
+
+func (app *App) checkTushareDependency() ExternalDependencyStatus {
+	token := strings.TrimSpace(app.settings.TushareToken)
+	if token == "" {
+		return dependencyStatus("tushare", "Tushare 数据接口", "行情/财务数据", "missing", 0, "config.toml 未配置 [data].tushare_token")
+	}
+	return app.measureDependency("tushare", "Tushare 数据接口", "行情/财务数据", func() error {
+		payload, _ := json.Marshal(map[string]any{
+			"api_name": "trade_cal",
+			"token":    token,
+			"params": map[string]any{
+				"exchange":   "SSE",
+				"start_date": time.Now().AddDate(0, 0, -7).Format("20060102"),
+				"end_date":   time.Now().Format("20060102"),
+			},
+			"fields": "cal_date,is_open",
+		})
+		ctx, cancel := context.WithTimeout(app.contextOrBackground(), 6*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://api.tushare.pro", bytes.NewReader(payload))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+		var parsed struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if err := json.Unmarshal(respBody, &parsed); err != nil {
+			return err
+		}
+		if parsed.Code != 0 {
+			return fmt.Errorf("Tushare code=%d %s", parsed.Code, strings.TrimSpace(parsed.Msg))
+		}
+		return nil
+	})
+}
+
+func (app *App) checkDeepSeekDependency() ExternalDependencyStatus {
+	token := strings.TrimSpace(app.settings.DeepSeekToken)
+	if token == "" {
+		return dependencyStatus("deepseek", "DeepSeek 模型接口", "AI 调参/复盘", "missing", 0, "config.toml 未配置 [deepseek].token")
+	}
+	return app.measureDependency("deepseek", "DeepSeek 模型接口", "AI 调参/复盘", func() error {
+		payload, _ := json.Marshal(map[string]any{
+			"model": app.deepSeekModel(),
+			"messages": []map[string]string{
+				{"role": "system", "content": "你是接口健康检查助手。"},
+				{"role": "user", "content": "请只输出 ok 两个字母。"},
+			},
+			"stream": false,
+		})
+		ctx, cancel := context.WithTimeout(app.contextOrBackground(), 12*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.deepseek.com/chat/completions", bytes.NewReader(payload))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+		var parsed struct {
+			Choices []struct {
+				Message struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(respBody, &parsed); err != nil {
+			return err
+		}
+		if len(parsed.Choices) == 0 {
+			return errors.New("DeepSeek 未返回 choices")
+		}
+		content := strings.TrimSpace(parsed.Choices[0].Message.Content)
+		reasoning := strings.TrimSpace(parsed.Choices[0].Message.ReasoningContent)
+		if content == "" && reasoning == "" {
+			excerpt := strings.TrimSpace(string(respBody))
+			if len(excerpt) > 280 {
+				excerpt = excerpt[:280] + "..."
+			}
+			return fmt.Errorf("DeepSeek 返回为空：%s", excerpt)
+		}
+		return nil
+	})
+}
+
+func (app *App) checkRealtimeQuoteDependency() ExternalDependencyStatus {
+	return app.measureDependency("realtime_quote", "实时行情接口", "实时价格", func() error {
+		price, err := app.fetchRealtimePrice("000001.SZ")
+		if err != nil {
+			return err
+		}
+		if price <= 0 {
+			return errors.New("未返回有效价格")
+		}
+		return nil
+	})
+}
+
+func (app *App) checkWechatDependency() ExternalDependencyStatus {
+	webhook := strings.TrimSpace(app.settings.StrategySchedule.WechatWebhook)
+	if webhook == "" {
+		return dependencyStatus("wechat", "企业微信机器人", "通知", "missing", 0, "config.toml 未配置 [wechat].webhook")
+	}
+	if !strings.HasPrefix(webhook, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send") {
+		return dependencyStatus("wechat", "企业微信机器人", "通知", "error", 0, "webhook 地址格式不像企业微信机器人")
+	}
+	return dependencyStatus("wechat", "企业微信机器人", "通知", "ready", 0, "已配置；监控页不自动发送测试消息")
+}
+
+func (app *App) measureDependency(key string, name string, category string, fn func() error) ExternalDependencyStatus {
+	start := time.Now()
+	err := fn()
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		return dependencyStatus(key, name, category, "error", latency, err.Error())
+	}
+	return dependencyStatus(key, name, category, "ready", latency, "可用")
+}
+
+func dependencyStatus(key string, name string, category string, state string, latencyMS int64, message string) ExternalDependencyStatus {
+	return ExternalDependencyStatus{
+		Key:       key,
+		Name:      name,
+		Category:  category,
+		State:     state,
+		LatencyMS: latencyMS,
+		Message:   message,
+		CheckedAt: time.Now().Format(time.RFC3339),
+	}
+}
+
+func (app *App) contextOrBackground() context.Context {
+	if app.ctx != nil {
+		return app.ctx
+	}
+	return context.Background()
+}
+
 func (app *App) ensureDatafetchService() error {
 	if app.datafetchService != nil {
 		return nil
@@ -5973,7 +7204,219 @@ func (app *App) CreateTask(req task.CreateRequest) (task.DTO, error) {
 		}
 		return task.ToDTO(parent), nil
 	}
+	if req.TaskType == task.TypeModelTraining {
+		parent, err := app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		if err := app.initializeModelTraining(parent); err != nil {
+			return task.DTO{}, err
+		}
+		parent, err = app.taskService.Repository().Get(dto.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+		return task.ToDTO(parent), nil
+	}
 	return dto, nil
+}
+
+func (app *App) RunFactorLatestInference() (task.DTO, error) {
+	if err := app.ensureTaskService(); err != nil {
+		return task.DTO{}, err
+	}
+	runID := app.activeStrategyModelRunID("ml_factor_ranker")
+	if runID == "" || !app.strategyModelRunExists("ml_factor_ranker", runID) {
+		_ = app.database.Conn().QueryRow(`SELECT run_id FROM factor_model_runs WHERE status = 'success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return task.DTO{}, errors.New("暂无成功的通用策略模型，请先在模型训练页完成训练")
+	}
+	startDate := "20100101"
+	endDate := time.Now().Format("20060102")
+	freq := "monthly"
+	label := "fwd20_excess_industry"
+	_ = app.database.Conn().QueryRow(`
+		SELECT COALESCE(start_date, ''), COALESCE(end_date, ''), COALESCE(freq, ''), COALESCE(label, '')
+		FROM factor_research_runs
+		WHERE run_id = ?`, runID).Scan(&startDate, &endDate, &freq, &label)
+	var latestDaily string
+	_ = app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date), '') FROM data_daily_bars`).Scan(&latestDaily)
+	if strings.TrimSpace(latestDaily) != "" {
+		endDate = strings.TrimSpace(latestDaily)
+	}
+	if strings.TrimSpace(startDate) == "" {
+		startDate = "20100101"
+	}
+	if strings.TrimSpace(endDate) == "" {
+		endDate = time.Now().Format("20060102")
+	}
+	if strings.TrimSpace(freq) == "" {
+		freq = "monthly"
+	}
+	if strings.TrimSpace(label) == "" {
+		label = "fwd20_excess_industry"
+	}
+	dto, err := app.CreateTask(task.CreateRequest{
+		Name:     fmt.Sprintf("通用策略重新推理-%s", endDate),
+		TaskType: task.TypeFactorResearch,
+		Params: map[string]any{
+			"run_id":          runID,
+			"start_date":      startDate,
+			"end_date":        endDate,
+			"freq":            freq,
+			"label":           label,
+			"profile":         "inference",
+			"min_train_years": 4,
+			"min_test_year":   0,
+			"stress_aware":    true,
+		},
+	})
+	if err != nil {
+		return task.DTO{}, err
+	}
+	return app.StartTask(dto.ID)
+}
+
+func (app *App) RunFactorAutoTune(maxRounds int, trialsPerRound int, useDeepSeek bool) (task.DTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return task.DTO{}, err
+	}
+	runID := ""
+	_ = app.database.Conn().QueryRow(`SELECT run_id FROM factor_model_runs WHERE status = 'success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return task.DTO{}, errors.New("暂无成功的通用策略模型，请先完成模型训练")
+	}
+	endDate := time.Now().Format("20060102")
+	var latestDaily string
+	_ = app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date), '') FROM data_daily_bars`).Scan(&latestDaily)
+	if strings.TrimSpace(latestDaily) != "" {
+		endDate = strings.TrimSpace(latestDaily)
+	}
+	if maxRounds <= 0 {
+		maxRounds = 12
+	}
+	if maxRounds > 30 {
+		maxRounds = 30
+	}
+	if trialsPerRound <= 0 {
+		trialsPerRound = 6
+	}
+	if trialsPerRound > 12 {
+		trialsPerRound = 12
+	}
+	dto, err := app.CreateTask(task.CreateRequest{
+		Name:     fmt.Sprintf("通用策略自动调参-%s", endDate),
+		TaskType: task.TypeFactorAutoTune,
+		Params: map[string]any{
+			"base_model_run_id": runID,
+			"start_date":        "20150101",
+			"end_date":          endDate,
+			"max_rounds":        maxRounds,
+			"trials_per_round":  trialsPerRound,
+			"use_deepseek":      useDeepSeek,
+			"deepseek_model":    strings.TrimSpace(app.settings.DeepSeekModel),
+			"deepseek_token":    strings.TrimSpace(app.settings.DeepSeekToken),
+			"activate_best":     true,
+		},
+	})
+	if err != nil {
+		return task.DTO{}, err
+	}
+	return app.StartTask(dto.ID)
+}
+
+func (app *App) ListFactorAutoTuneRuns(limit int) ([]FactorAutoTuneRun, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorAutoTuneRun{}, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if !app.database.TableExists("factor_autotune_runs") {
+		return []FactorAutoTuneRun{}, nil
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, base_model_run_id, start_date, end_date, status,
+		       COALESCE(best_trial_id, ''), COALESCE(best_model_run_id, ''),
+		       COALESCE(best_admission, ''), COALESCE(best_score, 0),
+		       COALESCE(summary_json, '{}'), created_at, updated_at
+		FROM factor_autotune_runs
+		ORDER BY updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return []FactorAutoTuneRun{}, nil
+	}
+	defer rows.Close()
+	out := []FactorAutoTuneRun{}
+	for rows.Next() {
+		var item FactorAutoTuneRun
+		if err := rows.Scan(
+			&item.RunID, &item.BaseModelRunID, &item.StartDate, &item.EndDate, &item.Status,
+			&item.BestTrialID, &item.BestModelRunID, &item.BestAdmission, &item.BestScore,
+			&item.SummaryJSON, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListFactorAutoTuneTrials(runID string, limit int) ([]FactorAutoTuneTrial, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []FactorAutoTuneTrial{}, err
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 80
+	}
+	if !app.database.TableExists("factor_autotune_trials") {
+		return []FactorAutoTuneTrial{}, nil
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		_ = app.database.Conn().QueryRow(`SELECT run_id FROM factor_autotune_runs ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	}
+	if runID == "" {
+		return []FactorAutoTuneTrial{}, nil
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, trial_id, round_no, source, model_run_id, eval_run_id,
+		       COALESCE(params_json, '{}'), COALESCE(llm_direction_json, '{}'),
+		       COALESCE(admission, ''), COALESCE(admission_score, 0), COALESCE(reason, ''),
+		       COALESCE(annual_return, 0), COALESCE(total_return, 0), COALESCE(max_drawdown, 0), COALESCE(sharpe, 0),
+		       COALESCE(stress_bad_event_count, 0), COALESCE(stress_crash_state_failed, 0), COALESCE(stress_weak_drawdown_failed, 0),
+		       COALESCE(passed, 0), created_at, updated_at
+		FROM factor_autotune_trials
+		WHERE run_id = ?
+		ORDER BY round_no ASC, trial_id ASC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []FactorAutoTuneTrial{}, nil
+	}
+	defer rows.Close()
+	out := []FactorAutoTuneTrial{}
+	for rows.Next() {
+		var item FactorAutoTuneTrial
+		var crashFailed int
+		var weakFailed int
+		var passed int
+		if err := rows.Scan(
+			&item.RunID, &item.TrialID, &item.RoundNo, &item.Source, &item.ModelRunID, &item.EvalRunID,
+			&item.ParamsJSON, &item.LLMDirectionJSON, &item.Admission, &item.AdmissionScore, &item.Reason,
+			&item.AnnualReturn, &item.TotalReturn, &item.MaxDrawdown, &item.Sharpe,
+			&item.StressBadEventCount, &crashFailed, &weakFailed, &passed, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		item.StressCrashStateFailed = crashFailed != 0
+		item.StressWeakDrawdownFailed = weakFailed != 0
+		item.Passed = passed != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (app *App) initializeFactorResearch(parent task.Task) error {
@@ -5993,12 +7436,15 @@ func (app *App) initializeFactorResearch(parent task.Task) error {
 		return err
 	}
 	if len(children) > 0 {
-		return nil
+		return app.ensureFactorResearchStages(parent, children)
 	}
 	profile := factorResearchProfile(params)
 	stages := factorResearchStages(profile)
 	now := time.Now()
 	runID := parent.ExternalRunID
+	if requestedRunID := strings.TrimSpace(stringParam(params, "run_id", "")); requestedRunID != "" {
+		runID = requestedRunID
+	}
 	if runID == "" {
 		runID = factorResearchRunID(profile, parent.ID)
 	}
@@ -6070,10 +7516,106 @@ func (app *App) initializeFactorResearch(parent task.Task) error {
 	return nil
 }
 
+func (app *App) ensureFactorResearchStages(parent task.Task, children []task.Task) error {
+	params := task.ToDTO(parent).Params
+	profile := factorResearchProfile(params)
+	if profile == "inference" {
+		return nil
+	}
+	startDate := stringParam(params, "start_date", "")
+	endDate := stringParam(params, "end_date", "")
+	if startDate == "" || endDate == "" {
+		return errors.New("factor research requires start_date and end_date")
+	}
+	stages := factorResearchStages(profile)
+	existing := make(map[string]bool, len(children))
+	maxSequence := 0
+	for _, child := range children {
+		if child.SubtaskKey != "" {
+			existing[child.SubtaskKey] = true
+		}
+		if child.Sequence > maxSequence {
+			maxSequence = child.Sequence
+		}
+	}
+	if len(existing) >= len(stages) {
+		return nil
+	}
+	runID := parent.ExternalRunID
+	if requestedRunID := strings.TrimSpace(stringParam(params, "run_id", "")); requestedRunID != "" {
+		runID = requestedRunID
+	}
+	if runID == "" {
+		runID = parent.GroupRunID
+	}
+	if runID == "" {
+		runID = factorResearchRunID(profile, parent.ID)
+	}
+	minTrainYears := int(numberParam(params, "min_train_years", factorResearchDefaultMinTrainYears(profile)))
+	minTestYear := int(numberParam(params, "min_test_year", factorResearchDefaultMinTestYear(profile)))
+	stressAware := boolParam(params, "stress_aware", profile != "smoke")
+	now := time.Now()
+	added := 0
+	for _, stage := range stages {
+		key := stage["key"]
+		if existing[key] {
+			continue
+		}
+		maxSequence++
+		childParams := map[string]any{
+			"start_date":      startDate,
+			"end_date":        endDate,
+			"freq":            stringParam(params, "freq", "monthly"),
+			"label":           stringParam(params, "label", "fwd20_excess_industry"),
+			"profile":         profile,
+			"min_train_years": minTrainYears,
+			"min_test_year":   minTestYear,
+			"stress_aware":    stressAware,
+			"stage":           key,
+		}
+		paramsData, err := json.Marshal(childParams)
+		if err != nil {
+			return err
+		}
+		child := task.Task{
+			ID:            task.NewID(),
+			Name:          stage["name"],
+			TaskType:      task.TypeFactorResearch,
+			Status:        task.StatusCreated,
+			Progress:      0,
+			ParamsJSON:    string(paramsData),
+			WorkerType:    "python",
+			ExternalRunID: runID,
+			ParentID:      parent.ID,
+			GroupRunID:    runID,
+			SubtaskKey:    key,
+			SubtaskName:   stage["name"],
+			Sequence:      maxSequence,
+			Total:         len(stages),
+			MaxAttempts:   2,
+			CreatedAt:     now.Add(time.Duration(maxSequence) * time.Millisecond),
+			UpdatedAt:     now,
+		}
+		if err := app.taskService.Repository().Create(child); err != nil {
+			return err
+		}
+		added++
+	}
+	if added == 0 {
+		return nil
+	}
+	parent.ExternalRunID = runID
+	parent.GroupRunID = runID
+	parent.Total = len(stages)
+	parent.ResultPath = filepath.Join(app.settings.DataPath, "factor_research", runID)
+	parent.UpdatedAt = now
+	return app.taskService.Repository().UpdateRuntime(parent)
+}
+
 func factorResearchProfile(params map[string]any) string {
 	profile := strings.ToLower(stringParam(params, "profile", "full"))
 	switch profile {
-	case "smoke", "full":
+	case "smoke", "full", "inference":
 		return profile
 	default:
 		return "full"
@@ -6103,6 +7645,11 @@ func factorResearchDefaultMinTestYear(profile string) float64 {
 }
 
 func factorResearchStages(profile string) []map[string]string {
+	if profile == "inference" {
+		return []map[string]string{
+			{"key": "latest_inference", "name": "最新截面推理"},
+		}
+	}
 	stages := []map[string]string{
 		{"key": "build_factor_panel", "name": "生成因子面板"},
 		{"key": "evaluate_factors", "name": "因子检验"},
@@ -6116,7 +7663,7 @@ func factorResearchStages(profile string) []map[string]string {
 	return stages
 }
 
-func factorResearchStageCommandArgs(runID string, stage string, startDate string, endDate string, params map[string]any, dbPath string) []string {
+func factorResearchStageCommandArgs(runID string, stage string, startDate string, endDate string, params map[string]any) []string {
 	if stage == "strategy_admission" {
 		return []string{
 			"scripts/evaluate_strategies.py",
@@ -6125,7 +7672,6 @@ func factorResearchStageCommandArgs(runID string, stage string, startDate string
 			"--strategies", "ml_factor_ranker",
 			"--baseline", "small_cap_quality",
 			"--save", "eval_" + runID,
-			"--db-path", dbPath,
 			"--strategy-version-mode", "latest",
 			"--json",
 		}
@@ -6138,7 +7684,6 @@ func factorResearchStageCommandArgs(runID string, stage string, startDate string
 		"--end", endDate,
 		"--freq", stringParam(params, "freq", "monthly"),
 		"--label", stringParam(params, "label", "fwd20_excess_industry"),
-		"--db-path", dbPath,
 		"--min-train-years", strconv.Itoa(int(numberParam(params, "min_train_years", 4))),
 		"--min-test-year", strconv.Itoa(int(numberParam(params, "min_test_year", 0))),
 	}
@@ -6166,6 +7711,210 @@ func factorResearchStageEnv(runID string, stage string, params map[string]any) [
 		}
 	}
 	return []string{"QUANT_STRATEGY_OVERRIDES_JSON=" + mustJSON(override)}
+}
+
+func (app *App) initializeModelTraining(parent task.Task) error {
+	if app.database == nil {
+		if err := app.ensureDatabase(); err != nil {
+			return err
+		}
+	}
+	params := task.ToDTO(parent).Params
+	strategy := modelTrainingStrategy(params)
+	if strategy == "" {
+		return errors.New("model training requires strategy")
+	}
+	children, err := app.taskService.Repository().ListChildren(parent.ID)
+	if err != nil {
+		return err
+	}
+	if len(children) > 0 {
+		return nil
+	}
+	stages := modelTrainingStages(strategy)
+	runID := strings.TrimSpace(parent.ExternalRunID)
+	if requestedRunID := strings.TrimSpace(stringParam(params, "run_id", "")); requestedRunID != "" {
+		runID = requestedRunID
+	}
+	if runID == "" {
+		runID = modelTrainingRunID(strategy)
+	}
+	now := time.Now()
+	parent.ExternalRunID = runID
+	parent.GroupRunID = runID
+	parent.Total = len(stages)
+	parent.Progress = 0
+	parent.ResultPath = filepath.Join(app.settings.DataPath, "model_training", strategy, runID)
+	parent.SummaryJSON = mustJSON(map[string]any{
+		"strategy":        strategy,
+		"strategy_name":   modelTrainingStrategyName(strategy),
+		"run_id":          runID,
+		"planned_count":   len(stages),
+		"completed_count": 0,
+		"failed_count":    0,
+		"running_count":   0,
+		"rows":            []any{},
+	})
+	parent.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(parent); err != nil {
+		return err
+	}
+	for idx, stage := range stages {
+		childParams := map[string]any{
+			"strategy": strategy,
+			"stage":    stage["key"],
+		}
+		for key, value := range params {
+			if _, exists := childParams[key]; !exists {
+				childParams[key] = value
+			}
+		}
+		paramsData, err := json.Marshal(childParams)
+		if err != nil {
+			return err
+		}
+		child := task.Task{
+			ID:            task.NewID(),
+			Name:          stage["name"],
+			TaskType:      task.TypeModelTraining,
+			Status:        task.StatusCreated,
+			Progress:      0,
+			ParamsJSON:    string(paramsData),
+			WorkerType:    "python",
+			ExternalRunID: runID,
+			ParentID:      parent.ID,
+			GroupRunID:    runID,
+			SubtaskKey:    stage["key"],
+			SubtaskName:   stage["name"],
+			Sequence:      idx + 1,
+			Total:         len(stages),
+			MaxAttempts:   1,
+			CreatedAt:     now.Add(time.Duration(idx) * time.Millisecond),
+			UpdatedAt:     now,
+		}
+		if err := app.taskService.Repository().Create(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func modelTrainingStrategy(params map[string]any) string {
+	strategy := strings.TrimSpace(stringParam(params, "strategy", ""))
+	if strategy == "" {
+		strategy = strings.TrimSpace(stringParam(params, "task", ""))
+	}
+	switch strategy {
+	case "limit_up_model":
+		return "limit_up_model"
+	case "limit_breakout_model", "limit_breakout":
+		return "limit_breakout_model"
+	case "t0_daily", "t0_daily_research":
+		return "t0_daily"
+	default:
+		return ""
+	}
+}
+
+func modelTrainingStages(strategy string) []map[string]string {
+	return []map[string]string{
+		{"key": "train_model", "name": modelTrainingStrategyName(strategy) + "训练"},
+		{"key": "validate_model_run", "name": "产物完整性检查"},
+	}
+}
+
+func modelTrainingStrategyName(strategy string) string {
+	switch strategy {
+	case "limit_up_model":
+		return "涨停预警模型"
+	case "limit_breakout_model":
+		return "横盘预警模型"
+	case "t0_daily":
+		return "做T模型"
+	default:
+		return "策略模型"
+	}
+}
+
+func modelTrainingRunID(strategy string) string {
+	prefix := "mt"
+	switch strategy {
+	case "limit_up_model":
+		prefix = "lum"
+	case "limit_breakout_model":
+		prefix = "lbm"
+	case "t0_daily":
+		prefix = "t0_daily"
+	}
+	return prefix + "_" + time.Now().Format("20060102_150405")
+}
+
+func modelTrainingStatusTask(strategy string) string {
+	switch strategy {
+	case "limit_up_model":
+		return "limit_up_model"
+	case "limit_breakout_model":
+		return "limit_breakout_model"
+	case "t0_daily":
+		return "t0_daily_research"
+	default:
+		return strategy
+	}
+}
+
+func modelTrainingStageCommandArgs(strategy string, runID string, stage string, dataPath string, params map[string]any) ([]string, error) {
+	endDate := strings.TrimSpace(stringParam(params, "end_date", time.Now().Format("20060102")))
+	if endDate == "" {
+		endDate = time.Now().Format("20060102")
+	}
+	switch stage {
+	case "train_model":
+		switch strategy {
+		case "limit_up_model":
+			return []string{
+				"scripts/limit_up_model_worker.py",
+				"--run-id", runID,
+				"--data-path", dataPath,
+				"--start", stringParam(params, "start_date", "20150101"),
+				"--end", endDate,
+				"--min-test-year", strconv.Itoa(int(numberParam(params, "min_test_year", 2019))),
+				"--threads", strconv.Itoa(int(numberParam(params, "threads", 4))),
+			}, nil
+		case "limit_breakout_model":
+			return []string{
+				"scripts/limit_breakout_model_worker.py",
+				"--run-id", runID,
+				"--data-path", dataPath,
+				"--start", stringParam(params, "start_date", "20150101"),
+				"--end", endDate,
+				"--min-test-year", strconv.Itoa(int(numberParam(params, "min_test_year", 2020))),
+				"--top-k", strconv.Itoa(int(numberParam(params, "top_k", 3))),
+				"--threads", strconv.Itoa(int(numberParam(params, "threads", 4))),
+			}, nil
+		case "t0_daily":
+			return []string{
+				"scripts/t0_daily_worker.py",
+				"--run-id", runID,
+				"--data-path", dataPath,
+				"--lookback", strconv.Itoa(int(numberParam(params, "lookback", 120))),
+				"--history-days", strconv.Itoa(int(numberParam(params, "history_days", 760))),
+				"--model-history-days", strconv.Itoa(int(numberParam(params, "model_history_days", 2200))),
+				"--limit", strconv.Itoa(int(numberParam(params, "limit", 120))),
+				"--backtest-limit", strconv.Itoa(int(numberParam(params, "backtest_limit", 120))),
+			}, nil
+		default:
+			return nil, errors.New("unsupported model training strategy")
+		}
+	case "validate_model_run":
+		return []string{
+			"scripts/strategy_model_validate_worker.py",
+			"--strategy", strategy,
+			"--run-id", runID,
+			"--data-path", dataPath,
+		}, nil
+	default:
+		return nil, errors.New("unsupported model training stage")
+	}
 }
 
 func (app *App) initializeStrategyEvaluation(parent task.Task) error {
@@ -7404,11 +9153,10 @@ func (app *App) RefreshRecommendationHindsight() ([]RecommendationHindsightDTO, 
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
 	scriptPath := filepath.Join(quantRoot, "trading", "execution", "validation.py")
-	cmd := exec.Command(pythonPath, scriptPath, "--persist", "--db-path", dbPath, "--horizons", "1,3,5,10,20")
+	cmd := exec.Command(pythonPath, scriptPath, "--persist", "--horizons", "1,3,5,10,20")
 	cmd.Dir = quantRoot
-	cmd.Env = append(os.Environ(), app.pythonDBEnv(dbPath)...)
+	cmd.Env = append(os.Environ(), app.pythonDBEnv()...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if output, err := cmd.Output(); err != nil {
@@ -9526,7 +11274,7 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	if t.Status != task.StatusCreated && t.Status != task.StatusQueued && t.Status != task.StatusInterrupted && t.Status != task.StatusFailed && t.Status != task.StatusCancelled {
 		return task.DTO{}, errors.New("task cannot be started in current status")
 	}
-	if t.TaskType != task.TypeEvaluationTimeMachine && t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypeFactorResearch && t.TaskType != task.TypeLimitSignalEvaluation && t.TaskType != task.TypeT0DailyResearch && t.TaskType != task.TypeT0TimeMachine {
+	if t.TaskType != task.TypeEvaluationTimeMachine && t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypeFactorResearch && t.TaskType != task.TypeFactorAutoTune && t.TaskType != task.TypeModelTraining && t.TaskType != task.TypeLimitSignalEvaluation && t.TaskType != task.TypeT0DailyResearch && t.TaskType != task.TypeT0TimeMachine {
 		return task.DTO{}, errors.New("only evaluation tasks can be started")
 	}
 	if err := app.ensureDataQualityForEvaluation(); err != nil {
@@ -9555,7 +11303,10 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 	if t.TaskType == task.TypeFactorResearch {
 		return app.startFactorResearchTask(t)
 	}
-	if t.TaskType == task.TypeLimitSignalEvaluation || t.TaskType == task.TypeT0DailyResearch || t.TaskType == task.TypeT0TimeMachine {
+	if t.TaskType == task.TypeModelTraining {
+		return app.startModelTrainingTask(t)
+	}
+	if t.TaskType == task.TypeLimitSignalEvaluation || t.TaskType == task.TypeT0DailyResearch || t.TaskType == task.TypeT0TimeMachine || t.TaskType == task.TypeFactorAutoTune {
 		return app.startMarketEvaluationTask(t)
 	}
 	runID := t.ExternalRunID
@@ -9573,8 +11324,8 @@ func (app *App) StartTask(id string) (task.DTO, error) {
 		PythonPath:     pythonPath,
 		QuantStockPath: quantRoot,
 		DataPath:       app.settings.DataPath,
-		DBPath:         filepath.Join(app.settings.DataPath, "meta.db"),
-		ConfigDBPath:   filepath.Join(app.settings.DataPath, "meta.db"),
+		DBPath:         "",
+		ConfigDBPath:   "",
 		DBBackend:      app.settings.DatabaseBackend,
 		DBDSN:          app.settings.MySQLDSN,
 		TaskID:         t.ID,
@@ -9608,14 +11359,15 @@ func (app *App) startMarketEvaluationTask(t task.Task) (task.DTO, error) {
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(dataPath, "meta.db")
-	statusTask, args, err := marketEvaluationTaskCommand(t.TaskType, dataPath, dbPath, task.ToDTO(t).Params)
-	if err != nil {
-		return task.DTO{}, err
-	}
 	runID := strings.TrimSpace(t.ExternalRunID)
 	if runID == "" {
 		runID = strings.ReplaceAll(t.ID, "-", "")
+	}
+	params := task.ToDTO(t).Params
+	params["run_id"] = runID
+	statusTask, args, err := marketEvaluationTaskCommand(t.TaskType, dataPath, params)
+	if err != nil {
+		return task.DTO{}, err
 	}
 	runPath := filepath.Join(dataPath, "logs", statusTask, runID)
 	if err := os.MkdirAll(runPath, 0o755); err != nil {
@@ -9640,7 +11392,7 @@ func (app *App) startMarketEvaluationTask(t task.Task) (task.DTO, error) {
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv()...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		finishedAt := time.Now().Format(time.RFC3339)
@@ -9669,19 +11421,59 @@ func (app *App) startMarketEvaluationTask(t task.Task) (task.DTO, error) {
 	return task.ToDTO(t), nil
 }
 
-func marketEvaluationTaskCommand(taskType task.Type, dataPath string, dbPath string, params map[string]any) (string, []string, error) {
+func marketEvaluationTaskCommand(taskType task.Type, dataPath string, params map[string]any) (string, []string, error) {
 	switch taskType {
+	case task.TypeFactorAutoTune:
+		runID := strings.TrimSpace(fmt.Sprint(params["run_id"]))
+		if runID == "" {
+			runID = strings.TrimSpace(fmt.Sprint(params["external_run_id"]))
+		}
+		startDate := strings.TrimSpace(fmt.Sprint(params["start_date"]))
+		if startDate == "" || startDate == "<nil>" {
+			startDate = "20150101"
+		}
+		endDate := strings.TrimSpace(fmt.Sprint(params["end_date"]))
+		if endDate == "" || endDate == "<nil>" {
+			endDate = time.Now().Format("20060102")
+		}
+		maxRounds := strings.TrimSpace(fmt.Sprint(params["max_rounds"]))
+		if maxRounds == "" || maxRounds == "<nil>" {
+			maxRounds = "12"
+		}
+		trialsPerRound := strings.TrimSpace(fmt.Sprint(params["trials_per_round"]))
+		if trialsPerRound == "" || trialsPerRound == "<nil>" {
+			trialsPerRound = "6"
+		}
+		baseModelRunID := strings.TrimSpace(fmt.Sprint(params["base_model_run_id"]))
+		args := []string{
+			"scripts/factor_autotune_worker.py",
+			"--run-id", runID,
+			"--base-model-run-id", baseModelRunID,
+			"--start", startDate,
+			"--end", endDate,
+			"--max-rounds", maxRounds,
+			"--trials-per-round", trialsPerRound,
+			"--activate-best",
+		}
+		if params["use_deepseek"] == true || strings.EqualFold(strings.TrimSpace(fmt.Sprint(params["use_deepseek"])), "true") {
+			args = append(args, "--use-deepseek")
+			if model := strings.TrimSpace(fmt.Sprint(params["deepseek_model"])); model != "" && model != "<nil>" {
+				args = append(args, "--deepseek-model", model)
+			}
+			if token := strings.TrimSpace(fmt.Sprint(params["deepseek_token"])); token != "" && token != "<nil>" {
+				args = append(args, "--deepseek-token", token)
+			}
+		}
+		return "factor_autotune", args, nil
 	case task.TypeLimitSignalEvaluation:
 		return "limit_signal_evaluation", []string{
 			"scripts/evaluate_limit_signals.py",
 			"--data-path", dataPath,
-			"--db-path", dbPath,
 		}, nil
 	case task.TypeT0DailyResearch:
 		return "t0_daily_research", []string{
 			"scripts/t0_daily_worker.py",
 			"--data-path", dataPath,
-			"--db-path", dbPath,
 			"--lookback", "120",
 			"--history-days", "760",
 			"--model-history-days", "2200",
@@ -9695,7 +11487,6 @@ func marketEvaluationTaskCommand(taskType task.Type, dataPath string, dbPath str
 				"scripts/t0_daily_worker.py",
 				"--mode", "time_machine",
 				"--data-path", dataPath,
-				"--db-path", dbPath,
 				"--lookback-grid", "80",
 				"--eval-days-grid", "20",
 				"--anchor-count", "1",
@@ -9708,7 +11499,6 @@ func marketEvaluationTaskCommand(taskType task.Type, dataPath string, dbPath str
 			"scripts/t0_daily_worker.py",
 			"--mode", "time_machine",
 			"--data-path", dataPath,
-			"--db-path", dbPath,
 			"--lookback-grid", "40,60,80,120",
 			"--eval-days-grid", "10,20,40",
 			"--anchor-count", "4",
@@ -9861,7 +11651,7 @@ func (app *App) RetryTask(id string) (task.DTO, error) {
 	if t.Status == task.StatusRunning {
 		return task.ToDTO(t), nil
 	}
-	if t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeFactorResearch && t.TaskType != task.TypeLimitSignalEvaluation && t.TaskType != task.TypeT0DailyResearch && t.TaskType != task.TypeT0TimeMachine {
+	if t.TaskType != task.TypeStrategyEvaluation && t.TaskType != task.TypeWalkForwardEvaluation && t.TaskType != task.TypeParameterExperiment && t.TaskType != task.TypePortfolioOptimization && t.TaskType != task.TypeFactorResearch && t.TaskType != task.TypeFactorAutoTune && t.TaskType != task.TypeModelTraining && t.TaskType != task.TypeLimitSignalEvaluation && t.TaskType != task.TypeT0DailyResearch && t.TaskType != task.TypeT0TimeMachine {
 		return task.DTO{}, errors.New("task cannot be retried")
 	}
 	if err := app.ensureDataQualityForEvaluation(); err != nil {
@@ -9909,6 +11699,8 @@ func (app *App) RetryTask(id string) (task.DTO, error) {
 		parent.SummaryJSON = app.portfolioSummaryForParent(parent, children)
 	} else if t.TaskType == task.TypeFactorResearch {
 		parent.SummaryJSON = app.factorResearchSummaryForParent(parent, children)
+	} else if t.TaskType == task.TypeModelTraining {
+		parent.SummaryJSON = app.modelTrainingSummaryForParent(parent, children)
 	}
 	_ = app.taskService.Repository().UpdateStatus(parent)
 	_ = app.taskService.Repository().UpdateRuntime(parent)
@@ -9916,6 +11708,8 @@ func (app *App) RetryTask(id string) (task.DTO, error) {
 		go app.runPortfolioOptimizationChildren(parent)
 	} else if t.TaskType == task.TypeFactorResearch {
 		go app.runFactorResearchChildren(parent)
+	} else if t.TaskType == task.TypeModelTraining {
+		go app.runModelTrainingChildren(parent)
 	} else {
 		go app.runStrategyEvaluationChildren(parent)
 	}
@@ -10010,6 +11804,13 @@ func (app *App) startFactorResearchTask(t task.Task) (task.DTO, error) {
 		if err != nil {
 			return task.DTO{}, err
 		}
+	} else if err := app.ensureFactorResearchStages(t, children); err != nil {
+		return task.DTO{}, err
+	} else {
+		children, err = app.taskService.Repository().ListChildren(t.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
 	}
 	now := time.Now()
 	for _, child := range children {
@@ -10040,6 +11841,55 @@ func (app *App) startFactorResearchTask(t task.Task) (task.DTO, error) {
 		return task.DTO{}, err
 	}
 	go app.runFactorResearchChildren(t)
+	return task.ToDTO(t), nil
+}
+
+func (app *App) startModelTrainingTask(t task.Task) (task.DTO, error) {
+	if t.ParentID != "" {
+		return app.RetryTask(t.ID)
+	}
+	children, err := app.taskService.Repository().ListChildren(t.ID)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	if len(children) == 0 {
+		if err := app.initializeModelTraining(t); err != nil {
+			return task.DTO{}, err
+		}
+		children, err = app.taskService.Repository().ListChildren(t.ID)
+		if err != nil {
+			return task.DTO{}, err
+		}
+	}
+	now := time.Now()
+	for _, child := range children {
+		if child.Status == task.StatusCancelled || child.Status == task.StatusInterrupted {
+			child.Status = task.StatusCreated
+			child.Progress = 0
+			child.WorkerPID = 0
+			child.ErrorMessage = ""
+			child.StartedAt = time.Time{}
+			child.FinishedAt = time.Time{}
+			child.UpdatedAt = now
+			_ = app.taskService.Repository().UpdateRuntime(child)
+		}
+	}
+	children, err = app.taskService.Repository().ListChildren(t.ID)
+	if err != nil {
+		return task.DTO{}, err
+	}
+	t.Status = task.StatusRunning
+	t.Progress = portfolioParentProgress(children)
+	t.WorkerPID = 0
+	t.ErrorMessage = ""
+	t.Total = len(children)
+	t.StartedAt = now
+	t.FinishedAt = time.Time{}
+	t.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
+		return task.DTO{}, err
+	}
+	go app.runModelTrainingChildren(t)
 	return task.ToDTO(t), nil
 }
 
@@ -10127,13 +11977,12 @@ func (app *App) startFactorResearchChildTaskSync(t task.Task) (task.Task, error)
 	}
 	quantRoot := app.quantStockCorePath()
 	pythonPath := pythonPathForCore(quantRoot)
-	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
-	args := factorResearchStageCommandArgs(runID, stage, startDate, endDate, params, dbPath)
+	args := factorResearchStageCommandArgs(runID, stage, startDate, endDate, params)
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv()...)...)
 	cmd.Env = append(cmd.Env, factorResearchStageEnv(runID, stage, params)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
@@ -10316,6 +12165,296 @@ func (app *App) finishFactorResearchParent(parent task.Task, status task.Status,
 	_ = app.taskService.Repository().UpdateRuntime(parent)
 }
 
+func (app *App) runModelTrainingChildren(parent task.Task) {
+	app.schedulerMu.Lock()
+	defer app.schedulerMu.Unlock()
+	for {
+		latestParent, err := app.taskService.Repository().Get(parent.ID)
+		if err != nil {
+			app.finishModelTrainingParent(parent, task.StatusFailed, err.Error(), nil)
+			return
+		}
+		if latestParent.Status != task.StatusRunning {
+			return
+		}
+		parent = latestParent
+		app.reconcileOrphanRunningChildren(parent.ID)
+		children, err := app.taskService.Repository().ListChildren(parent.ID)
+		if err != nil {
+			app.finishModelTrainingParent(parent, task.StatusFailed, err.Error(), children)
+			return
+		}
+		next, blockedByFailedStage := nextFactorResearchChild(children)
+		if next.ID == "" {
+			if blockedByFailedStage {
+				app.finishModelTrainingParent(parent, task.StatusFailed, "前置训练阶段失败", children)
+				return
+			}
+			status := portfolioParentStatus(children)
+			if status != task.StatusRunning {
+				app.finishModelTrainingParent(parent, status, "", children)
+				return
+			}
+			parent.Progress = portfolioParentProgress(children)
+			parent.SummaryJSON = app.modelTrainingSummaryForParent(parent, children)
+			parent.UpdatedAt = time.Now()
+			_ = app.taskService.Repository().UpdateStatus(parent)
+			_ = app.taskService.Repository().UpdateRuntime(parent)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		next.Status = task.StatusQueued
+		next.UpdatedAt = time.Now()
+		_ = app.taskService.Repository().UpdateStatus(next)
+		_ = app.taskService.Repository().UpdateRuntime(next)
+		updated, err := app.startModelTrainingChildTaskSync(next)
+		if err != nil {
+			if updated.ID == "" {
+				updated = next
+			}
+			app.markChildTaskFailed(updated, err)
+		}
+		children, _ = app.taskService.Repository().ListChildren(parent.ID)
+		parent.Progress = portfolioParentProgress(children)
+		parent.SummaryJSON = app.modelTrainingSummaryForParent(parent, children)
+		parent.UpdatedAt = time.Now()
+		_ = app.taskService.Repository().UpdateStatus(parent)
+		_ = app.taskService.Repository().UpdateRuntime(parent)
+	}
+}
+
+func (app *App) startModelTrainingChildTaskSync(t task.Task) (task.Task, error) {
+	runID := t.ExternalRunID
+	if runID == "" {
+		runID = t.GroupRunID
+	}
+	if runID == "" {
+		return t, errors.New("model training child requires run id")
+	}
+	params := task.ToDTO(t).Params
+	strategy := modelTrainingStrategy(params)
+	stage := stringParam(params, "stage", t.SubtaskKey)
+	if strategy == "" || stage == "" {
+		return t, errors.New("model training child requires strategy and stage")
+	}
+	dataPath := strings.TrimSpace(app.settings.DataPath)
+	if dataPath == "" {
+		return t, errors.New("数据路径未设置")
+	}
+	runPath := filepath.Join(dataPath, "model_training", strategy, runID, stage)
+	logPath := filepath.Join(runPath, "worker.log")
+	if err := os.MkdirAll(runPath, 0o755); err != nil {
+		return t, err
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return t, err
+	}
+	quantRoot := app.quantStockCorePath()
+	pythonPath := pythonPathForCore(quantRoot)
+	args, err := modelTrainingStageCommandArgs(strategy, runID, stage, dataPath, params)
+	if err != nil {
+		_ = logFile.Close()
+		return t, err
+	}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Dir = quantRoot
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + dataPath}, app.pythonDBEnv()...)...)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		return t, err
+	}
+	now := time.Now()
+	t.Status = task.StatusRunning
+	t.Progress = 0.02
+	t.ResultPath = runPath
+	t.LogPath = logPath
+	t.WorkerPID = cmd.Process.Pid
+	t.ExternalRunID = runID
+	t.GroupRunID = runID
+	t.ErrorMessage = ""
+	t.Attempt++
+	t.StartedAt = now
+	t.FinishedAt = time.Time{}
+	t.UpdatedAt = now
+	if err := app.taskService.Repository().UpdateRuntime(t); err != nil {
+		_ = logFile.Close()
+		return t, err
+	}
+	done := make(chan struct{})
+	progressStopped := make(chan struct{})
+	go func() {
+		defer close(progressStopped)
+		app.pollModelTrainingChildProgress(t, strategy, runID, stage, done)
+	}()
+	waitErr := cmd.Wait()
+	close(done)
+	<-progressStopped
+	_ = logFile.Close()
+	finishedAt := time.Now()
+	latest, latestErr := app.taskService.Repository().Get(t.ID)
+	if latestErr == nil && latest.Status == task.StatusCancelled {
+		return latest, nil
+	}
+	t.WorkerPID = 0
+	t.Progress = 1
+	t.UpdatedAt = finishedAt
+	t.FinishedAt = finishedAt
+	if waitErr != nil {
+		t.Status = task.StatusFailed
+		t.ErrorMessage = waitErr.Error()
+		_ = app.taskService.Repository().UpdateRuntime(t)
+		return t, waitErr
+	}
+	t.Status = task.StatusSuccess
+	t.SummaryJSON = app.modelTrainingStageSummary(strategy, runID, stage)
+	_ = app.taskService.Repository().UpdateRuntime(t)
+	if t.SummaryJSON != "" {
+		_ = app.taskService.Repository().UpdateStatus(t)
+	}
+	if stage == "validate_model_run" {
+		app.activateBestStrategyModelRun(strategy)
+	}
+	return t, nil
+}
+
+func (app *App) pollModelTrainingChildProgress(t task.Task, strategy string, runID string, stage string, done <-chan struct{}) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	statusTask := modelTrainingStatusTask(strategy)
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			progress := t.Progress
+			summary := ""
+			if stage == "train_model" {
+				if row, err := app.readRunStatusRow(statusTask); err == nil && row.Total > 0 {
+					progress = math.Max(0.02, math.Min(0.98, float64(row.Idx)/float64(row.Total)))
+					summary = mustJSON(map[string]any{
+						"strategy":    strategy,
+						"run_id":      runID,
+						"stage":       stage,
+						"status_task": row.Task,
+						"name":        row.Name,
+						"message":     row.Message,
+						"idx":         row.Idx,
+						"total":       row.Total,
+						"updated_at":  row.UpdatedAt,
+					})
+				}
+			} else if summary = app.modelTrainingStageSummary(strategy, runID, stage); summary != "" {
+				progress = 0.9
+			}
+			if progress <= t.Progress {
+				progress = t.Progress
+			}
+			if progress >= 1 {
+				progress = 0.99
+			}
+			t.Progress = progress
+			if summary != "" {
+				t.SummaryJSON = summary
+			}
+			t.UpdatedAt = time.Now()
+			_ = app.taskService.Repository().UpdateStatus(t)
+		}
+	}
+}
+
+func (app *App) modelTrainingStageSummary(strategy string, runID string, stage string) string {
+	if app.database == nil || app.database.Conn() == nil {
+		return ""
+	}
+	if stage == "validate_model_run" {
+		return readSummaryJSON(app.database.Conn(), `SELECT summary_json FROM strategy_model_validation_results WHERE strategy = ? AND run_id = ?`, strategy, runID)
+	}
+	switch strategy {
+	case "limit_up_model":
+		return readSummaryJSON(app.database.Conn(), `SELECT summary_json FROM limit_up_model_runs WHERE run_id = ?`, runID)
+	case "limit_breakout_model":
+		return readSummaryJSON(app.database.Conn(), `SELECT summary_json FROM limit_breakout_model_runs WHERE run_id = ?`, runID)
+	case "t0_daily":
+		return readSummaryJSON(app.database.Conn(), `SELECT summary_json FROM t0_daily_runs WHERE run_id = ?`, runID)
+	default:
+		return ""
+	}
+}
+
+func (app *App) modelTrainingSummaryForParent(parent task.Task, children []task.Task) string {
+	payload := map[string]any{}
+	if parent.SummaryJSON != "" {
+		_ = json.Unmarshal([]byte(parent.SummaryJSON), &payload)
+	}
+	childRows := make([]any, 0, len(children))
+	successChildren := 0
+	failedChildren := 0
+	runningChildren := 0
+	for _, child := range children {
+		switch child.Status {
+		case task.StatusSuccess:
+			successChildren++
+		case task.StatusFailed, task.StatusCancelled, task.StatusInterrupted:
+			failedChildren++
+		case task.StatusRunning:
+			runningChildren++
+		}
+		row := map[string]any{
+			"stage":       child.SubtaskKey,
+			"stage_name":  child.SubtaskName,
+			"task_status": child.Status,
+			"progress":    child.Progress,
+			"sequence":    child.Sequence,
+			"total":       child.Total,
+			"error":       child.ErrorMessage,
+			"result_path": child.ResultPath,
+			"log_path":    child.LogPath,
+		}
+		if child.SummaryJSON != "" {
+			var childSummary map[string]any
+			if json.Unmarshal([]byte(child.SummaryJSON), &childSummary) == nil {
+				for key, value := range childSummary {
+					row[key] = value
+				}
+			}
+		}
+		childRows = append(childRows, row)
+	}
+	payload["planned_count"] = len(children)
+	payload["completed_count"] = successChildren
+	payload["failed_task_count"] = failedChildren
+	payload["running_count"] = runningChildren
+	payload["progress"] = portfolioParentProgress(children)
+	if len(childRows) > 0 {
+		payload["rows"] = childRows
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return parent.SummaryJSON
+	}
+	return string(out)
+}
+
+func (app *App) finishModelTrainingParent(parent task.Task, status task.Status, message string, children []task.Task) {
+	now := time.Now()
+	app.releaseChildSlotsForParent(parent.ID)
+	parent.Status = status
+	parent.Progress = portfolioParentProgress(children)
+	if status == task.StatusSuccess {
+		parent.Progress = 1
+	}
+	parent.WorkerPID = 0
+	parent.ErrorMessage = message
+	parent.SummaryJSON = app.modelTrainingSummaryForParent(parent, children)
+	parent.FinishedAt = now
+	parent.UpdatedAt = now
+	_ = app.taskService.Repository().UpdateStatus(parent)
+	_ = app.taskService.Repository().UpdateRuntime(parent)
+}
+
 func (app *App) runStrategyEvaluationChildren(parent task.Task) {
 	app.schedulerMu.Lock()
 	defer app.schedulerMu.Unlock()
@@ -10401,7 +12540,6 @@ func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, er
 		"--strategy-version-mode", stringParam(params, "strategy_version_mode", "latest"),
 		"--save", runID,
 		"--append-save",
-		"--db-path", filepath.Join(app.settings.DataPath, "meta.db"),
 		"--json",
 	}
 	if slippage := numberParam(params, "slippage", 0.002); slippage > 0 {
@@ -10411,8 +12549,7 @@ func (app *App) startStrategyEvaluationChildTaskSync(t task.Task) (task.Task, er
 	cmd.Dir = quantRoot
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv()...)...)
 	if overrides := mapParam(params, "strategy_overrides"); len(overrides) > 0 {
 		if data, err := json.Marshal(overrides); err == nil {
 			cmd.Env = append(cmd.Env, "QUANT_STRATEGY_OVERRIDES_JSON="+string(data))
@@ -10751,7 +12888,6 @@ func (app *App) startPortfolioCandidateTaskSync(t task.Task) (task.Task, error) 
 		"--run-id", runID,
 		"--benchmark", stringParam(params, "benchmark", "000905.SH"),
 		"--objective", stringParam(params, "objective", "平衡"),
-		"--db-path", filepath.Join(app.settings.DataPath, "meta.db"),
 	}
 	if slippage := numberParam(params, "slippage", 0.002); slippage > 0 {
 		args = append(args, "--slippage", trimFloat(slippage))
@@ -10764,8 +12900,7 @@ func (app *App) startPortfolioCandidateTaskSync(t task.Task) (task.Task, error) 
 		return t, err
 	}
 	cmd.Stderr = logFile
-	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
-	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv(dbPath)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"DATA_ROOT=" + app.settings.DataPath}, app.pythonDBEnv()...)...)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return t, err
@@ -10994,7 +13129,7 @@ func (app *App) reconcileStaleEvaluationLocks(maxIdle time.Duration) {
 
 func isEvaluationRuntimeType(taskType task.Type) bool {
 	switch taskType {
-	case task.TypeEvaluationTimeMachine, task.TypeStrategyEvaluation, task.TypePortfolioOptimization, task.TypeWalkForwardEvaluation, task.TypeParameterExperiment, task.TypeFactorResearch, task.TypeLimitSignalEvaluation, task.TypeT0DailyResearch, task.TypeT0TimeMachine:
+	case task.TypeEvaluationTimeMachine, task.TypeStrategyEvaluation, task.TypePortfolioOptimization, task.TypeWalkForwardEvaluation, task.TypeParameterExperiment, task.TypeFactorResearch, task.TypeFactorAutoTune, task.TypeModelTraining, task.TypeLimitSignalEvaluation, task.TypeT0DailyResearch, task.TypeT0TimeMachine:
 		return true
 	default:
 		return false
@@ -11023,6 +13158,7 @@ func evaluationWorkerPIDs() map[int]bool {
 		}
 		if strings.Contains(line, "scripts/evaluate_strategies.py") ||
 			strings.Contains(line, "scripts/run_portfolio_candidate.py") ||
+			strings.Contains(line, "scripts/factor_autotune_worker.py") ||
 			strings.Contains(line, "scripts/factor_research_worker.py") {
 			out[pid] = true
 		}
@@ -11458,7 +13594,7 @@ func (app *App) CancelTask(id string) (task.DTO, error) {
 		_ = worker.NewManager().Cancel(t.WorkerPID)
 	}
 
-	// 取消状态由 Python SIGTERM handler 写入 SQLite。Go 只负责发取消信号。
+	// 取消状态由 Python SIGTERM handler 写入 MySQL。Go 只负责发取消信号。
 	for i := 0; i < 10; i++ {
 		time.Sleep(200 * time.Millisecond)
 		latest, getErr := app.taskService.Repository().Get(id)
@@ -11628,15 +13764,10 @@ func (app *App) ensureDatabase() error {
 	app.settings.DataPath = app.fixedDataPath()
 	backend, packagedDSN := config.PackagedDatabaseConfig()
 	app.settings.DatabaseBackend = backend
-	if backend != "mysql" {
-		app.settings.MySQLDSN = packagedDSN
-	} else if strings.TrimSpace(app.settings.MySQLDSN) == "" {
-		app.settings.MySQLDSN = packagedDSN
-	}
+	app.settings.MySQLDSN = packagedDSN
 	if app.database != nil {
 		return nil
 	}
-	dbPath := filepath.Join(app.settings.DataPath, "meta.db")
 	var bootstrap *database.MySQLBootstrapConfig
 	if app.settings.DatabaseBackend == "mysql" {
 		mysqlCfg := config.PackagedMySQLBootstrapConfig(app.settings.MySQLDSN)
@@ -11649,12 +13780,9 @@ func (app *App) ensureDatabase() error {
 				AppDSN:   mysqlCfg.AppDSN,
 			}
 		}
-	} else if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return err
 	}
 	db, err := database.OpenConfigured(database.Config{
 		Backend:        app.settings.DatabaseBackend,
-		SQLitePath:     dbPath,
 		MySQLDSN:       app.settings.MySQLDSN,
 		MySQLBootstrap: bootstrap,
 	})

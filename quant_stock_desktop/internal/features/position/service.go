@@ -501,8 +501,8 @@ func (service *Service) GenerateSignalWithProgress(dataPath string, req Generate
 	}
 	pythonPath := quantCorePython(projectRoot)
 	logPath := filepath.Join(dataPath, "logs", "daily_signal_desktop.log")
-	logDesktopSignal(logPath, "start GenerateSignalWithProgress dataPath=%s dbPath=%s projectRoot=%s python=%s date=%s initialCash=%.2f rebalanceFreq=%d",
-		dataPath, filepath.Join(dataPath, "meta.db"), projectRoot, pythonPath, req.Date, req.InitialCash, req.RebalanceFreq)
+	logDesktopSignal(logPath, "start GenerateSignalWithProgress dataPath=%s projectRoot=%s python=%s date=%s initialCash=%.2f rebalanceFreq=%d",
+		dataPath, projectRoot, pythonPath, req.Date, req.InitialCash, req.RebalanceFreq)
 	args := []string{"scripts/daily_signal.py", "--json-only"}
 	if onProgress != nil {
 		args = append(args, "--progress")
@@ -513,8 +513,8 @@ func (service *Service) GenerateSignalWithProgress(dataPath string, req Generate
 	cmd := exec.Command(pythonPath, args...)
 	cmd.Dir = projectRoot
 	cmd.Env = append(os.Environ(), service.quantCoreEnv(dataPath, req)...)
-	logDesktopSignal(logPath, "exec args=%s cwd=%s env DATA_ROOT=%s DESKTOP_DB_PATH=%s INITIAL_CASH=%.2f REBALANCE_FREQ=%d",
-		strings.Join(args, " "), cmd.Dir, dataPath, filepath.Join(dataPath, "meta.db"), req.InitialCash, req.RebalanceFreq)
+	logDesktopSignal(logPath, "exec args=%s cwd=%s env DATA_ROOT=%s INITIAL_CASH=%.2f REBALANCE_FREQ=%d",
+		strings.Join(args, " "), cmd.Dir, dataPath, req.InitialCash, req.RebalanceFreq)
 	applyLowPriority(cmd)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -589,7 +589,6 @@ func (service *Service) quantCoreEnv(dataPath string, req GenerateSignalRequest)
 	if rebalanceFreq <= 0 {
 		rebalanceFreq = 5
 	}
-	dbPath := filepath.Join(dataPath, "meta.db")
 	backend := service.dbBackend
 	if backend == "" && service.db != nil {
 		backend = string(service.db.Backend())
@@ -599,8 +598,6 @@ func (service *Service) quantCoreEnv(dataPath string, req GenerateSignalRequest)
 	}
 	env := []string{
 		"DATA_ROOT=" + dataPath,
-		"DESKTOP_DB_PATH=" + dbPath,
-		"DESKTOP_CONFIG_DB_PATH=" + dbPath,
 		"DESKTOP_DB_BACKEND=" + backend,
 		fmt.Sprintf("INITIAL_CASH=%.2f", initialCashValue),
 		fmt.Sprintf("REBALANCE_FREQ=%d", rebalanceFreq),

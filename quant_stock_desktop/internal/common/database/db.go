@@ -22,7 +22,6 @@ const defaultLocalMySQLDSN = "quant_stock:quant_stock@tcp(127.0.0.1:3306)/quant_
 
 type Config struct {
 	Backend        string
-	SQLitePath     string
 	MySQLDSN       string
 	MySQLBootstrap *MySQLBootstrapConfig
 }
@@ -91,6 +90,11 @@ func (db *DB) IsMySQL() bool {
 	return db.Backend() == BackendMySQL
 }
 
+func (db *DB) TableExists(tableName string) bool {
+	ok, err := db.tableExists(tableName)
+	return err == nil && ok
+}
+
 func (db *DB) CurrentTimestampSQL() string {
 	return "CURRENT_TIMESTAMP"
 }
@@ -113,11 +117,15 @@ func (db *DB) InsertIgnoreSQL(table string, columns []string) string {
 }
 
 func (db *DB) ExecSchemaStatement(statement string) error {
-	converted, ok := sqliteStatementToMySQL(statement)
-	if !ok {
+	if strings.TrimSpace(statement) == "" {
 		return nil
 	}
-	statement = converted
+	if db.IsMySQL() {
+		handled, err := db.execMySQLCreateIndexIfNeeded(statement)
+		if handled {
+			return err
+		}
+	}
 	_, err := db.conn.Exec(statement)
 	return err
 }
@@ -150,9 +158,9 @@ func (db *DB) Migrate() error {
 	if err := db.renameLegacyTables(); err != nil {
 		return err
 	}
-	statements := sqliteBaseSchemaStatements()
+	statements := mysqlSchemaStatements()
 	for _, statement := range statements {
-		if _, err := db.conn.Exec(statement); err != nil {
+		if err := db.ExecSchemaStatement(statement); err != nil {
 			return err
 		}
 	}
@@ -221,11 +229,7 @@ func (db *DB) renameLegacyTables() error {
 		if newExists {
 			continue
 		}
-		if db.IsMySQL() {
-			_, err = db.conn.Exec(fmt.Sprintf("RENAME TABLE %s TO %s", quoteIdent(db.Backend(), item.old), quoteIdent(db.Backend(), item.new)))
-		} else {
-			_, err = db.conn.Exec(fmt.Sprintf("ALTER TABLE %s RENAME TO %s", quoteIdent(db.Backend(), item.old), quoteIdent(db.Backend(), item.new)))
-		}
+		_, err = db.conn.Exec(fmt.Sprintf("RENAME TABLE %s TO %s", quoteIdent(db.Backend(), item.old), quoteIdent(db.Backend(), item.new)))
 		if err != nil {
 			return fmt.Errorf("rename table %s to %s: %w", item.old, item.new, err)
 		}
@@ -233,25 +237,25 @@ func (db *DB) renameLegacyTables() error {
 	return nil
 }
 
-func sqliteBaseSchemaStatements() []string {
+func baseSchemaStatements() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS cfg_app_settings (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL,
-			updated_at TEXT NOT NULL
+			` + "`key`" + ` VARCHAR(255) PRIMARY KEY,
+			value LONGTEXT NOT NULL,
+			updated_at VARCHAR(64) NOT NULL
 		);`,
 		`CREATE TABLE IF NOT EXISTS strategy_config_versions (
-			strategy TEXT NOT NULL,
-			version INTEGER NOT NULL,
-			label TEXT NOT NULL DEFAULT '',
-			config_json TEXT NOT NULL,
-			is_active INTEGER NOT NULL DEFAULT 0,
-			promotion_status TEXT NOT NULL DEFAULT 'research',
-			validation_json TEXT NOT NULL DEFAULT '{}',
-			source TEXT NOT NULL DEFAULT '',
-			note TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			activated_at TEXT NOT NULL DEFAULT '',
+			strategy VARCHAR(255) NOT NULL,
+			version BIGINT NOT NULL,
+			label VARCHAR(255) NOT NULL DEFAULT '',
+			config_json LONGTEXT NOT NULL,
+			is_active BIGINT NOT NULL DEFAULT 0,
+			promotion_status VARCHAR(32) NOT NULL DEFAULT 'research',
+			validation_json LONGTEXT NOT NULL,
+			source VARCHAR(255) NOT NULL DEFAULT '',
+			note VARCHAR(255) NOT NULL DEFAULT '',
+			created_at VARCHAR(64) NOT NULL,
+			activated_at VARCHAR(64) NOT NULL DEFAULT '',
 			PRIMARY KEY(strategy, version)
 		);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_strategy_config_versions_active
@@ -260,23 +264,23 @@ func sqliteBaseSchemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_strategy_config_versions_strategy_version
 			ON strategy_config_versions(strategy, version DESC);`,
 		`CREATE TABLE IF NOT EXISTS task_jobs (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			task_type TEXT NOT NULL,
-			status TEXT NOT NULL,
+			id VARCHAR(255) PRIMARY KEY,
+			name VARCHAR(255) NOT NULL,
+			task_type VARCHAR(64) NOT NULL,
+			status VARCHAR(32) NOT NULL,
 			progress REAL NOT NULL DEFAULT 0,
 			params_json TEXT NOT NULL,
 			summary_json TEXT,
 			result_path TEXT,
 			log_path TEXT,
-			worker_type TEXT NOT NULL DEFAULT 'python',
+			worker_type VARCHAR(64) NOT NULL DEFAULT 'python',
 			worker_pid INTEGER,
-			external_run_id TEXT,
+			external_run_id VARCHAR(255),
 			error_message TEXT,
-			parent_id TEXT,
-			group_run_id TEXT,
-			subtask_key TEXT,
-			subtask_name TEXT,
+			parent_id VARCHAR(255),
+			group_run_id VARCHAR(255),
+			subtask_key VARCHAR(255),
+			subtask_name VARCHAR(255),
 			sequence INTEGER NOT NULL DEFAULT 0,
 			total INTEGER NOT NULL DEFAULT 0,
 			attempt INTEGER NOT NULL DEFAULT 0,
@@ -308,22 +312,22 @@ func sqliteBaseSchemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_portfolio_tm_snapshots_date ON portfolio_tm_snapshots(run_id, trade_date);`,
 		`CREATE TABLE IF NOT EXISTS portfolio_tm_trades (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			run_id TEXT NOT NULL,
-			trade_date TEXT NOT NULL,
-			ts_code TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT '',
-			action TEXT NOT NULL,
+			run_id VARCHAR(255) NOT NULL,
+			trade_date VARCHAR(16) NOT NULL,
+			ts_code VARCHAR(32) NOT NULL,
+			name VARCHAR(255) NOT NULL DEFAULT '',
+			action VARCHAR(32) NOT NULL,
 			shares INTEGER NOT NULL DEFAULT 0,
 			price REAL NOT NULL DEFAULT 0,
 			amount REAL NOT NULL DEFAULT 0,
 			hold_days INTEGER NOT NULL DEFAULT 0,
 			realized_pnl REAL NOT NULL DEFAULT 0,
-			exit_reason TEXT NOT NULL DEFAULT '',
-			exec_date TEXT NOT NULL DEFAULT '',
+			exit_reason VARCHAR(128) NOT NULL DEFAULT '',
+			exec_date VARCHAR(16) NOT NULL DEFAULT '',
 			is_new INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT NOT NULL
+			created_at VARCHAR(64) NOT NULL
 		);`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_tm_trades_unique ON portfolio_tm_trades(run_id, trade_date, ts_code, action, shares, price, amount, exit_reason);`,
+		`CREATE INDEX IF NOT EXISTS idx_portfolio_tm_trades_lookup ON portfolio_tm_trades(run_id, trade_date, ts_code, action);`,
 		`CREATE INDEX IF NOT EXISTS idx_portfolio_tm_trades_run_date ON portfolio_tm_trades(run_id, trade_date);`,
 		`CREATE TABLE IF NOT EXISTS portfolio_tm_positions (
 			run_id TEXT NOT NULL,
@@ -533,7 +537,7 @@ func sqliteBaseSchemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_data_fina_indicator_ts_end ON data_fina_indicator(ts_code, end_date);`,
 		`CREATE TABLE IF NOT EXISTS market_limit_breakout_cache (
 			cache_key TEXT NOT NULL,
-			rank INTEGER NOT NULL DEFAULT 0,
+			rank_no INTEGER NOT NULL DEFAULT 0,
 			ts_code TEXT NOT NULL,
 			latest_date TEXT NOT NULL DEFAULT '',
 			score REAL NOT NULL DEFAULT 0,
@@ -548,11 +552,11 @@ func sqliteBaseSchemaStatements() []string {
 			generated_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_market_limit_breakout_cache_rank ON market_limit_breakout_cache(cache_key, rank);`,
+		`CREATE INDEX IF NOT EXISTS idx_market_limit_breakout_cache_rank ON market_limit_breakout_cache(cache_key, rank_no);`,
 		`CREATE INDEX IF NOT EXISTS idx_market_limit_breakout_cache_date ON market_limit_breakout_cache(latest_date);`,
 		`CREATE TABLE IF NOT EXISTS market_limit_momentum_cache (
 			cache_key TEXT NOT NULL,
-			rank INTEGER NOT NULL DEFAULT 0,
+			rank_no INTEGER NOT NULL DEFAULT 0,
 			ts_code TEXT NOT NULL,
 			trade_date TEXT NOT NULL DEFAULT '',
 			score REAL NOT NULL DEFAULT 0,
@@ -567,7 +571,7 @@ func sqliteBaseSchemaStatements() []string {
 			generated_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_market_limit_momentum_cache_rank ON market_limit_momentum_cache(cache_key, rank);`,
+		`CREATE INDEX IF NOT EXISTS idx_market_limit_momentum_cache_rank ON market_limit_momentum_cache(cache_key, rank_no);`,
 		`CREATE INDEX IF NOT EXISTS idx_market_limit_momentum_cache_date ON market_limit_momentum_cache(trade_date);`,
 		`CREATE TABLE IF NOT EXISTS market_limit_signal_predictions (
 			id TEXT PRIMARY KEY,
@@ -575,7 +579,7 @@ func sqliteBaseSchemaStatements() []string {
 			strategy_version TEXT NOT NULL DEFAULT 'v1',
 			parameter_key TEXT NOT NULL,
 			cache_key TEXT NOT NULL,
-			rank INTEGER NOT NULL DEFAULT 0,
+			` + "`rank`" + ` INTEGER NOT NULL DEFAULT 0,
 			ts_code TEXT NOT NULL,
 			name TEXT NOT NULL DEFAULT '',
 			industry TEXT NOT NULL DEFAULT '',
@@ -718,6 +722,47 @@ func sqliteBaseSchemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_eval_strategy_admission_date ON eval_strategy_admission(start_date, end_date);`,
 		`CREATE INDEX IF NOT EXISTS idx_eval_strategy_admission_strategy ON eval_strategy_admission(strategy);`,
 		`CREATE INDEX IF NOT EXISTS idx_eval_strategy_admission_admission ON eval_strategy_admission(admission);`,
+		`CREATE TABLE IF NOT EXISTS factor_autotune_runs (
+			run_id VARCHAR(255) PRIMARY KEY,
+			base_model_run_id VARCHAR(255) NOT NULL,
+			start_date VARCHAR(16) NOT NULL,
+			end_date VARCHAR(16) NOT NULL,
+			status VARCHAR(32) NOT NULL,
+			best_trial_id VARCHAR(255) NOT NULL DEFAULT '',
+			best_model_run_id VARCHAR(255) NOT NULL DEFAULT '',
+			best_admission VARCHAR(64) NOT NULL DEFAULT '',
+			best_score DOUBLE,
+			summary_json LONGTEXT NOT NULL,
+			created_at VARCHAR(64) NOT NULL,
+			updated_at VARCHAR(64) NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS factor_autotune_trials (
+			run_id VARCHAR(255) NOT NULL,
+			trial_id VARCHAR(255) NOT NULL,
+			round_no BIGINT NOT NULL DEFAULT 0,
+			source VARCHAR(64) NOT NULL DEFAULT '',
+			model_run_id VARCHAR(255) NOT NULL DEFAULT '',
+			eval_run_id VARCHAR(255) NOT NULL DEFAULT '',
+			params_json LONGTEXT NOT NULL,
+			llm_direction_json LONGTEXT NOT NULL,
+			admission VARCHAR(64) NOT NULL DEFAULT '',
+			admission_score DOUBLE,
+			reason LONGTEXT NOT NULL,
+			annual_return DOUBLE,
+			total_return DOUBLE,
+			max_drawdown DOUBLE,
+			sharpe DOUBLE,
+			stress_bad_event_count BIGINT NOT NULL DEFAULT 0,
+			stress_crash_state_failed BIGINT NOT NULL DEFAULT 0,
+			stress_weak_drawdown_failed BIGINT NOT NULL DEFAULT 0,
+			passed BIGINT NOT NULL DEFAULT 0,
+			created_at VARCHAR(64) NOT NULL,
+			updated_at VARCHAR(64) NOT NULL,
+			PRIMARY KEY(run_id, trial_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_factor_autotune_trials_run_round ON factor_autotune_trials(run_id, round_no);`,
+		`CREATE INDEX IF NOT EXISTS idx_factor_autotune_trials_passed ON factor_autotune_trials(passed);`,
+		`CREATE INDEX IF NOT EXISTS idx_factor_autotune_trials_score ON factor_autotune_trials(admission_score);`,
 		`CREATE TABLE IF NOT EXISTS eval_portfolio_runs (
 			run_id TEXT PRIMARY KEY,
 			start_date TEXT NOT NULL,
@@ -738,7 +783,7 @@ func sqliteBaseSchemaStatements() []string {
 		`CREATE TABLE IF NOT EXISTS eval_portfolio_candidates (
 			run_id TEXT NOT NULL,
 			candidate_id TEXT NOT NULL,
-			rank INTEGER NOT NULL DEFAULT 0,
+			` + "`rank`" + ` INTEGER NOT NULL DEFAULT 0,
 			name TEXT NOT NULL DEFAULT '',
 			objective TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT '',
@@ -771,7 +816,7 @@ func sqliteBaseSchemaStatements() []string {
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY(run_id, candidate_id)
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_eval_portfolio_candidates_run_rank ON eval_portfolio_candidates(run_id, rank);`,
+		`CREATE INDEX IF NOT EXISTS idx_eval_portfolio_candidates_run_rank ON eval_portfolio_candidates(run_id, ` + "`rank`" + `);`,
 		`CREATE TABLE IF NOT EXISTS strategy_validation_reviews (
 			id TEXT PRIMARY KEY,
 			subject_type TEXT NOT NULL,
@@ -949,6 +994,15 @@ func sqliteBaseSchemaStatements() []string {
 			updated_at TEXT NOT NULL,
 			finished_at TEXT
 		);`,
+		`CREATE TABLE IF NOT EXISTS strategy_schedule_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			started_at TEXT NOT NULL,
+			finished_at TEXT NOT NULL,
+			success INTEGER NOT NULL DEFAULT 0,
+			message TEXT NOT NULL,
+			report_json TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`,
 		`CREATE TABLE IF NOT EXISTS portfolio_pool_summary (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			initial_cash REAL NOT NULL DEFAULT 500000,
@@ -1118,10 +1172,10 @@ func (db *DB) schemaMigrations() []migration {
 		}},
 		{version: 3, name: "evaluation_task_subtasks", up: func(db *DB) error {
 			columns := []columnMigration{
-				{table: "task_jobs", name: "parent_id", ddl: "TEXT"},
-				{table: "task_jobs", name: "group_run_id", ddl: "TEXT"},
-				{table: "task_jobs", name: "subtask_key", ddl: "TEXT"},
-				{table: "task_jobs", name: "subtask_name", ddl: "TEXT"},
+				{table: "task_jobs", name: "parent_id", ddl: "VARCHAR(255)"},
+				{table: "task_jobs", name: "group_run_id", ddl: "VARCHAR(255)"},
+				{table: "task_jobs", name: "subtask_key", ddl: "VARCHAR(255)"},
+				{table: "task_jobs", name: "subtask_name", ddl: "VARCHAR(255)"},
 				{table: "task_jobs", name: "sequence", ddl: "INTEGER NOT NULL DEFAULT 0"},
 				{table: "task_jobs", name: "total", ddl: "INTEGER NOT NULL DEFAULT 0"},
 				{table: "task_jobs", name: "attempt", ddl: "INTEGER NOT NULL DEFAULT 0"},
@@ -1267,73 +1321,40 @@ func (db *DB) createEvaluationTaskIndexes() error {
 	if !columns["parent_id"] {
 		return fmt.Errorf("task_jobs.parent_id column is missing")
 	}
-	if _, err := db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_task_jobs_parent_id ON task_jobs(parent_id);`); err != nil {
+	if err := db.ExecSchemaStatement(`CREATE INDEX idx_task_jobs_parent_id ON task_jobs(parent_id);`); err != nil {
 		return err
 	}
 	if !columns["group_run_id"] {
 		return fmt.Errorf("task_jobs.group_run_id column is missing")
 	}
-	if _, err := db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_task_jobs_group_run_id ON task_jobs(group_run_id);`); err != nil {
+	if err := db.ExecSchemaStatement(`CREATE INDEX idx_task_jobs_group_run_id ON task_jobs(group_run_id);`); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (db *DB) tableExists(tableName string) (bool, error) {
-	if db.IsMySQL() {
-		var count int
-		err := db.conn.QueryRow(
-			`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`,
-			tableName,
-		).Scan(&count)
-		return count > 0, err
-	}
-	var name string
+	var count int
 	err := db.conn.QueryRow(
-		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
+		`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`,
 		tableName,
-	).Scan(&name)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
+	).Scan(&count)
+	return count > 0, err
 }
 
 func (db *DB) tableColumns(tableName string) (map[string]bool, error) {
-	if db.IsMySQL() {
-		rows, err := db.conn.Query(
-			`SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`,
-			tableName,
-		)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		columns := map[string]bool{}
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				return nil, err
-			}
-			columns[name] = true
-		}
-		return columns, rows.Err()
-	}
-	rows, err := db.conn.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, quoteIdent(db.Backend(), tableName)))
+	rows, err := db.conn.Query(
+		`SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`,
+		tableName,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
 	columns := map[string]bool{}
 	for rows.Next() {
-		var cid int
 		var name string
-		var typ string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+		if err := rows.Scan(&name); err != nil {
 			return nil, err
 		}
 		columns[name] = true

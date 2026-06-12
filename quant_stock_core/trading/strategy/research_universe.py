@@ -19,6 +19,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from common.utils.market import bj_include_sql, restricted_exclude_sql
 from research.data.storage import duckdb_query as dq
 from .base import BaseStrategy, StrategyConfig, get_rebalance_dates
 from .registry import register
@@ -92,9 +93,9 @@ def _feature_frame(date: str, cfg: StrategyConfig, *, bj_only: bool = False) -> 
         f"list_date <= '{_market_cutoff(date, min_listed_days)}'",
     ]
     if bj_only:
-        stock_where.append("(exchange = 'BJ' OR market = '北交所')")
+        stock_where.append(bj_include_sql())
     else:
-        stock_where.append("COALESCE(exchange, '') <> 'BJ'")
+        stock_where.append(restricted_exclude_sql())
     stock = dq.sql(f"""
         SELECT ts_code, name, industry, exchange, list_date
         FROM read_parquet('{dq.RAW_DIR / "stock_basic" / "data.parquet"}')
@@ -692,8 +693,7 @@ class TurtleBreakout(BaseStrategy):
             WHERE d.trade_date >= '{pad}' AND d.trade_date <= '{end}'
               AND COALESCE(sb.list_status, 'L') = 'L'
               AND COALESCE(sb.name, '') NOT LIKE '%ST%'
-              AND COALESCE(sb.exchange, '') NOT IN ('BJ', 'BSE')
-              AND COALESCE(sb.market, '') NOT LIKE '%北交%'
+              AND {restricted_exclude_sql('sb')}
               AND d.close > 0 AND d.high > 0 AND d.low > 0
         """)
 

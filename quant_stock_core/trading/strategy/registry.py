@@ -32,8 +32,12 @@ ACTIVE_UNIVERSE = [
     "industry_prosperity",
     "low_crowding_reversal",
     "event_enhanced",
-    "beijing_satellite",
 ]
+
+RESTRICTED_UNIVERSE = {
+    "beijing_se",
+    "beijing_satellite",
+}
 
 
 def register(name: str, label: str | None = None):
@@ -73,11 +77,9 @@ def _discover() -> None:
 
 
 def all_names() -> list[str]:
-    """返回所有已注册的策略名。"""
+    """返回当前账户可交易、可参与训练/评估的策略名。"""
     _discover()
-    names = [name for name in ACTIVE_UNIVERSE if name in _REGISTRY]
-    names.extend(sorted(name for name in _REGISTRY if name not in set(names)))
-    return names
+    return [name for name in ACTIVE_UNIVERSE if name in _REGISTRY and name not in RESTRICTED_UNIVERSE]
 
 
 def get_factory(name: str) -> Callable:
@@ -101,6 +103,6 @@ def get_label(name: str) -> str:
 
 
 def labels() -> dict[str, str]:
-    """返回 策略名到中文标签 的映射。"""
+    """返回当前可交易策略名到中文标签的映射。"""
     _discover()
-    return {n: v["label"] for n, v in _REGISTRY.items()}
+    return {name: _REGISTRY[name]["label"] for name in all_names()}

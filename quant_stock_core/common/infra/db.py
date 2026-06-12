@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from common.config.settings import DATA_ROOT
+from common.config.settings import DATA_ROOT, _config_str
 
 
 DEFAULT_MYSQL_DSN = "quant_stock:quant_stock@tcp(127.0.0.1:3306)/quant_stock?parseTime=true&charset=utf8mb4&loc=Local"
@@ -24,14 +23,16 @@ def is_mysql() -> bool:
 
 
 def desktop_db_path() -> Path:
-    env = os.getenv("DESKTOP_DB_PATH", "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    return (DATA_ROOT / "meta.db").resolve()
+    """Compatibility helper: return a deterministic path placeholder.
+
+    MySQL mode no longer uses a local desktop DB file; callers that still pass
+    this value are expected to connect through [database].dsn in config.toml.
+    """
+    return DATA_ROOT
 
 
 def desktop_db_dsn() -> str:
-    return os.getenv("DESKTOP_DB_DSN", "").strip() or os.getenv("DESKTOP_MYSQL_DSN", "").strip() or DEFAULT_MYSQL_DSN
+    return _config_str("database", "dsn", DEFAULT_MYSQL_DSN)
 
 
 class CursorAdapter:
@@ -52,33 +53,26 @@ class ConnectionAdapter:
         self.backend = backend
 
     def execute(self, sql: str, params: Any = ()) -> CursorAdapter:
-        if self.backend == "mysql":
-            handled = maybe_create_mysql_index(self.raw, sql)
-            if handled is not None:
-                return handled
-            sql = normalize_mysql_sql(sql)
-            sql = translate_placeholders(sql)
-            cursor = self.raw.cursor()
-            cursor.execute(sql, params or ())
-            return CursorAdapter(cursor, self.backend)
-        return CursorAdapter(self.raw.execute(sql, params or ()), self.backend)
+        handled = maybe_create_mysql_index(self.raw, sql)
+        if handled is not None:
+            return handled
+        sql = normalize_mysql_sql(sql)
+        sql = translate_placeholders(sql)
+        cursor = self.raw.cursor()
+        cursor.execute(sql, params or ())
+        return CursorAdapter(cursor, self.backend)
 
     def executemany(self, sql: str, params: list[Any] | tuple[Any, ...]) -> CursorAdapter:
-        if self.backend == "mysql":
-            sql = normalize_mysql_sql(sql)
-            sql = translate_placeholders(sql)
-            cursor = self.raw.cursor()
-            cursor.executemany(sql, params or ())
-            return CursorAdapter(cursor, self.backend)
-        return CursorAdapter(self.raw.executemany(sql, params or ()), self.backend)
+        sql = normalize_mysql_sql(sql)
+        sql = translate_placeholders(sql)
+        cursor = self.raw.cursor()
+        cursor.executemany(sql, params or ())
+        return CursorAdapter(cursor, self.backend)
 
     def executescript(self, sql: str) -> None:
-        if self.backend == "mysql":
-            for statement in sql.split(";"):
-                if statement.strip():
-                    self.execute(statement)
-            return
-        self.raw.executescript(sql)
+        for statement in sql.split(";"):
+            if statement.strip():
+                self.execute(statement)
 
     def commit(self) -> None:
         self.raw.commit()

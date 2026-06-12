@@ -38,14 +38,6 @@ log = get_logger("time_machine")
 TM_DIR = BACKTEST_DIR.parent / "positions" / "timemachine"
 TM_DIR.mkdir(parents=True, exist_ok=True)
 
-def _desktop_db_path() -> str | None:
-    path = os.getenv("DESKTOP_DB_PATH")
-    if path:
-        return path
-    candidate = BACKTEST_DIR.parent / "meta.db"
-    return str(candidate) if candidate.exists() else None
-
-
 def _json_dumps(value) -> str:
     return json.dumps(value or {}, ensure_ascii=False, default=float)
 
@@ -76,9 +68,6 @@ def _progress_pct(fields: dict) -> float:
 
 
 def _sync_task_to_db(run_id: str, fields: dict) -> None:
-    db_path = _desktop_db_path()
-    if not db_path:
-        return
     status = fields.get("status")
     if not status:
         return
@@ -91,7 +80,7 @@ def _sync_task_to_db(run_id: str, fields: dict) -> None:
     if fields.get("summary"):
         summary.update(fields["summary"])
     try:
-        with write_transaction(db_path) as conn:
+        with write_transaction(None) as conn:
             row = conn.execute(
                 "SELECT id, summary_json FROM task_jobs WHERE external_run_id = ?",
                 (run_id,),
@@ -126,12 +115,9 @@ def _sync_task_to_db(run_id: str, fields: dict) -> None:
 
 
 def _persist_snapshot_db(run_id: str, row: dict) -> None:
-    db_path = _desktop_db_path()
-    if not db_path:
-        return
     now = datetime.now().isoformat()
     try:
-        with write_transaction(db_path) as conn:
+        with write_transaction(None) as conn:
             columns = [
                 "run_id", "trade_date", "cash", "market_value", "equity", "n_holdings",
                 "unrealized_pnl", "realized_pnl", "cum_return", "created_at", "updated_at",
@@ -165,12 +151,11 @@ def _persist_snapshot_db(run_id: str, row: dict) -> None:
 
 
 def _persist_trades_db(run_id: str, date: str, trades: list[dict]) -> None:
-    db_path = _desktop_db_path()
-    if not db_path or not trades:
+    if not trades:
         return
     now = datetime.now().isoformat()
     try:
-        with write_transaction(db_path) as conn:
+        with write_transaction(None) as conn:
             rows = []
             for t in trades:
                 rows.append((
@@ -204,12 +189,9 @@ def _persist_trades_db(run_id: str, date: str, trades: list[dict]) -> None:
 
 
 def _persist_positions_db(run_id: str, date: str, positions: list[dict]) -> None:
-    db_path = _desktop_db_path()
-    if not db_path:
-        return
     now = datetime.now().isoformat()
     try:
-        with write_transaction(db_path) as conn:
+        with write_transaction(None) as conn:
             conn.execute(
                 "DELETE FROM portfolio_tm_positions WHERE run_id = ? AND trade_date = ?",
                 (run_id, str(date)),

@@ -1,4 +1,4 @@
-"""每日信号生成 + 推送 + 模拟盘记录 + SQLite 落库
+"""每日信号生成 + 推送 + 模拟盘记录 + MySQL 落库
 
 行为：
   1. 拿全局 py 进程锁（同一时刻只能一个）
@@ -16,7 +16,7 @@
 
 环境变量：
   QUANT_CPU_LIMIT       默认 2，限制 BLAS/OMP 线程
-  DESKTOP_DB_PATH       默认 <DATA_ROOT>/meta.db
+  DESKTOP_DB_DSN        MySQL 连接串
   DATA_ROOT INITIAL_CASH REBALANCE_FREQ
 """
 from __future__ import annotations
@@ -80,7 +80,7 @@ def main() -> None:
     print(
         "DIAG daily_signal "
         f"DATA_ROOT={os.environ.get('DATA_ROOT', '')} "
-        f"DESKTOP_DB_PATH={os.environ.get('DESKTOP_DB_PATH', '')} "
+        f"DESKTOP_DB_DSN={'set' if os.environ.get('DESKTOP_DB_DSN', '') else ''} "
         f"RAW_DIR={RAW_DIR} "
         f"desktop_db_path={desktop_db_path()}",
         file=sys.stderr,

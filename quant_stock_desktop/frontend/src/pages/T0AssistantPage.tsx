@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
-import { activateStrategyModelRun, getActiveStrategyModelRun, getT0DailyResearchStatus, getT0TimeMachineStatus, listT0DailyBacktests, listT0DailyRuns, listT0DataPullCandidates, listT0Recommendations, listT0TimeMachineResults, runT0DailyResearch, runT0TimeMachine, type RunStatus, type T0DailyBacktest, type T0DailyRunSummary, type T0DataPullCandidate, type T0Recommendation, type T0TimeMachineResult } from '../services/app'
+import { getActiveStrategyModelRun, getT0DailyResearchStatus, getT0TimeMachineStatus, listT0DailyBacktests, listT0DailyRuns, listT0DataPullCandidates, listT0Recommendations, listT0TimeMachineResults, runT0DailyResearch, runT0TimeMachine, type RunStatus, type T0DailyBacktest, type T0DailyRunSummary, type T0DataPullCandidate, type T0Recommendation, type T0TimeMachineResult } from '../services/app'
 
 function money(value: number) {
   if (!Number.isFinite(value) || value === 0) return '—'
@@ -388,6 +388,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
   const [running, setRunning] = useState(false)
   const [timeMachineRunning, setTimeMachineRunning] = useState(false)
   const [cycleRunning, setCycleRunning] = useState(false)
+  const [taskSource, setTaskSource] = useState<'recommend' | 'model' | null>(null)
   const [activeView, setActiveView] = useState<T0AssistantView>('recommend')
   const [error, setError] = useState('')
   const [activeModelRunID, setActiveModelRunID] = useState('')
@@ -410,20 +411,9 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
       .finally(() => setLoading(false))
   }
 
-  const activateRun = (runID: string) => {
-    setLoading(true)
-    setError('')
-    activateStrategyModelRun({ strategy: 't0_daily', run_id: runID })
-      .then((active) => {
-        setActiveModelRunID(active.run_id)
-        return load()
-      })
-      .catch((err: Error) => setError(err.message || '切换做T模型版本失败'))
-      .finally(() => setLoading(false))
-  }
-
   const run = () => {
     setRunning(true)
+    setTaskSource('recommend')
     setError('')
     runT0DailyResearch()
       .then(() => getT0DailyResearchStatus())
@@ -444,6 +434,7 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
 
   const runModelCycle = async () => {
     setCycleRunning(true)
+    setTaskSource('model')
     setRunning(true)
     setError('')
     try {
@@ -707,25 +698,6 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
   return (
     <div className="positionPage">
       {error ? <div className="errorBanner">{error}</div> : null}
-      {isRunning ? (
-        <div className="signalProgress signalProgressStandalone">
-          <div className="signalProgressHeader">
-            <span>{runStatus?.stage || 'running'} · {runStatus?.name || '日线做T研究'}</span>
-            <span>{total > 0 ? `${idx}/${total} (${pct}%)` : runStatus?.updated_at || ''}</span>
-          </div>
-          <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: total > 0 ? `${pct}%` : '15%' }} /></div>
-        </div>
-      ) : null}
-      {isTimeMachineRunning ? (
-        <div className="signalProgress signalProgressStandalone">
-          <div className="signalProgressHeader">
-            <span>{timeMachineStatus?.stage || 'running'} · {timeMachineStatus?.name || '做T时光机'}</span>
-            <span>{tmTotal > 0 ? `${tmIdx}/${tmTotal} (${tmPct}%)` : timeMachineStatus?.updated_at || ''}</span>
-          </div>
-          <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: tmTotal > 0 ? `${tmPct}%` : '15%' }} /></div>
-        </div>
-      ) : null}
-
       <div className="pageTabsHeader">
         <div className="inlineTabs evaluationModeTabs signalViewTabs">
           {t0AssistantTabs.map((tab) => (
@@ -739,6 +711,15 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
 
       {activeView === 'recommend' ? (
         <>
+      {taskSource === 'recommend' && isRunning && !cycleRunning ? (
+        <div className="signalProgress signalProgressStandalone">
+          <div className="signalProgressHeader">
+            <span>{runStatus?.stage || 'running'} · {runStatus?.name || '日线做T研究'}</span>
+            <span>{total > 0 ? `${idx}/${total} (${pct}%)` : runStatus?.updated_at || ''}</span>
+          </div>
+          <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: total > 0 ? `${pct}%` : '15%' }} /></div>
+        </div>
+      ) : null}
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -1142,12 +1123,28 @@ export function T0AssistantPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
           </div>
         </div>
         {(error || runStatus?.message) && <div className={error ? 'errorBox' : 'cardHint'}>{error || runStatus?.message}</div>}
+        {taskSource === 'model' && (running || isRunning) ? (
+          <div className="signalProgress signalProgressStandalone">
+            <div className="signalProgressHeader">
+              <span>{runStatus?.stage || 'running'} · {runStatus?.name || '日线做T研究'}</span>
+              <span>{total > 0 ? `${idx}/${total} (${pct}%)` : runStatus?.updated_at || ''}</span>
+            </div>
+            <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: total > 0 ? `${pct}%` : '15%' }} /></div>
+          </div>
+        ) : null}
+        {taskSource === 'model' && (timeMachineRunning || isTimeMachineRunning) ? (
+          <div className="signalProgress signalProgressStandalone">
+            <div className="signalProgressHeader">
+              <span>{timeMachineStatus?.stage || 'running'} · {timeMachineStatus?.name || '做T时光机'}</span>
+              <span>{tmTotal > 0 ? `${tmIdx}/${tmTotal} (${tmPct}%)` : timeMachineStatus?.updated_at || ''}</span>
+            </div>
+            <div className="signalProgressBar"><div className="signalProgressBarFill" style={{ width: tmTotal > 0 ? `${tmPct}%` : '15%' }} /></div>
+          </div>
+        ) : null}
         <T0ModelVersionPanel
           runs={dailyRuns}
           activeRunID={activeModelRunID || activeDailyRun?.run_id || ''}
           featureImportance={modelExplainSummary.featureImportance}
-          loading={loading || running || cycleRunning}
-          onActivateRun={activateRun}
         />
         <div className="limitModelVerdict">
           <div>
@@ -1282,45 +1279,96 @@ function Mini({ label, value, valueClassName = '' }: { label: string; value: str
 function T0ModelVersionPanel({
   runs,
   activeRunID,
-  featureImportance,
-  loading,
-  onActivateRun
+  featureImportance
 }: {
   runs: T0DailyRunSummary[]
   activeRunID: string
   featureImportance: T0ModelFeatureImportance[]
-  loading: boolean
-  onActivateRun: (runID: string) => void
 }) {
+  const latestCutoff = runs.reduce((latest, item) => {
+    const value = item.trade_date || item.updated_at || ''
+    return value > latest ? value : latest
+  }, '')
+  const rows = runs.slice(0, 10).map((item) => buildT0VersionAdmission(item, activeRunID, latestCutoff))
+  const enabled = rows.find((item) => item.active && item.canEnable)
+  const best = rows.reduce<T0VersionAdmission | null>((memo, item) => {
+    if (!item.canEnable) return memo
+    return !memo || item.score > memo.score ? item : memo
+  }, null)
+  const current = enabled || best || rows[0]
   return (
-    <div className="limitModelColumns twoColumns">
-      <div>
-        <div className="formTitle">做T模型版本</div>
-        <div className="limitModelList">
-          {runs.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无模型版本</div> : runs.map((item) => {
-            const model = parseT0ModelSummary(item)
-            const active = item.run_id === activeRunID
-            return (
-              <div className="limitModelSliceRow" key={item.run_id}>
-                <b>{active ? '当前版本' : '历史版本'} · {formatDateTime(item.updated_at || item.trade_date)}</b>
-                <span>
-                  <span className="mono">{shortRunID(item.run_id)}</span>
-                  {' · '}{item.status}
-                  {' · '}候选 {item.candidate_count}
-                  {' · '}Top10价差 {percent(Number(model?.top10_avg_edge ?? Number.NaN), true)}
-                  {' · '}Rank IC {Number.isFinite(Number(model?.rank_ic)) ? Number(model?.rank_ic).toFixed(3) : '—'}
-                </span>
-                {!active ? (
-                  <button className="secondaryButton compactButton" onClick={() => onActivateRun(item.run_id)} disabled={loading}>
-                    设为当前版本
-                  </button>
-                ) : null}
-              </div>
-            )
-          })}
+    <section className="detailCard modelVersionCompare">
+      <div className="tableHeader">
+        <div>
+          <div className="sectionLabel">ADMISSION COMPARE</div>
+          <h3>做T模型版本准入对比</h3>
+        </div>
+        <span>{enabled ? `启用中 ${shortRunID(enabled.run.run_id)}` : best ? `建议启用 ${shortRunID(best.run.run_id)}` : '暂无可启用版本'}</span>
+      </div>
+      <div className="metricStrip">
+        <div className={`metricCard ${enabled?.canEnable ? 'good' : enabled ? 'bad' : ''}`}>
+          <span>已启用版本</span>
+          <b>{enabled ? enabled.admission : '暂无'}</b>
+          <em>{enabled?.run.run_id || '未配置 active run'}</em>
+        </div>
+        <div className="metricCard">
+          <span>最高准入分</span>
+          <b>{best ? best.score.toFixed(2) : '—'}</b>
+          <em>{best ? `Top10价差 ${percent(best.edge, true)}` : '完整版本才参与最优'}</em>
+        </div>
+        <div className={`metricCard ${current?.needsRefresh ? 'bad' : 'good'}`}>
+          <span>最新截面</span>
+          <b>{current?.needsRefresh ? '需更新' : '已覆盖'}</b>
+          <em>{current ? `版本 ${formatDate(current.cutoffDate)} / 最新 ${formatDate(latestCutoff)}` : '暂无训练记录'}</em>
+        </div>
+        <div className={`metricCard ${current?.complete ? 'good' : 'bad'}`}>
+          <span>训练完整性</span>
+          <b>{current?.complete ? '完整' : '不完整'}</b>
+          <em>{current?.failure || '样本、折数、日期和交易验证均通过'}</em>
         </div>
       </div>
-      <div>
+      <div className="modelVersionTableWrap">
+        <table className="modelVersionTable">
+          <thead>
+            <tr>
+              <th>版本</th>
+              <th>准入</th>
+              <th>完整性</th>
+              <th>分数</th>
+              <th>核心收益</th>
+              <th>辅助指标</th>
+              <th>风险</th>
+              <th>排序指标</th>
+              <th>训练区间</th>
+              <th>评估员意见</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr><td colSpan={10} className="mutedText">暂无模型版本</td></tr>
+            ) : rows.map((item) => (
+              <tr key={item.run.run_id}>
+                <td>
+                  <b>{item.active && item.canEnable ? '已启用' : item.active ? '当前版本' : '候选版本'} · {shortRunID(item.run.run_id)}</b>
+                  {item.active && item.canEnable ? <span className="versionActiveTag">启用中</span> : null}
+                  {item.active && !item.canEnable ? <span className="versionActiveTag warning">未准入</span> : null}
+                  <div className="mono">{formatDateTime(item.run.updated_at || item.run.trade_date)}</div>
+                </td>
+                <td><span className={`badge ${admissionBadgeClass(item.admission)}`}>{item.admission}</span></td>
+                <td><span className={`badge ${item.complete ? 'success' : 'failed'}`}>{item.complete ? '完整' : '不完整'}</span></td>
+                <td>{item.score.toFixed(2)}</td>
+                <td className={signedClass(item.edge)}><b>Top10价差</b><div>{percent(item.edge, true)}</div></td>
+                <td><b>两边触达</b><div>{percent(item.twoSided)}</div></td>
+                <td><b>样本</b><div>{item.sampleRows ? item.sampleRows.toLocaleString('zh-CN') : '—'}</div></td>
+                <td className={signedClass(item.rankIC)}><b>Rank IC</b><div>{Number.isFinite(item.rankIC) ? item.rankIC.toFixed(3) : '—'}</div></td>
+                <td>{formatDate(item.testStart)} - {formatDate(item.testEnd)}</td>
+                <td className="versionFailureText">{item.failure || '训练日期、截面、样本、折数和交易验证通过，可进入候选启用。'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="modelVersionFeatureBlock">
         <div className="formTitle">当前版本因子</div>
         <div className="limitModelFeatureList">
           {featureImportance.length === 0
@@ -1328,8 +1376,88 @@ function T0ModelVersionPanel({
             : featureImportance.map((item, index) => <span key={item.feature}>{index + 1}. {t0FeatureLabel(item.feature)} · {item.importance.toFixed(1)}</span>)}
         </div>
       </div>
-    </div>
+    </section>
   )
+}
+
+type T0VersionAdmission = {
+  run: T0DailyRunSummary
+  active: boolean
+  complete: boolean
+  canEnable: boolean
+  needsRefresh: boolean
+  admission: string
+  score: number
+  failure: string
+  cutoffDate: string
+  edge: number
+  twoSided: number
+  rankIC: number
+  sampleRows: number
+  testStart: string
+  testEnd: string
+}
+
+function buildT0VersionAdmission(run: T0DailyRunSummary, activeRunID: string, latestCutoff: string): T0VersionAdmission {
+  const model = parseT0ModelSummary(run)
+  const quality = model?.evaluation_quality
+  const foldCount = quality?.fold_count || model?.folds?.length || 0
+  const sampleRows = quality?.sample_rows || model?.rows || run.backtest_count || 0
+  const predictionRows = quality?.prediction_rows || run.candidate_count || 0
+  const edge = Number(model?.top10_avg_edge ?? Number.NaN)
+  const twoSided = Number(model?.top10_two_sided ?? Number.NaN)
+  const rankIC = Number(model?.rank_ic ?? Number.NaN)
+  const cutoffDate = run.trade_date || run.updated_at || ''
+  const needsRefresh = Boolean(latestCutoff && cutoffDate && cutoffDate < latestCutoff)
+  const startYear = Number((model?.test_start || '').slice(0, 4))
+  const issues: string[] = []
+  if (!['success', 'trained', 'done'].includes(String(run.status || model?.status || '').toLowerCase())) issues.push('训练状态未完成')
+  if (!model) issues.push('缺少模型摘要')
+  if (!Number.isFinite(startYear) || startYear > 2021) issues.push('训练/评估起点偏晚')
+  if (sampleRows < 5000) issues.push('样本量不足')
+  if (predictionRows <= 0) issues.push('缺少最新截面推理')
+  if (foldCount < 3) issues.push('walk-forward 折数不足')
+  if (!Number.isFinite(edge)) issues.push('缺少 Top10 价差')
+  if (!Number.isFinite(twoSided)) issues.push('缺少两边触达率')
+  if (!Number.isFinite(rankIC)) issues.push('缺少 Rank IC')
+  if (needsRefresh) issues.push('需要用最新截面重新训练/推理')
+  const complete = issues.length === 0
+  const canEnable = complete && edge > 0.006 && twoSided >= 0.12 && rankIC > -0.02
+  const score = Math.max(0, Math.min(100,
+    (complete ? 42 : 18) +
+    Math.max(-10, Math.min(26, edge * 900)) +
+    Math.max(0, Math.min(16, twoSided * 80)) +
+    Math.max(-8, Math.min(12, rankIC * 180)) +
+    (sampleRows >= 10000 ? 4 : 0)
+  ))
+  const admission = canEnable
+    ? '可启用'
+    : complete
+      ? '继续观察'
+      : '不可启用'
+  return {
+    run,
+    active: run.run_id === activeRunID,
+    complete,
+    canEnable,
+    needsRefresh,
+    admission: run.run_id === activeRunID && canEnable ? '已启用' : admission,
+    score,
+    failure: issues.slice(0, 3).join(' / '),
+    cutoffDate,
+    edge,
+    twoSided,
+    rankIC,
+    sampleRows,
+    testStart: model?.test_start || '',
+    testEnd: model?.test_end || ''
+  }
+}
+
+function admissionBadgeClass(value: string) {
+  if (value === '已启用' || value === '可启用') return 'success'
+  if (value === '继续观察') return 'running'
+  return 'failed'
 }
 
 function shortRunID(runID: string) {

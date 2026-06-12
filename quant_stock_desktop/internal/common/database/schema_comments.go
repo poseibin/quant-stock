@@ -25,10 +25,8 @@ func (db *DB) applySchemaComments() error {
 		if err := db.upsertSchemaComment("table", table, "", tableComment, now); err != nil {
 			return err
 		}
-		if db.IsMySQL() {
-			if _, err := db.conn.Exec(fmt.Sprintf("ALTER TABLE %s COMMENT = %s", quoteIdent(db.Backend(), table), quoteMySQLString(tableComment))); err != nil {
-				return fmt.Errorf("comment table %s: %w", table, err)
-			}
+		if _, err := db.conn.Exec(fmt.Sprintf("ALTER TABLE %s COMMENT = %s", quoteIdent(db.Backend(), table), quoteMySQLString(tableComment))); err != nil {
+			return fmt.Errorf("comment table %s: %w", table, err)
 		}
 		columns, err := db.schemaColumnNames(table)
 		if err != nil {
@@ -39,10 +37,8 @@ func (db *DB) applySchemaComments() error {
 			if err := db.upsertSchemaComment("column", table, column, columnComment, now); err != nil {
 				return err
 			}
-			if db.IsMySQL() {
-				if err := db.applyMySQLColumnComment(table, column, columnComment); err != nil {
-					return err
-				}
+			if err := db.applyMySQLColumnComment(table, column, columnComment); err != nil {
+				return err
 			}
 		}
 	}
@@ -50,25 +46,14 @@ func (db *DB) applySchemaComments() error {
 }
 
 func (db *DB) createSchemaCommentCatalog() error {
-	if db.IsMySQL() {
-		_, err := db.conn.Exec(`CREATE TABLE IF NOT EXISTS cfg_schema_comments (
-			object_type VARCHAR(32) NOT NULL,
-			table_name VARCHAR(191) NOT NULL,
-			column_name VARCHAR(191) NOT NULL DEFAULT '',
-			comment_text LONGTEXT NOT NULL,
-			updated_at VARCHAR(64) NOT NULL,
-			PRIMARY KEY(object_type, table_name, column_name)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据库表和字段中文说明元数据'`)
-		return err
-	}
 	_, err := db.conn.Exec(`CREATE TABLE IF NOT EXISTS cfg_schema_comments (
-		object_type TEXT NOT NULL,
-		table_name TEXT NOT NULL,
-		column_name TEXT NOT NULL DEFAULT '',
-		comment_text TEXT NOT NULL,
-		updated_at TEXT NOT NULL,
+		object_type VARCHAR(32) NOT NULL,
+		table_name VARCHAR(191) NOT NULL,
+		column_name VARCHAR(191) NOT NULL DEFAULT '',
+		comment_text LONGTEXT NOT NULL,
+		updated_at VARCHAR(64) NOT NULL,
 		PRIMARY KEY(object_type, table_name, column_name)
-	);`)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据库表和字段中文说明元数据'`)
 	return err
 }
 
@@ -86,13 +71,7 @@ func (db *DB) upsertSchemaComment(objectType, table, column, comment, updatedAt 
 }
 
 func (db *DB) schemaTableNames() ([]string, error) {
-	var rows *sql.Rows
-	var err error
-	if db.IsMySQL() {
-		rows, err = db.conn.Query(`SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`)
-	} else {
-		rows, err = db.conn.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
-	}
+	rows, err := db.conn.Query(`SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`)
 	if err != nil {
 		return nil, err
 	}
@@ -109,35 +88,15 @@ func (db *DB) schemaTableNames() ([]string, error) {
 }
 
 func (db *DB) schemaColumnNames(table string) ([]string, error) {
-	if db.IsMySQL() {
-		rows, err := db.conn.Query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`, table)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		out := []string{}
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				return nil, err
-			}
-			out = append(out, name)
-		}
-		return out, rows.Err()
-	}
-	rows, err := db.conn.Query(fmt.Sprintf("PRAGMA table_info(%s)", quoteIdent(db.Backend(), table)))
+	rows, err := db.conn.Query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`, table)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []string{}
 	for rows.Next() {
-		var cid int
-		var name, dataType string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+		var name string
+		if err := rows.Scan(&name); err != nil {
 			return nil, err
 		}
 		out = append(out, name)

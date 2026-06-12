@@ -4,13 +4,25 @@ Python core for strategy selection, signal generation, portfolio execution helpe
 
 Runtime state does not live in this directory. The desktop app and Python workers share:
 
-- `../data_store/meta.db`
+- MySQL database `quant_stock`
 - `../data_store/raw/`
 - `../data_store/backtest_results/`
 - `../data_store/factor_cache/`
 - `../data_store/logs/`
 
-Strategy configuration is stored in SQLite `cfg_app_settings`, not in YAML files.
+Strategy configuration is stored in MySQL `cfg_app_settings`, not in YAML files.
+
+## Desktop Scheduler
+
+The desktop app owns scheduled strategy refreshes from the Settings page. A run
+updates market data first, then refreshes enabled recommendation modules and
+generates the one-click rebalance plan. The scheduler records recent run
+results in `cfg_app_settings.strategy_schedule_reports`, including per-module
+status, WeCom notification status, and the markdown content that was pushed.
+
+The scheduled full data refresh intentionally excludes `top10_holders` so API
+limits in that slow dataset do not block strategy recommendations. Manual data
+updates can still run `top10_holders` explicitly from the data page.
 
 ## Strategy Plugins
 
@@ -32,7 +44,7 @@ Current candidate families:
 
 ## Layout
 
-- `common/`: configuration, shared SQLite access, locks, status, and logging.
+- `common/`: configuration, shared MySQL access, locks, status, and logging.
 - `research/`: DuckDB data access, universe construction, and factor utilities.
 - `trading/`: strategies, backtest engine, signal generation, position helpers, and time-machine evaluation.
 - `scripts/`: CLI entry points used by desktop workers.
@@ -42,7 +54,14 @@ Current candidate families:
 
 ```bash
 make smoke
+make test
+make test-mysql
+make e2e-mysql
 ```
+
+- `make test` runs the Python unit/integration suite, including board eligibility filters and MySQL worker cache writes.
+- `make test-mysql` runs only the MySQL-backed checks that previously caught schema drift such as `rank`/`rank_no`.
+- `make e2e-mysql` verifies the live MySQL pipeline health: base market data, core cache write/read, factor model artifacts, admission records, and whether a usable `ml_factor_ranker` model is active. It is expected to fail when model data has been cleared, training has not produced new artifacts, or the latest model is rejected by admission checks.
 
 Useful CLI entry points:
 

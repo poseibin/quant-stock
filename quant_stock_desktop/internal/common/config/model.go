@@ -14,6 +14,7 @@ type Settings struct {
 	PortfolioRisk        map[string]any              `json:"portfolio_risk"`
 	ExitRules            map[string]any              `json:"exit_rules"`
 	GovernanceRules      map[string]any              `json:"governance_rules"`
+	StrategySchedule     StrategyScheduleSettings    `json:"strategy_schedule"`
 }
 
 type StrategySettings struct {
@@ -25,6 +26,15 @@ type StrategySettings struct {
 	Filters   map[string]any `json:"filters"`
 	Selection map[string]any `json:"selection"`
 	Position  map[string]any `json:"position"`
+}
+
+type StrategyScheduleSettings struct {
+	Enabled       bool            `json:"enabled"`
+	TimeOfDay     string          `json:"time_of_day"`
+	Weekdays      []int           `json:"weekdays"`
+	Targets       map[string]bool `json:"targets"`
+	WechatWebhook string          `json:"wechat_webhook"`
+	WechatUsers   []string        `json:"wechat_users"`
 }
 
 type ValidationIssue struct {

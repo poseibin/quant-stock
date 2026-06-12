@@ -1,19 +1,12 @@
 # Packaging Configuration
 
-Database backend selection is a build-time decision. Runtime settings display
-the packaged backend and do not allow changing the backend while the app is
-running.
+The desktop package is MySQL-only. Runtime settings display and edit the MySQL
+DSN used by the app and Python workers.
 
 Default package (MySQL, local DSN):
 
 ```bash
 wails build
-```
-
-Explicit SQLite package:
-
-```bash
-wails build -ldflags "-X quant_stock_desktop/internal/common/config.PackagedDatabaseBackend=sqlite"
 ```
 
 MySQL package metadata can be injected the same way. If no DSN is injected, the

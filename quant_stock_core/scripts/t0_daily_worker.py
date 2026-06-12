@@ -21,6 +21,19 @@ if str(ROOT) not in sys.path:
 
 from common.infra import status as run_status
 from common.infra.db import add_column, open_db, replace_sql, table_columns, table_exists, write_transaction
+from scripts.strategy_quality_overlay import QUALITY_FEATURES, add_quality_overlay
+
+
+def db_restricted_exclude_sql(alias: str = "") -> str:
+    prefix = f"{alias}." if alias and not alias.endswith(".") else alias
+    return (
+        f"COALESCE({prefix}ts_code, '') NOT LIKE '4%%' "
+        f"AND COALESCE({prefix}ts_code, '') NOT LIKE '8%%' "
+        f"AND COALESCE({prefix}ts_code, '') NOT LIKE '%%.BJ' "
+        f"AND COALESCE({prefix}ts_code, '') NOT LIKE '688%%' "
+        f"AND COALESCE({prefix}ts_code, '') NOT LIKE '300%%' "
+        f"AND COALESCE({prefix}ts_code, '') NOT LIKE '301%%'"
+    )
 
 
 TASK_NAME = "t0_daily_research"
@@ -42,6 +55,9 @@ T0_MODEL_FEATURES = [
     "drawdown_20d",
     "today_pct",
     "expected_edge",
+    "small_cap_quality_score",
+    "risk_penalty_score",
+    "market_state_score",
 ]
 
 
@@ -261,11 +277,33 @@ def read_recent_daily(lookback: int) -> pd.DataFrame:
         return pd.read_sql(
             f"""
             SELECT d.ts_code, COALESCE(s.name, '') AS name, COALESCE(s.industry, '') AS industry,
-                   d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount
+                   COALESCE(s.list_status, 'L') AS list_status,
+                   d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount,
+                   0 AS turnover_rate,
+                   0 AS volume_ratio,
+                   COALESCE(b.total_mv, 0) AS total_mv,
+                   COALESCE(b.circ_mv, 0) AS circ_mv,
+                   COALESCE(b.pb, 0) AS pb,
+                   COALESCE(f.roe, 0) AS roe,
+                   COALESCE(f.netprofit_margin, 0) AS netprofit_margin,
+                   COALESCE(f.debt_to_assets, 0) AS debt_to_assets
             FROM data_daily_bars d
             LEFT JOIN data_stock_basic s ON s.ts_code = d.ts_code
+            LEFT JOIN data_daily_basic b ON b.ts_code = d.ts_code AND b.trade_date = d.trade_date
+            LEFT JOIN (
+                SELECT f1.ts_code, f1.roe, f1.netprofit_margin, f1.debt_to_assets
+                FROM data_fina_indicator f1
+                JOIN (
+                    SELECT ts_code, MAX(COALESCE(NULLIF(ann_date, ''), end_date)) AS report_date
+                    FROM data_fina_indicator
+                    GROUP BY ts_code
+                ) lf ON lf.ts_code = f1.ts_code AND lf.report_date = COALESCE(NULLIF(f1.ann_date, ''), f1.end_date)
+            ) f ON f.ts_code = d.ts_code
             WHERE d.trade_date >= '{min_date}'
               AND COALESCE(s.name, '') NOT LIKE '%%ST%%'
+              AND COALESCE(s.name, '') NOT LIKE '退市%%'
+              AND COALESCE(s.list_status, 'L') = 'L'
+              AND {db_restricted_exclude_sql('d')}
             ORDER BY d.ts_code, d.trade_date
             """,
             raw,
@@ -293,9 +331,28 @@ def read_history_for_codes(codes: list[str], days: int) -> pd.DataFrame:
         return pd.read_sql(
             f"""
             SELECT d.ts_code, COALESCE(s.name, '') AS name, COALESCE(s.industry, '') AS industry,
-                   d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount
+                   COALESCE(s.list_status, 'L') AS list_status,
+                   d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount,
+                   0 AS turnover_rate,
+                   0 AS volume_ratio,
+                   COALESCE(b.total_mv, 0) AS total_mv,
+                   COALESCE(b.circ_mv, 0) AS circ_mv,
+                   COALESCE(b.pb, 0) AS pb,
+                   COALESCE(f.roe, 0) AS roe,
+                   COALESCE(f.netprofit_margin, 0) AS netprofit_margin,
+                   COALESCE(f.debt_to_assets, 0) AS debt_to_assets
             FROM data_daily_bars d
             LEFT JOIN data_stock_basic s ON s.ts_code = d.ts_code
+            LEFT JOIN data_daily_basic b ON b.ts_code = d.ts_code AND b.trade_date = d.trade_date
+            LEFT JOIN (
+                SELECT f1.ts_code, f1.roe, f1.netprofit_margin, f1.debt_to_assets
+                FROM data_fina_indicator f1
+                JOIN (
+                    SELECT ts_code, MAX(COALESCE(NULLIF(ann_date, ''), end_date)) AS report_date
+                    FROM data_fina_indicator
+                    GROUP BY ts_code
+                ) lf ON lf.ts_code = f1.ts_code AND lf.report_date = COALESCE(NULLIF(f1.ann_date, ''), f1.end_date)
+            ) f ON f.ts_code = d.ts_code
             WHERE d.trade_date >= '{min_date}' AND d.ts_code IN ({placeholders})
             ORDER BY d.ts_code, d.trade_date
             """,
@@ -322,12 +379,33 @@ def read_history_all(days: int) -> pd.DataFrame:
         return pd.read_sql(
             f"""
             SELECT d.ts_code, COALESCE(s.name, '') AS name, COALESCE(s.industry, '') AS industry,
-                   d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount
+                   COALESCE(s.list_status, 'L') AS list_status,
+                   d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount,
+                   0 AS turnover_rate,
+                   0 AS volume_ratio,
+                   COALESCE(b.total_mv, 0) AS total_mv,
+                   COALESCE(b.circ_mv, 0) AS circ_mv,
+                   COALESCE(b.pb, 0) AS pb,
+                   COALESCE(f.roe, 0) AS roe,
+                   COALESCE(f.netprofit_margin, 0) AS netprofit_margin,
+                   COALESCE(f.debt_to_assets, 0) AS debt_to_assets
             FROM data_daily_bars d
             LEFT JOIN data_stock_basic s ON s.ts_code = d.ts_code
+            LEFT JOIN data_daily_basic b ON b.ts_code = d.ts_code AND b.trade_date = d.trade_date
+            LEFT JOIN (
+                SELECT f1.ts_code, f1.roe, f1.netprofit_margin, f1.debt_to_assets
+                FROM data_fina_indicator f1
+                JOIN (
+                    SELECT ts_code, MAX(COALESCE(NULLIF(ann_date, ''), end_date)) AS report_date
+                    FROM data_fina_indicator
+                    GROUP BY ts_code
+                ) lf ON lf.ts_code = f1.ts_code AND lf.report_date = COALESCE(NULLIF(f1.ann_date, ''), f1.end_date)
+            ) f ON f.ts_code = d.ts_code
             WHERE d.trade_date >= '{min_date}'
               AND COALESCE(s.name, '') NOT LIKE '%%ST%%'
               AND COALESCE(s.name, '') NOT LIKE '退市%%'
+              AND COALESCE(s.list_status, 'L') = 'L'
+              AND {db_restricted_exclude_sql('d')}
             ORDER BY d.ts_code, d.trade_date
             """,
             raw,
@@ -340,11 +418,32 @@ def read_daily_between(start_date: str, end_date: str) -> pd.DataFrame:
         return pd.read_sql(
             f"""
             SELECT d.ts_code, COALESCE(s.name, '') AS name, COALESCE(s.industry, '') AS industry,
-                   d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount
+                   COALESCE(s.list_status, 'L') AS list_status,
+                   d.trade_date, d.open, d.high, d.low, d.close, d.pre_close, d.pct_chg, d.amount,
+                   0 AS turnover_rate,
+                   0 AS volume_ratio,
+                   COALESCE(b.total_mv, 0) AS total_mv,
+                   COALESCE(b.circ_mv, 0) AS circ_mv,
+                   COALESCE(b.pb, 0) AS pb,
+                   COALESCE(f.roe, 0) AS roe,
+                   COALESCE(f.netprofit_margin, 0) AS netprofit_margin,
+                   COALESCE(f.debt_to_assets, 0) AS debt_to_assets
             FROM data_daily_bars d
             LEFT JOIN data_stock_basic s ON s.ts_code = d.ts_code
+            LEFT JOIN data_daily_basic b ON b.ts_code = d.ts_code AND b.trade_date = d.trade_date
+            LEFT JOIN (
+                SELECT f1.ts_code, f1.roe, f1.netprofit_margin, f1.debt_to_assets
+                FROM data_fina_indicator f1
+                JOIN (
+                    SELECT ts_code, MAX(COALESCE(NULLIF(ann_date, ''), end_date)) AS report_date
+                    FROM data_fina_indicator
+                    GROUP BY ts_code
+                ) lf ON lf.ts_code = f1.ts_code AND lf.report_date = COALESCE(NULLIF(f1.ann_date, ''), f1.end_date)
+            ) f ON f.ts_code = d.ts_code
             WHERE d.trade_date >= '{start_date}' AND d.trade_date <= '{end_date}'
               AND COALESCE(s.name, '') NOT LIKE '%%ST%%'
+              AND COALESCE(s.name, '') NOT LIKE '退市%%'
+              AND COALESCE(s.list_status, 'L') = 'L'
             ORDER BY d.ts_code, d.trade_date
             """,
             raw,
@@ -355,7 +454,29 @@ def add_metrics(df: pd.DataFrame, metric_window: int = 20) -> pd.DataFrame:
     df = df.copy()
     window = max(5, int(metric_window or 20))
     min_periods = max(5, min(20, window // 2))
-    for col in ["open", "high", "low", "close", "pre_close", "pct_chg", "amount"]:
+    numeric_cols = [
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "pct_chg",
+        "amount",
+        "turnover_rate",
+        "volume_ratio",
+        "total_mv",
+        "circ_mv",
+        "pb",
+        "roe",
+        "netprofit_margin",
+        "debt_to_assets",
+        "goodwill_to_equity",
+        "loss_streak",
+        "recent_holder_reduce",
+    ]
+    for col in numeric_cols:
+        if col not in df.columns:
+            df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
     df["trade_date"] = df["trade_date"].astype(str)
     df = df.sort_values(["ts_code", "trade_date"])
@@ -386,6 +507,19 @@ def add_metrics(df: pd.DataFrame, metric_window: int = 20) -> pd.DataFrame:
     df["ma5_ma20_gap"] = (df["ma5"] / df["ma20"].replace(0, pd.NA) - 1).abs()
     df["amount_ratio_20d"] = df["amount"] / df["avg_amount_20d"].replace(0, pd.NA)
     df["drawdown_20d"] = df["close"] / rolling_high_20.replace(0, pd.NA) - 1
+    df["is_limit_up_like"] = (df["pct_chg"] >= 9.2).astype(float)
+    market = df.groupby("trade_date").agg(
+        market_up_ratio=("pct_chg", lambda value: safe_float((value > 0).mean())),
+        market_limit_up_ratio=("is_limit_up_like", "mean"),
+    ).reset_index()
+    market = market.sort_values("trade_date")
+    market["market_up_ratio_5"] = market["market_up_ratio"].rolling(5, min_periods=1).mean()
+    market["market_risk_pressure"] = (
+        ((0.50 - market["market_up_ratio_5"]).clip(lower=0) / 0.30)
+        + ((0.010 - market["market_limit_up_ratio"]).clip(lower=0) / 0.020)
+    ).clip(0, 1)
+    df = df.merge(market, on="trade_date", how="left")
+    df = add_quality_overlay(df)
     return df.replace([math.inf, -math.inf], pd.NA).fillna(0.0)
 
 
@@ -428,6 +562,17 @@ def score_row(row: pd.Series, run_id: str) -> Candidate:
     ma60 = safe_float(row.get("ma60"))
     day_range = safe_float(row.get("range"))
     range_cv = range_std / avg_range if avg_range > 0 else 0.0
+    quality_score = clamp(safe_float(row.get("small_cap_quality_score")), 0, 100)
+    risk_penalty = clamp(safe_float(row.get("risk_penalty_score")), 0, 100)
+    market_state = clamp(safe_float(row.get("market_state_score"), 60), 0, 100)
+    pb = safe_float(row.get("pb"))
+    roe = safe_float(row.get("roe"))
+    debt_to_assets = safe_float(row.get("debt_to_assets"))
+    netprofit_margin = safe_float(row.get("netprofit_margin"))
+    goodwill_to_equity = safe_float(row.get("goodwill_to_equity"))
+    recent_holder_reduce = safe_float(row.get("recent_holder_reduce"))
+    loss_streak = safe_float(row.get("loss_streak"))
+    weak_market = clamp((55 - market_state) / 45, 0, 1)
 
     volatility_score = clamp((avg_range - 0.018) / 0.035, 0, 1) * 22
     liquidity_score = clamp((math.log10(max(avg_amount, 1)) - 4.8) / 2.3, 0, 1) * 18
@@ -447,6 +592,42 @@ def score_row(row: pd.Series, run_id: str) -> Candidate:
     score = 24 + volatility_score + liquidity_score + box_score + mean_reversion_score - trend_penalty - broken_penalty
     reasons: list[str] = []
     risks: list[str] = []
+    quality_bonus = clamp((quality_score - 42) / 34, 0, 1) * (5 + weak_market * 7)
+    risk_deduction = clamp((risk_penalty - 24) / 50, 0, 1) * (18 + weak_market * 10)
+    score += quality_bonus - risk_deduction
+    if quality_score >= 58:
+        reasons.append(f"小市值质量分 {quality_score:.1f}，市值/价格/流动性/财务质量通过")
+    elif quality_score < 38:
+        risks.append(f"小市值质量分 {quality_score:.1f} 偏低，不适合作为优先T仓")
+        score -= 14
+    if risk_penalty >= 45:
+        risks.append(f"避坑风险分 {risk_penalty:.1f} 偏高，降低做T优先级")
+    if market_state < 45:
+        risks.append(f"市场状态分 {market_state:.1f} 偏弱，降低进攻型做T仓位")
+        score -= 6
+    elif market_state >= 62:
+        reasons.append(f"市场状态分 {market_state:.1f}，流动性和扩散环境尚可")
+    if pb > 12:
+        risks.append(f"PB {pb:.1f} 极端，估值保护不足")
+        score -= 8
+    if roe < -2:
+        risks.append(f"ROE {roe:.1f}% 偏弱")
+        score -= 7
+    if debt_to_assets > 82:
+        risks.append(f"资产负债率 {debt_to_assets:.1f}% 偏高")
+        score -= 8
+    if netprofit_margin < -8:
+        risks.append(f"净利率 {netprofit_margin:.1f}% 为负，基本面弹性较差")
+        score -= 5
+    if goodwill_to_equity > 0.45:
+        risks.append(f"商誉/净资产 {goodwill_to_equity:.2f} 偏高")
+        score -= 7
+    if recent_holder_reduce > 0:
+        risks.append("近期存在大股东减持记录")
+        score -= 5
+    if loss_streak >= 2:
+        risks.append(f"连续亏损 {loss_streak:.0f} 期")
+        score -= 8
 
     if avg_range >= 0.026:
         reasons.append(f"20日平均振幅 {avg_range * 100:.2f}%，扣成本后有可操作空间")
@@ -523,6 +704,8 @@ def score_row(row: pd.Series, run_id: str) -> Candidate:
         band *= 1.05
     if state == "趋势偏弱":
         band *= 0.90
+    if weak_market >= 0.45:
+        band *= 0.92
 
     base_reduce = close * (1 + band)
     base_buy = close * (1 - band)
@@ -556,6 +739,13 @@ def score_row(row: pd.Series, run_id: str) -> Candidate:
 
     score = round(clamp(score, 0, 100), 1)
     t_ratio = t_ratio_from_score(score, state)
+    if weak_market >= 0.45:
+        t_ratio = min(t_ratio, 0.10)
+    if risk_penalty >= 58 or quality_score < 34:
+        state = "质量停手"
+        setup = "停止做T"
+        first_action = "停手观察"
+        t_ratio = 0.0
     action = "优先计划" if score >= 76 and t_ratio > 0 else "候选观察" if score >= 58 else "暂缓"
     if t_ratio <= 0 and action != "暂缓":
         action = "候选观察"
@@ -586,6 +776,18 @@ def score_row(row: pd.Series, run_id: str) -> Candidate:
             "先触发哪边做哪边，未到计划价不追",
             "跌破停手线后停止低吸，等待重新站回箱体",
         ],
+        "quality": {
+            "small_cap_quality_score": round(quality_score, 2),
+            "risk_penalty_score": round(risk_penalty, 2),
+            "market_state_score": round(market_state, 2),
+            "pb": round(pb, 2),
+            "roe": round(roe, 2),
+            "debt_to_assets": round(debt_to_assets, 2),
+            "goodwill_to_equity": round(goodwill_to_equity, 4),
+            "loss_streak": int(loss_streak),
+            "recent_holder_reduce": round(recent_holder_reduce, 4),
+            "weak_market_adjustment": round(weak_market, 4),
+        },
     }
     return Candidate(
         run_id=run_id,
@@ -652,6 +854,9 @@ def t0_model_feature_row(row: pd.Series, candidate: Candidate) -> dict[str, floa
         "drawdown_20d": safe_float(row.get("drawdown_20d")),
         "today_pct": safe_float(row.get("pct_chg")) / 100,
         "expected_edge": safe_float(candidate.expected_edge),
+        "small_cap_quality_score": safe_float(row.get("small_cap_quality_score")),
+        "risk_penalty_score": safe_float(row.get("risk_penalty_score")),
+        "market_state_score": safe_float(row.get("market_state_score")),
     }
 
 
@@ -1060,6 +1265,19 @@ def apply_effective_scores(candidates: list[Candidate], backtests: list[dict[str
         amount_ratio = item.amount / item.avg_amount_20d if item.avg_amount_20d > 0 else 0.0
         if 0 < amount_ratio < 0.55:
             score -= 6
+        quality = item.plan.get("quality") if isinstance(item.plan, dict) else {}
+        quality_score = safe_float(quality.get("small_cap_quality_score") if isinstance(quality, dict) else None)
+        risk_penalty = safe_float(quality.get("risk_penalty_score") if isinstance(quality, dict) else None)
+        market_state = safe_float(quality.get("market_state_score") if isinstance(quality, dict) else None, 60.0)
+        if quality_score < 38:
+            score -= 12
+            item.risks.append(f"质量分 {quality_score:.1f} 低于做T试仓线")
+        if risk_penalty > 55:
+            score -= 18
+            item.risks.append(f"避坑风险分 {risk_penalty:.1f} 超过做T停手机制")
+        if market_state < 42:
+            score -= 8
+            item.risks.append(f"市场状态分 {market_state:.1f} 偏弱，验证后仍降仓")
         item.score = round(clamp(score, 0, 100), 1)
         if recent_total > 0 and recent_two > 0:
             item.reasons.insert(0, f"近2月做T累计 {recent_total * 100:.2f}%，两边触达 {recent_two * 100:.2f}%")
@@ -1072,6 +1290,9 @@ def apply_effective_scores(candidates: list[Candidate], backtests: list[dict[str
             item.action = "候选观察"
             item.t_ratio = min(max(item.t_ratio, 0.10), 0.20)
         else:
+            item.action = "暂缓"
+            item.t_ratio = 0.0
+        if quality_score < 34 or risk_penalty > 62:
             item.action = "暂缓"
             item.t_ratio = 0.0
         item.plan["t_ratio"] = item.t_ratio

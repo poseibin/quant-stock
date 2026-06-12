@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from common.utils.market import price_limit_pct_series
 from research.data.storage import duckdb_query as dq
 from .cost_model import CostModel
 from .metrics import summary as metric_summary
@@ -98,55 +99,8 @@ def _load_price_panel(
 
 
 def _price_limit_pct(df: pd.DataFrame) -> pd.Series:
-    """按 A 股历史交易制度估计个股当日涨跌停幅度。
-
-    规则近似：
-    - IPO 初期无涨跌幅限制：主板上市首个交易日；科创/创业/北交所前 5 个交易日
-    - 退市整理期：统一近似 10%
-    - ST / *ST: 5%
-    - 科创板：2019-07-22 后 20%
-    - 创业板：2020-08-24 后 20%，之前 10%
-    - 北交所：2021-11-15 后 30%，之前按精选层近似 30%
-    - 其他主板：10%
-    """
-    ts_code = df["ts_code"].astype(str)
-    trade_date = pd.to_datetime(df["trade_date"].astype(str), format="%Y%m%d", errors="coerce")
-    list_date = pd.to_datetime(
-        df.get("list_date", pd.Series("", index=df.index)).astype(str),
-        format="%Y%m%d",
-        errors="coerce",
-    )
-    delist_date = pd.to_datetime(
-        df.get("delist_date", pd.Series("", index=df.index)).astype(str),
-        format="%Y%m%d",
-        errors="coerce",
-    )
-    name = df.get("name", pd.Series("", index=df.index)).fillna("").astype(str)
-    market = df.get("market", pd.Series("", index=df.index)).fillna("").astype(str)
-    exchange = df.get("exchange", pd.Series("", index=df.index)).fillna("").astype(str)
-
-    pct = pd.Series(0.10, index=df.index, dtype=float)
-    is_st = name.str.contains("ST", na=False)
-    is_bj = exchange.eq("BSE") | market.str.contains("北交所", na=False) | ts_code.str.endswith(".BJ")
-    is_kcb = market.str.contains("科创", na=False) | ts_code.str.startswith("688")
-    is_gem = market.str.contains("创业", na=False) | ts_code.str.startswith("300") | ts_code.str.startswith("301")
-
-    kcb_20 = is_kcb & (trade_date >= pd.Timestamp("2019-07-22"))
-    gem_20 = is_gem & (trade_date >= pd.Timestamp("2020-08-24"))
-    bj_30 = is_bj & (trade_date >= pd.Timestamp("2021-11-15"))
-
-    pct.loc[kcb_20 | gem_20] = 0.20
-    pct.loc[bj_30 | is_bj] = 0.30
-    pct.loc[is_st] = 0.05
-
-    delist_window = delist_date.notna() & (trade_date <= delist_date) & ((delist_date - trade_date).dt.days <= 30)
-    pct.loc[delist_window] = 0.10
-
-    listed_trading_days = _listed_trading_day_number(df)
-    mainboard_ipo_free = (~is_kcb & ~is_gem & ~is_bj) & (listed_trading_days == 1)
-    registration_ipo_free = (is_kcb | gem_20 | is_bj) & (listed_trading_days >= 1) & (listed_trading_days <= 5)
-    pct.loc[mainboard_ipo_free | registration_ipo_free] = np.inf
-    return pct
+    """按 A 股历史交易制度估计个股当日涨跌停幅度。"""
+    return price_limit_pct_series(df, listed_trading_days=_listed_trading_day_number(df))
 
 
 def _listed_trading_day_number(df: pd.DataFrame) -> pd.Series:

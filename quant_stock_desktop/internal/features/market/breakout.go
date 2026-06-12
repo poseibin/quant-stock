@@ -118,7 +118,7 @@ func BreakoutCacheKey(query BreakoutQuery) string {
 }
 
 func (repo *Repository) ListLimitBreakoutCache(cacheKey string, limit int) ([]LimitBreakoutCandidate, error) {
-	rows, err := repo.db.Conn().Query("SELECT payload_json FROM market_limit_breakout_cache WHERE cache_key = ? ORDER BY `rank` ASC LIMIT ?", cacheKey, limit)
+	rows, err := repo.db.Conn().Query("SELECT payload_json FROM market_limit_breakout_cache WHERE cache_key = ? ORDER BY rank_no ASC LIMIT ?", cacheKey, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +167,7 @@ func (repo *Repository) ReplaceLimitBreakoutCache(cacheKey string, items []Limit
 		return err
 	}
 	stmt, err := tx.Prepare(`INSERT INTO market_limit_breakout_cache (
-		cache_key, ` + "`rank`" + `, ts_code, latest_date, score, payload_json, generated_at, updated_at
+		cache_key, rank_no, ts_code, latest_date, score, payload_json, generated_at, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()

@@ -10,6 +10,7 @@ from typing import Iterable, Sequence
 
 import pandas as pd
 
+from common.utils.market import is_bj_stock, is_restricted_stock
 from research.data.storage import duckdb_query as dq
 
 
@@ -39,14 +40,44 @@ def exclude_delisted(ts_codes: Sequence[str], date: str) -> list[str]:
 
 def exclude_market(ts_codes: Sequence[str], markets: Iterable[str]) -> list[str]:
     """剔除指定市场，例如 ['BJ'] 剔除北交所。"""
+    market_set = {str(m).upper() for m in markets}
     basic = dq.get_stock_basic()
-    blocked = set(basic.loc[basic["exchange"].isin(list(markets)), "ts_code"])
+    if market_set & {"BJ", "BSE"}:
+        blocked = set(
+            basic.loc[
+                basic.apply(lambda row: is_bj_stock(row.get("ts_code"), row.get("exchange"), row.get("market")), axis=1),
+                "ts_code",
+            ]
+        )
+    else:
+        blocked = set(basic.loc[basic["exchange"].astype(str).str.upper().isin(market_set), "ts_code"])
+    return [c for c in ts_codes if c not in blocked]
+
+
+def exclude_restricted_market(ts_codes: Sequence[str]) -> list[str]:
+    """剔除当前账户不可交易的科创板、创业板、北交所股票。"""
+    basic = dq.get_stock_basic()
+    blocked = set(
+        basic.loc[
+            basic.apply(lambda row: is_restricted_stock(row.get("ts_code"), row.get("exchange"), row.get("market")), axis=1),
+            "ts_code",
+        ]
+    )
     return [c for c in ts_codes if c not in blocked]
 
 
 def keep_market(ts_codes: Sequence[str], markets: Iterable[str]) -> list[str]:
+    market_set = {str(m).upper() for m in markets}
     basic = dq.get_stock_basic()
-    keep = set(basic.loc[basic["exchange"].isin(list(markets)), "ts_code"])
+    if market_set & {"BJ", "BSE"}:
+        keep = set(
+            basic.loc[
+                basic.apply(lambda row: is_bj_stock(row.get("ts_code"), row.get("exchange"), row.get("market")), axis=1),
+                "ts_code",
+            ]
+        )
+    else:
+        keep = set(basic.loc[basic["exchange"].astype(str).str.upper().isin(market_set), "ts_code"])
     return [c for c in ts_codes if c in keep]
 
 

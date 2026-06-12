@@ -12,9 +12,10 @@ import (
 )
 
 type UpdateRequest struct {
-	Phase     string `json:"phase"`
-	StartDate string `json:"start_date"`
-	Dataset   string `json:"dataset"`
+	Phase           string   `json:"phase"`
+	StartDate       string   `json:"start_date"`
+	Dataset         string   `json:"dataset"`
+	ExcludeDatasets []string `json:"exclude_datasets"`
 }
 
 type RunStatus struct {

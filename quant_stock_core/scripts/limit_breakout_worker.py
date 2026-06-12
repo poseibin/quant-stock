@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from common.infra.db import upsert_sql, write_transaction
 from common.infra import status as run_status
+from common.utils.market import price_limit_rate, restricted_exclude_sql
 
 
 TASK_NAME = "limit_breakout"
@@ -78,15 +79,7 @@ def safe_float(value: object, default: float = 0.0) -> float:
 
 
 def limit_rate(ts_code: str, name: str) -> float:
-    code = ts_code or ""
-    upper_name = (name or "").upper()
-    if "ST" in upper_name:
-        return 0.05
-    if code.startswith("688") or code.startswith("300"):
-        return 0.20
-    if code.startswith("8") or code.startswith("4") or ".BJ" in code:
-        return 0.30
-    return 0.10
+    return price_limit_rate(ts_code, name)
 
 
 def close_volatility(values: pd.Series) -> float:
@@ -260,9 +253,10 @@ def read_inputs(data_path: Path, lookback: int, recent_days: int) -> tuple[pd.Da
     ).fetch_df()
     stocks = con.execute(
         f"""
-        SELECT ts_code, name, industry, list_status
+        SELECT ts_code, name, industry, list_status, exchange, market
         FROM read_parquet('{raw / "stock_basic" / "data.parquet"}')
         WHERE list_status = 'L' AND upper(name) NOT LIKE '%ST%'
+          AND {restricted_exclude_sql()}
         """
     ).fetch_df()
     financial = con.execute(
@@ -311,7 +305,7 @@ def ensure_tables(conn) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS market_limit_breakout_cache (
             cache_key TEXT NOT NULL,
-            rank INTEGER NOT NULL DEFAULT 0,
+            rank_no INTEGER NOT NULL DEFAULT 0,
             ts_code TEXT NOT NULL,
             latest_date TEXT NOT NULL DEFAULT '',
             score REAL NOT NULL DEFAULT 0,
@@ -410,7 +404,7 @@ def write_cache(db_path: Path, cache_key: str, candidates: list[Candidate]) -> N
             rows.append((cache_key, idx, item.ts_code, item.latest_date, item.score, payload, ts, ts))
         conn.executemany(
             """INSERT INTO market_limit_breakout_cache(
-                cache_key, rank, ts_code, latest_date, score, payload_json, generated_at, updated_at
+                cache_key, rank_no, ts_code, latest_date, score, payload_json, generated_at, updated_at
             ) VALUES(?,?,?,?,?,?,?,?)""",
             rows,
         )
@@ -445,7 +439,6 @@ def write_cache(db_path: Path, cache_key: str, candidates: list[Candidate]) -> N
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", required=True)
-    parser.add_argument("--db-path", required=True)
     parser.add_argument("--cache-key", required=True)
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--lookback", type=int, default=1250)
@@ -454,13 +447,14 @@ def main() -> int:
     try:
         run_status.begin(TASK_NAME)
         run_status.progress(TASK_NAME, 1, 100, "load", "读取行情与财务数据")
+
         def report_scan(idx: int, total: int) -> None:
             pct_idx = 2 + int((idx / total) * 94) if total > 0 else 2
             run_status.progress(TASK_NAME, min(pct_idx, 96), 100, "scan", f"扫描横盘形态 {idx}/{total}")
 
         candidates = scan(Path(args.data_path), args.lookback, args.recent_days, args.limit, report_scan)
         run_status.progress(TASK_NAME, 98, 100, "persist", f"写入 {len(candidates)} 个预警候选")
-        write_cache(Path(args.db_path), args.cache_key, candidates)
+        write_cache(Path(args.data_path).expanduser().resolve(), args.cache_key, candidates)
         run_status.progress(TASK_NAME, 100, 100, "done", "刷新页面缓存")
         run_status.done(TASK_NAME, f"已生成 {len(candidates)} 个横盘突发候选")
         print(json.dumps({"count": len(candidates), "cache_key": args.cache_key}, ensure_ascii=False), flush=True)

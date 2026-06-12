@@ -20,6 +20,15 @@ if str(ROOT) not in sys.path:
 
 from common.infra import status as run_status
 from common.infra.db import replace_sql, write_transaction
+from common.utils.market import price_limit_threshold_pct, restricted_exclude_sql
+from scripts.strategy_quality_overlay import (
+    QUALITY_FEATURES,
+    add_quality_overlay,
+    attach_asof_reports,
+    attach_recent_holder_reduce,
+    balance_quality_reports,
+    income_loss_streak_reports,
+)
 
 
 TASK_NAME = "limit_up_model"
@@ -49,8 +58,16 @@ FEATURES = [
     "industry_amount_chg5",
     "industry_heat_score",
     "market_up_ratio",
+    "market_up_ratio_3",
     "market_limit_up_count",
     "market_limit_up_ratio",
+    "market_limit_up_ratio_3",
+    "market_limit_pressure",
+    *QUALITY_FEATURES,
+    "recent_limit_up_5",
+    "recent_limit_up_10",
+    "limit_chain_len",
+    "pullback_from_high60",
 ]
 
 
@@ -69,14 +86,7 @@ def safe_float(value: object, default: float = 0.0) -> float:
 
 
 def limit_threshold(ts_code: str, name: str) -> float:
-    upper_name = (name or "").upper()
-    if "ST" in upper_name:
-        return 4.5
-    if ts_code.startswith("688") or ts_code.startswith("300"):
-        return 19.0
-    if ts_code.startswith("8") or ts_code.startswith("4") or ".BJ" in ts_code:
-        return 28.0
-    return 9.2
+    return price_limit_threshold_pct(ts_code, name)
 
 
 def ensure_tables(db_path: str | None) -> None:
@@ -229,9 +239,12 @@ def read_market_panel(data_path: Path, start: str, end: str) -> pd.DataFrame:
             SELECT d.ts_code, d.trade_date, d.open, d.high, d.low, d.close, d.pct_chg, d.amount,
                    COALESCE(b.turnover_rate, 0) AS turnover_rate,
                    COALESCE(b.volume_ratio, 0) AS volume_ratio,
+                   COALESCE(b.total_mv, 0) AS total_mv,
                    COALESCE(b.circ_mv, 0) AS circ_mv,
+                   COALESCE(b.pb, 0) AS pb,
                    COALESCE(s.name, '') AS name,
-                   COALESCE(NULLIF(s.industry, ''), '未分类') AS industry
+                   COALESCE(NULLIF(s.industry, ''), '未分类') AS industry,
+                   COALESCE(s.list_status, 'L') AS list_status
             FROM read_parquet('{raw / "daily" / "*.parquet"}') d
             LEFT JOIN read_parquet('{raw / "daily_basic" / "*.parquet"}') b
               ON d.ts_code = b.ts_code AND d.trade_date = b.trade_date
@@ -243,6 +256,7 @@ def read_market_panel(data_path: Path, start: str, end: str) -> pd.DataFrame:
               AND COALESCE(s.list_status, 'L') = 'L'
               AND COALESCE(s.name, '') NOT LIKE '%ST%'
               AND COALESCE(s.name, '') NOT LIKE '退市%'
+              AND {restricted_exclude_sql('s')}
             ORDER BY d.ts_code, d.trade_date
             """
         ).fetch_df()
@@ -250,10 +264,84 @@ def read_market_panel(data_path: Path, start: str, end: str) -> pd.DataFrame:
         con.close()
 
 
+def read_quality_reports(data_path: Path, end: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    raw = data_path / "raw"
+    con = duckdb.connect()
+    try:
+        financial = con.execute(
+            f"""
+            SELECT ts_code,
+                   COALESCE(NULLIF(ann_date, ''), end_date) AS report_date,
+                   COALESCE(roe, 0) AS roe,
+                   COALESCE(netprofit_margin, 0) AS netprofit_margin,
+                   COALESCE(debt_to_assets, 0) AS debt_to_assets
+            FROM read_parquet('{raw / "fina_indicator" / "*.parquet"}')
+            WHERE ts_code IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) <= '{end}'
+            ORDER BY ts_code, report_date
+            """
+        ).fetch_df()
+        balance = con.execute(
+            f"""
+            SELECT ts_code,
+                   COALESCE(NULLIF(ann_date, ''), end_date) AS ann_date,
+                   end_date,
+                   COALESCE(goodwill, 0) AS goodwill,
+                   COALESCE(total_hldr_eqy_exc_min_int, 0) AS equity
+            FROM read_parquet('{raw / "balancesheet" / "*.parquet"}')
+            WHERE ts_code IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) <= '{end}'
+            ORDER BY ts_code, ann_date
+            """
+        ).fetch_df()
+        income = con.execute(
+            f"""
+            SELECT ts_code,
+                   COALESCE(NULLIF(ann_date, ''), end_date) AS ann_date,
+                   end_date,
+                   COALESCE(n_income_attr_p, n_income, 0) AS n_income_attr_p
+            FROM read_parquet('{raw / "income" / "*.parquet"}')
+            WHERE ts_code IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) <= '{end}'
+            ORDER BY ts_code, end_date
+            """
+        ).fetch_df()
+        holder = con.execute(
+            f"""
+            SELECT ts_code, ann_date, in_de, change_ratio, change_vol
+            FROM read_parquet('{raw / "stk_holdertrade" / "*.parquet"}')
+            WHERE ts_code IS NOT NULL
+              AND ann_date IS NOT NULL
+              AND ann_date <= '{end}'
+            ORDER BY ts_code, ann_date
+            """
+        ).fetch_df()
+    finally:
+        con.close()
+    return financial, balance_quality_reports(balance), income_loss_streak_reports(income), holder
+
+
+def attach_quality_inputs(market: pd.DataFrame, data_path: Path, end: str) -> pd.DataFrame:
+    financial, balance, income, holder = read_quality_reports(data_path, end)
+    out = attach_asof_reports(
+        market,
+        financial,
+        report_date_col="report_date",
+        value_cols=["roe", "netprofit_margin", "debt_to_assets"],
+    )
+    out = attach_asof_reports(out, balance, report_date_col="report_date", value_cols=["goodwill_to_equity"])
+    out = attach_asof_reports(out, income, report_date_col="report_date", value_cols=["loss_streak"])
+    out = attach_recent_holder_reduce(out, holder, window_days=180)
+    return out
+
+
 def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.DataFrame:
     df = raw.copy()
     df["trade_date"] = df["trade_date"].astype(str)
-    for col in ["open", "high", "low", "close", "pct_chg", "amount", "turnover_rate", "volume_ratio", "circ_mv"]:
+    for col in ["open", "high", "low", "close", "pct_chg", "amount", "turnover_rate", "volume_ratio", "total_mv", "circ_mv", "pb", "roe", "netprofit_margin", "debt_to_assets", "goodwill_to_equity", "loss_streak", "recent_holder_reduce"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
     df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
     group = df.groupby("ts_code", sort=False)
@@ -274,6 +362,17 @@ def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.Da
     df["circ_mv_log"] = np.log1p(df["circ_mv"].clip(lower=0))
     df["is_limit_up"] = df.apply(lambda row: safe_float(row["pct_chg"]) >= limit_threshold(str(row["ts_code"]), str(row["name"])), axis=1)
     df["is_strong"] = (df["pct_chg"] >= 5.0) | df["is_limit_up"] | ((df["volume_ratio"] >= 1.8) & (df["pct_chg"] >= 3.0))
+    prev_limit_1 = group["is_limit_up"].shift(1).fillna(False).astype(bool)
+    prev_limit_2 = group["is_limit_up"].shift(2).fillna(False).astype(bool)
+    prev_limit_3 = group["is_limit_up"].shift(3).fillna(False).astype(bool)
+    df["recent_limit_up_5"] = group["is_limit_up"].transform(lambda s: s.shift(1).rolling(5, min_periods=1).sum())
+    df["recent_limit_up_10"] = group["is_limit_up"].transform(lambda s: s.shift(1).rolling(10, min_periods=1).sum())
+    df["limit_chain_len"] = (
+        prev_limit_1.astype(int)
+        + (prev_limit_1 & prev_limit_2).astype(int)
+        + (prev_limit_1 & prev_limit_2 & prev_limit_3).astype(int)
+    )
+    df["pullback_from_high60"] = df["distance_high60"]
 
     by_industry = df.groupby(["trade_date", "industry"], sort=False)
     industry = by_industry.agg(
@@ -297,6 +396,7 @@ def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.Da
         + industry["industry_up_ratio"].rank(pct=True)
         + industry["industry_amount_chg5"].replace([np.inf, -np.inf], np.nan).fillna(0).rank(pct=True)
     ) * 25.0
+    industry["industry_heat_slope"] = industry_group["industry_heat_score"].transform(lambda s: s.diff(3))
 
     market = df.groupby("trade_date", sort=False).agg(
         market_up_ratio=("pct_chg", lambda s: float((s > 0).mean())),
@@ -304,9 +404,17 @@ def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.Da
         market_count=("ts_code", "count"),
     ).reset_index()
     market["market_limit_up_ratio"] = market["market_limit_up_count"] / market["market_count"].replace(0, np.nan)
+    market = market.sort_values("trade_date")
+    market["market_up_ratio_3"] = market["market_up_ratio"].rolling(3, min_periods=1).mean()
+    market["market_limit_up_ratio_3"] = market["market_limit_up_ratio"].rolling(3, min_periods=1).mean()
+    market["market_limit_pressure"] = (
+        market["market_up_ratio_3"].clip(0, 1) * 0.55
+        + (market["market_limit_up_ratio_3"] / 0.018).clip(0, 1) * 0.45
+    )
 
     df = df.merge(industry.drop(columns=["industry_count", "industry_amount"]), on=["trade_date", "industry"], how="left")
     df = df.merge(market.drop(columns=["market_count"]), on="trade_date", how="left")
+    df = add_quality_overlay(df)
 
     next_close = group["close"].shift(-horizon)
     future_high = group["high"].transform(lambda s: s.shift(-1).iloc[::-1].rolling(horizon, min_periods=1).max().iloc[::-1])
@@ -323,13 +431,35 @@ def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.Da
         df[f"exit_close_{hold_days}d"] = group["close"].shift(-hold_days)
         df[f"future_high_{hold_days}d"] = group["high"].transform(lambda s, h=hold_days: s.shift(-1).iloc[::-1].rolling(h, min_periods=1).max().iloc[::-1])
         df[f"future_low_{hold_days}d"] = group["low"].transform(lambda s, h=hold_days: s.shift(-1).iloc[::-1].rolling(h, min_periods=1).min().iloc[::-1])
-    df["label"] = ((df["fwd5_max_return"] >= 0.08) & (df["max_drawdown_5d"] > -0.10)).astype(int)
+    entry_upside_3d = df["future_high_3d"] / df["entry_open_1d"].replace(0, np.nan) - 1
+    entry_drawdown_3d = df["future_low_3d"] / df["entry_open_1d"].replace(0, np.nan) - 1
+    entry_is_buyable = (df["entry_open_1d"] > 0) & (df["entry_gap_1d"] <= 0.05) & (df["entry_pct_chg_1d"] < 8.8)
+    active_market = (df["market_up_ratio_3"] >= 0.48) & (df["market_limit_up_ratio_3"] >= 0.006)
+    hot_industry = (df["industry_heat_score"] >= 58) & (df["industry_up_ratio"] >= 0.48)
+    df["label"] = (
+        entry_is_buyable
+        & active_market
+        & hot_industry
+        & (df["entry_gap_1d"] <= 0.035)
+        & (entry_upside_3d >= 0.07)
+        & (entry_drawdown_3d > -0.045)
+    ).astype(int)
     df["year"] = df["trade_date"].str.slice(0, 4).astype(int)
     df = df.replace([np.inf, -np.inf], np.nan)
     df[FEATURES] = df[FEATURES].fillna(0.0)
+    first_limit = df["is_limit_up"] & (df["limit_chain_len"] == 0) & (df["recent_limit_up_5"] <= 0)
+    pullback_restart = df["is_limit_up"] & (df["limit_chain_len"] == 0) & (df["pullback_from_high60"] <= -0.20)
     tradable_mask = (
-        df["is_strong"]
+        (first_limit | pullback_restart)
         & df["trade_date"].between(start, end)
+        & (df["market_up_ratio_3"] >= 0.46)
+        & (df["market_limit_pressure"] >= 0.42)
+        & (df["industry_heat_score"] >= 52)
+        & (df["industry_heat_slope"] >= -18)
+        & (df["industry_up_ratio"] >= 0.45)
+        & (df["quality_gate"] == 1)
+        & (df["small_cap_quality_score"] >= 46)
+        & (df["risk_penalty_score"] <= 38)
         & (df["close"] >= 3.0)
         & (df["amount"] >= 30000)
         & (df["turnover_rate"] >= 0.4)
@@ -484,8 +614,15 @@ def equity_stats(daily_returns: pd.Series) -> dict[str, float]:
     }
 
 
-def trading_rule_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry_mode: str = "open", max_gap: float = 0.07, take_profit: float = 0.10, stop_loss: float = -0.05, buy_slippage: float = 0.002, sell_slippage: float = 0.002, commission: float = 0.00025, stamp_tax: float = 0.0005, min_buy_premium: float = 0.0, max_buy_premium: float = 0.03) -> dict[str, Any]:
-    signals = top_rows_by_date(pred, int(top_n))
+def trading_rule_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry_mode: str = "open", max_gap: float = 0.07, take_profit: float = 0.10, stop_loss: float = -0.05, buy_slippage: float = 0.002, sell_slippage: float = 0.002, commission: float = 0.00025, stamp_tax: float = 0.0005, min_buy_premium: float = 0.0, max_buy_premium: float = 0.03, min_market_pressure: float = 0.0, min_industry_heat: float = 0.0, max_recent_limit_up_10: float | None = None) -> dict[str, Any]:
+    frame = pred.copy()
+    if min_market_pressure > 0 and "market_limit_pressure" in frame:
+        frame = frame[frame["market_limit_pressure"] >= min_market_pressure]
+    if min_industry_heat > 0 and "industry_heat_score" in frame:
+        frame = frame[frame["industry_heat_score"] >= min_industry_heat]
+    if max_recent_limit_up_10 is not None and "recent_limit_up_10" in frame:
+        frame = frame[frame["recent_limit_up_10"] <= max_recent_limit_up_10]
+    signals = top_rows_by_date(frame, int(top_n))
     trade_returns: list[dict[str, Any]] = []
     for record in signals.to_dict("records"):
         row = SimpleNamespace(**record)
@@ -511,7 +648,7 @@ def trading_rule_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry_m
             "compound_return": 0.0,
             "max_drawdown": 0.0,
             "yearly": [],
-            "rule": {"entry_mode": entry_mode, "max_gap": max_gap, "take_profit": take_profit, "stop_loss": stop_loss, "buy_slippage": buy_slippage, "sell_slippage": sell_slippage, "commission": commission, "stamp_tax": stamp_tax, "min_buy_premium": min_buy_premium, "max_buy_premium": max_buy_premium, "path_assumption": "daily_ohlc_stop_first"},
+            "rule": {"entry_mode": entry_mode, "max_gap": max_gap, "take_profit": take_profit, "stop_loss": stop_loss, "buy_slippage": buy_slippage, "sell_slippage": sell_slippage, "commission": commission, "stamp_tax": stamp_tax, "min_buy_premium": min_buy_premium, "max_buy_premium": max_buy_premium, "min_market_pressure": min_market_pressure, "min_industry_heat": min_industry_heat, "max_recent_limit_up_10": max_recent_limit_up_10, "path_assumption": "daily_ohlc_stop_first"},
         }
     daily_returns = trades.groupby("trade_date")["return"].mean().sort_index()
     stats = equity_stats(daily_returns)
@@ -540,18 +677,18 @@ def trading_rule_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry_m
         "compound_return": stats["compound_return"],
         "max_drawdown": stats["max_drawdown"],
         "yearly": yearly,
-        "rule": {"entry_mode": entry_mode, "max_gap": max_gap, "take_profit": take_profit, "stop_loss": stop_loss, "buy_slippage": buy_slippage, "sell_slippage": sell_slippage, "commission": commission, "stamp_tax": stamp_tax, "min_buy_premium": min_buy_premium, "max_buy_premium": max_buy_premium, "path_assumption": "daily_ohlc_stop_first"},
+        "rule": {"entry_mode": entry_mode, "max_gap": max_gap, "take_profit": take_profit, "stop_loss": stop_loss, "buy_slippage": buy_slippage, "sell_slippage": sell_slippage, "commission": commission, "stamp_tax": stamp_tax, "min_buy_premium": min_buy_premium, "max_buy_premium": max_buy_premium, "min_market_pressure": min_market_pressure, "min_industry_heat": min_industry_heat, "max_recent_limit_up_10": max_recent_limit_up_10, "path_assumption": "daily_ohlc_stop_first"},
     }
 
 
 def trading_validation(pred: pd.DataFrame) -> list[dict[str, Any]]:
     return [
-        trading_rule_metrics(pred, top_n=3, hold_days=3, entry_mode="open"),
-        trading_rule_metrics(pred, top_n=3, hold_days=5, entry_mode="open"),
-        trading_rule_metrics(pred, top_n=5, hold_days=3, entry_mode="open"),
-        trading_rule_metrics(pred, top_n=5, hold_days=5, entry_mode="open"),
-        trading_rule_metrics(pred, top_n=3, hold_days=3, entry_mode="pullback", max_gap=0.05, take_profit=0.08, stop_loss=-0.04, min_buy_premium=0.0, max_buy_premium=0.03),
-        trading_rule_metrics(pred, top_n=5, hold_days=3, entry_mode="pullback", max_gap=0.05, take_profit=0.08, stop_loss=-0.04, min_buy_premium=0.0, max_buy_premium=0.03),
+        trading_rule_metrics(pred, top_n=1, hold_days=3, entry_mode="pullback", max_gap=0.035, take_profit=0.09, stop_loss=-0.035, min_buy_premium=-0.015, max_buy_premium=0.015, min_market_pressure=0.48, min_industry_heat=62, max_recent_limit_up_10=1),
+        trading_rule_metrics(pred, top_n=3, hold_days=3, entry_mode="pullback", max_gap=0.035, take_profit=0.09, stop_loss=-0.035, min_buy_premium=-0.015, max_buy_premium=0.015, min_market_pressure=0.48, min_industry_heat=60, max_recent_limit_up_10=1),
+        trading_rule_metrics(pred, top_n=3, hold_days=5, entry_mode="pullback", max_gap=0.035, take_profit=0.11, stop_loss=-0.04, min_buy_premium=-0.02, max_buy_premium=0.01, min_market_pressure=0.52, min_industry_heat=62, max_recent_limit_up_10=1),
+        trading_rule_metrics(pred, top_n=5, hold_days=3, entry_mode="pullback", max_gap=0.035, take_profit=0.08, stop_loss=-0.035, min_buy_premium=-0.015, max_buy_premium=0.015, min_market_pressure=0.50, min_industry_heat=62, max_recent_limit_up_10=1),
+        trading_rule_metrics(pred, top_n=3, hold_days=3, entry_mode="open", max_gap=0.025, take_profit=0.08, stop_loss=-0.035, min_market_pressure=0.55, min_industry_heat=65, max_recent_limit_up_10=1),
+        trading_rule_metrics(pred, top_n=5, hold_days=3, entry_mode="open", max_gap=0.025, take_profit=0.08, stop_loss=-0.035, min_market_pressure=0.55, min_industry_heat=65, max_recent_limit_up_10=1),
     ]
 
 
@@ -663,7 +800,7 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
             data,
             pred,
             fold_metrics,
-            universe_note="模型只评估强势、流动性达标、可交易候选池，不代表全市场无条件预测能力。",
+            universe_note="模型只评估首板/一日涨停候选；排除连板高位，允许大幅回撤后二次启动，不代表全市场无条件预测能力。",
             path_note="交易验证使用日线 OHLC，无法确认盘中止盈/止损先后；同日同时触发时按先止损处理。",
         ),
         "test_start": str(pred["trade_date"].min()),
@@ -753,6 +890,7 @@ def main() -> int:
         run_status.progress(TASK_NAME, 1, 5, "load", "读取日线和基础数据")
         ensure_tables(args.db_path)
         raw = read_market_panel(Path(args.data_path), args.start, args.end)
+        raw = attach_quality_inputs(raw, Path(args.data_path), args.end)
         if raw.empty:
             raise RuntimeError("日线数据为空，无法训练涨停模型")
         run_status.progress(TASK_NAME, 2, 5, "features", "生成热点与个股特征")

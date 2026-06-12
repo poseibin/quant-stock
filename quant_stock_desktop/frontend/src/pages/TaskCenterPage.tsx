@@ -8,7 +8,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { analyzePortfolioTask, applyPortfolioCandidate, cancelTask, createTask, deleteTask, getSettings, getSignalPortfolioContext, getTimeMachineDetail, listTasks, listValidationEvidence, refreshTaskStatus, retryTask, startTask, type SignalPortfolioCandidate, type SignalPortfolioContext, type TaskDTO, type TimeMachineDetail, type ValidationEvidence } from '../services/app'
 import { formatDate } from '../components/format'
 
-const evaluationTaskTypes = new Set(['evaluation_time_machine', 'eval_strategy_admission', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment', 'limit_signal_evaluation', 't0_daily_research', 't0_daily_timemachine'])
+const evaluationTaskTypes = new Set(['evaluation_time_machine', 'eval_strategy_admission', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment', 'factor_research', 'model_training', 'limit_signal_evaluation', 't0_daily_research', 't0_daily_timemachine'])
 const evaluationHorizon = {
   fullCycleStartDate: '20100101',
   admissionYears: 5,
@@ -1289,7 +1289,7 @@ function ValidationEvidencePanel({ evidence, title, emptyText }: { evidence: Val
       <div className="tableHeader">
         <div>
           <div className="formTitle">{title}</div>
-          <p className="recommendationMeta">复核记录、研究报告和数据快照都来自 SQLite，用来判断结论是否能进入模拟盘或下一轮评估</p>
+          <p className="recommendationMeta">复核记录、研究报告和数据快照都来自 MySQL，用来判断结论是否能进入模拟盘或下一轮评估</p>
         </div>
       </div>
       {!hasEvidence ? <div className="emptyCell compactEmpty">{emptyText}</div> : null}

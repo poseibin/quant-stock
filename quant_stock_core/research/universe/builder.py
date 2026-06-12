@@ -29,6 +29,7 @@ class UniverseConfig:
     max_60d_return: float | None = None
     max_amount_spike: float | None = None
     exclude_markets: list[str] = field(default_factory=list)   # 例如 ["BJ"]
+    exclude_restricted: bool = True                              # 剔除科创板/创业板/北交所
     keep_markets: list[str] | None = None                      # 例如 ["BJ"] 仅北交所
     require_tradable: bool = False                             # 是否要求当日可成交
 
@@ -50,6 +51,8 @@ def build(date: str, cfg: UniverseConfig | None = None) -> list[str]:
         codes = F.keep_market(codes, cfg.keep_markets)
     if cfg.exclude_markets:
         codes = F.exclude_market(codes, cfg.exclude_markets)
+    if cfg.exclude_restricted and not cfg.keep_markets:
+        codes = F.exclude_restricted_market(codes)
     if cfg.min_avg_amount > 0:
         codes = F.filter_min_avg_amount(codes, date, cfg.min_avg_amount,
                                         cfg.avg_amount_window)

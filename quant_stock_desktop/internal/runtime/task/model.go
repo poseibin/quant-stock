@@ -23,6 +23,8 @@ const (
 	TypeWalkForwardEvaluation Type = "walk_forward_evaluation"
 	TypeParameterExperiment   Type = "parameter_experiment"
 	TypeFactorResearch        Type = "factor_research"
+	TypeFactorAutoTune        Type = "factor_autotune"
+	TypeModelTraining         Type = "model_training"
 	TypeLimitSignalEvaluation Type = "limit_signal_evaluation"
 	TypeT0DailyResearch       Type = "t0_daily_research"
 	TypeT0TimeMachine         Type = "t0_daily_timemachine"

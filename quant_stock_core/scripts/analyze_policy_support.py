@@ -334,10 +334,10 @@ def ensure_tables(conn) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_monitor_policy_support_candidates_score ON monitor_policy_support_candidates(trade_date, score DESC)")
 
 
-def write_results(db_path: Path, signal: Signal, candidates: list[Candidate]) -> None:
+def write_results(signal: Signal, candidates: list[Candidate]) -> None:
     run_status.progress(TASK_NAME, 4, 5, "write", "写入数据库")
     updated_at = now()
-    with write_transaction(db_path) as conn:
+    with write_transaction(None) as conn:
         ensure_tables(conn)
         signal_columns = [
             "trade_date", "signal_level", "total_score", "market_stress_score", "support_score",
@@ -397,17 +397,15 @@ def write_results(db_path: Path, signal: Signal, candidates: list[Candidate]) ->
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", default="")
-    parser.add_argument("--db-path", default="")
     parser.add_argument("--lookback", type=int, default=80)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     data_root = Path(args.data_root).expanduser().resolve() if args.data_root else Path.cwd().parent / "data_store"
-    db_path = Path(args.db_path).expanduser().resolve() if args.db_path else data_root / "meta.db"
     try:
         run_status.begin(TASK_NAME)
         daily, top_inst, _ = read_tables(data_root, max(40, args.lookback))
         signal, candidates = latest_metrics(daily, top_inst)
-        write_results(db_path, signal, candidates)
+        write_results(signal, candidates)
         run_status.progress(TASK_NAME, 5, 5, "done", f"{signal.signal_level} {signal.total_score}")
         run_status.done(TASK_NAME, f"{signal.trade_date} {signal.signal_level} {signal.total_score}")
         if args.json:

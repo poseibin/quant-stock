@@ -1,4 +1,4 @@
-"""桌面端共享基础设施：SQLite + 进程锁 + 任务状态"""
+"""桌面端共享基础设施：MySQL + 进程锁 + 任务状态"""
 from . import status
 from .db import (
     open_db,

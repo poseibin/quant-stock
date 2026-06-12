@@ -26,6 +26,10 @@ export function CancelTask(arg1) {
   return window['go']['main']['App']['CancelTask'](arg1);
 }
 
+export function CheckExternalDependencies() {
+  return window['go']['main']['App']['CheckExternalDependencies']();
+}
+
 export function ClearLimitBreakoutCandidates() {
   return window['go']['main']['App']['ClearLimitBreakoutCandidates']();
 }
@@ -170,6 +174,14 @@ export function ListFactorAdmissionComparisons(arg1) {
   return window['go']['main']['App']['ListFactorAdmissionComparisons'](arg1);
 }
 
+export function ListFactorAutoTuneRuns(arg1) {
+  return window['go']['main']['App']['ListFactorAutoTuneRuns'](arg1);
+}
+
+export function ListFactorAutoTuneTrials(arg1, arg2) {
+  return window['go']['main']['App']['ListFactorAutoTuneTrials'](arg1, arg2);
+}
+
 export function ListFactorCorrelationResults(arg1, arg2) {
   return window['go']['main']['App']['ListFactorCorrelationResults'](arg1, arg2);
 }
@@ -278,6 +290,10 @@ export function ListStockBasic(arg1) {
   return window['go']['main']['App']['ListStockBasic'](arg1);
 }
 
+export function ListStrategyScheduleReports() {
+  return window['go']['main']['App']['ListStrategyScheduleReports']();
+}
+
 export function ListStrategyVersions(arg1) {
   return window['go']['main']['App']['ListStrategyVersions'](arg1);
 }
@@ -346,6 +362,14 @@ export function RunDataUpdate(arg1) {
   return window['go']['main']['App']['RunDataUpdate'](arg1);
 }
 
+export function RunFactorAutoTune(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RunFactorAutoTune'](arg1, arg2, arg3);
+}
+
+export function RunFactorLatestInference() {
+  return window['go']['main']['App']['RunFactorLatestInference']();
+}
+
 export function RunLimitBreakoutModelTraining() {
   return window['go']['main']['App']['RunLimitBreakoutModelTraining']();
 }
@@ -360,6 +384,10 @@ export function RunLimitUpModelTraining() {
 
 export function RunPolicySupportAnalysis() {
   return window['go']['main']['App']['RunPolicySupportAnalysis']();
+}
+
+export function RunStrategyScheduleNow() {
+  return window['go']['main']['App']['RunStrategyScheduleNow']();
 }
 
 export function RunT0DailyResearch() {
@@ -384,4 +412,8 @@ export function SetStrategyVersionStatus(arg1) {
 
 export function StartTask(arg1) {
   return window['go']['main']['App']['StartTask'](arg1);
+}
+
+export function TestStrategyScheduleWechat() {
+  return window['go']['main']['App']['TestStrategyScheduleWechat']();
 }

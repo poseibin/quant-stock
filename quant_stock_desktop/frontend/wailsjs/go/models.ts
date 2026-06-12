@@ -1,5 +1,27 @@
 export namespace config {
 	
+	export class StrategyScheduleSettings {
+	    enabled: boolean;
+	    time_of_day: string;
+	    weekdays: number[];
+	    targets: Record<string, boolean>;
+	    wechat_webhook: string;
+	    wechat_users: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StrategyScheduleSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.time_of_day = source["time_of_day"];
+	        this.weekdays = source["weekdays"];
+	        this.targets = source["targets"];
+	        this.wechat_webhook = source["wechat_webhook"];
+	        this.wechat_users = source["wechat_users"];
+	    }
+	}
 	export class StrategySettings {
 	    label: string;
 	    enabled: boolean;
@@ -40,6 +62,7 @@ export namespace config {
 	    portfolio_risk: Record<string, any>;
 	    exit_rules: Record<string, any>;
 	    governance_rules: Record<string, any>;
+	    strategy_schedule: StrategyScheduleSettings;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -60,6 +83,7 @@ export namespace config {
 	        this.portfolio_risk = source["portfolio_risk"];
 	        this.exit_rules = source["exit_rules"];
 	        this.governance_rules = source["governance_rules"];
+	        this.strategy_schedule = this.convertValues(source["strategy_schedule"], StrategyScheduleSettings);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -80,6 +104,7 @@ export namespace config {
 		    return a;
 		}
 	}
+	
 	
 	export class ValidationIssue {
 	    field: string;
@@ -170,6 +195,7 @@ export namespace datafetch {
 	    phase: string;
 	    start_date: string;
 	    dataset: string;
+	    exclude_datasets: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateRequest(source);
@@ -180,6 +206,7 @@ export namespace datafetch {
 	        this.phase = source["phase"];
 	        this.start_date = source["start_date"];
 	        this.dataset = source["dataset"];
+	        this.exclude_datasets = source["exclude_datasets"];
 	    }
 	}
 
@@ -315,6 +342,30 @@ export namespace main {
 	        this.created_at = source["created_at"];
 	    }
 	}
+	export class ExternalDependencyStatus {
+	    key: string;
+	    name: string;
+	    category: string;
+	    state: string;
+	    latency_ms: number;
+	    message: string;
+	    checked_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExternalDependencyStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.name = source["name"];
+	        this.category = source["category"];
+	        this.state = source["state"];
+	        this.latency_ms = source["latency_ms"];
+	        this.message = source["message"];
+	        this.checked_at = source["checked_at"];
+	    }
+	}
 	export class FactorAdmissionComparison {
 	    run_id: string;
 	    strategy: string;
@@ -357,6 +408,92 @@ export namespace main {
 	        this.stress_crash_state_failed = source["stress_crash_state_failed"];
 	        this.stress_weak_drawdown_failed = source["stress_weak_drawdown_failed"];
 	        this.generated_at = source["generated_at"];
+	    }
+	}
+	export class FactorAutoTuneRun {
+	    run_id: string;
+	    base_model_run_id: string;
+	    start_date: string;
+	    end_date: string;
+	    status: string;
+	    best_trial_id: string;
+	    best_model_run_id: string;
+	    best_admission: string;
+	    best_score: number;
+	    summary_json: string;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorAutoTuneRun(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.base_model_run_id = source["base_model_run_id"];
+	        this.start_date = source["start_date"];
+	        this.end_date = source["end_date"];
+	        this.status = source["status"];
+	        this.best_trial_id = source["best_trial_id"];
+	        this.best_model_run_id = source["best_model_run_id"];
+	        this.best_admission = source["best_admission"];
+	        this.best_score = source["best_score"];
+	        this.summary_json = source["summary_json"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class FactorAutoTuneTrial {
+	    run_id: string;
+	    trial_id: string;
+	    round_no: number;
+	    source: string;
+	    model_run_id: string;
+	    eval_run_id: string;
+	    params_json: string;
+	    llm_direction_json: string;
+	    admission: string;
+	    admission_score: number;
+	    reason: string;
+	    annual_return: number;
+	    total_return: number;
+	    max_drawdown: number;
+	    sharpe: number;
+	    stress_bad_event_count: number;
+	    stress_crash_state_failed: boolean;
+	    stress_weak_drawdown_failed: boolean;
+	    passed: boolean;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FactorAutoTuneTrial(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.trial_id = source["trial_id"];
+	        this.round_no = source["round_no"];
+	        this.source = source["source"];
+	        this.model_run_id = source["model_run_id"];
+	        this.eval_run_id = source["eval_run_id"];
+	        this.params_json = source["params_json"];
+	        this.llm_direction_json = source["llm_direction_json"];
+	        this.admission = source["admission"];
+	        this.admission_score = source["admission_score"];
+	        this.reason = source["reason"];
+	        this.annual_return = source["annual_return"];
+	        this.total_return = source["total_return"];
+	        this.max_drawdown = source["max_drawdown"];
+	        this.sharpe = source["sharpe"];
+	        this.stress_bad_event_count = source["stress_bad_event_count"];
+	        this.stress_crash_state_failed = source["stress_crash_state_failed"];
+	        this.stress_weak_drawdown_failed = source["stress_weak_drawdown_failed"];
+	        this.passed = source["passed"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
 	    }
 	}
 	export class FactorCorrelationResult {
@@ -1367,6 +1504,67 @@ export namespace main {
 	        this.run_id = source["run_id"];
 	    }
 	}
+	export class StrategyScheduleReportRow {
+	    target: string;
+	    label: string;
+	    status: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StrategyScheduleReportRow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target = source["target"];
+	        this.label = source["label"];
+	        this.status = source["status"];
+	        this.message = source["message"];
+	    }
+	}
+	export class StrategyScheduleReport {
+	    started_at: string;
+	    finished_at: string;
+	    success: boolean;
+	    message: string;
+	    wechat_content: string;
+	    rows: StrategyScheduleReportRow[];
+	    recommendation: position.Recommendation;
+	
+	    static createFrom(source: any = {}) {
+	        return new StrategyScheduleReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.started_at = source["started_at"];
+	        this.finished_at = source["finished_at"];
+	        this.success = source["success"];
+	        this.message = source["message"];
+	        this.wechat_content = source["wechat_content"];
+	        this.rows = this.convertValues(source["rows"], StrategyScheduleReportRow);
+	        this.recommendation = this.convertValues(source["recommendation"], position.Recommendation);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class StrategyVersionActivateRequest {
 	    strategy: string;
 	    version: number;

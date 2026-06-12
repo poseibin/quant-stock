@@ -1,4 +1,4 @@
-"""Desktop SQLite settings reader.
+"""Desktop settings reader.
 
 The desktop app stores runtime settings in cfg_app_settings(key='settings').
 Python workers read the same row so strategy configuration has one source.
@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from common.infra.db import connect_db, db_backend, table_exists, upsert_sql, write_transaction
+from common.infra.db import connect_db, table_exists, upsert_sql, write_transaction
 
 from .settings import DATA_ROOT
 
@@ -27,17 +27,28 @@ def _default_settings() -> dict[str, Any]:
             },
             "ml_factor_ranker": {
                 "label": "机器学习因子", "enabled": False, "weight": 0.10, "rebalance": "monthly",
-                "universe": {"exclude_bj": True, "min_total_mv": 2_000_000_000, "max_total_mv": 120_000_000_000, "min_amount": 30_000_000},
+                "universe": {"exclude_restricted": True, "min_total_mv": 2_000_000_000, "max_total_mv": 120_000_000_000, "min_amount": 30_000_000},
                 "filters": {
                     "exclude_st": True, "max_day_return": 0.095,
                     "market_regime": {
-                        "continuous": False, "trend_window": 60, "breadth_window": 20,
+                        "continuous": True, "trend_window": 60, "breadth_window": 20,
                         "drawdown_window": 120, "volatility_window": 20,
-                        "min_breadth": 0.45, "normal_exposure": 1.0, "weak_exposure": 0.45, "bear_exposure": 0.25,
+                        "min_breadth": 0.50, "normal_exposure": 1.0, "weak_exposure": 0.30, "bear_exposure": 0.08,
+                        "crisis_guard": True, "crisis_exposure": 0.0, "crisis_drawdown": -0.10, "crisis_short_return": -0.045, "crisis_breadth": 0.34,
+                        "risk_state": {"enabled": True, "normal_exposure": 1.0, "weak_exposure": 0.25, "post_crash_repair_exposure": 0.35, "liquidity_squeeze_exposure": 0.0, "crash_exposure": 0.0},
                     },
+                    "stress_controls": {
+                        "enabled": True, "states": ["weak", "crash", "liquidity_squeeze"],
+                        "stress_min_amount_mult": 1.8, "max_ret20": 0.18, "max_vol20": 0.55,
+                        "max_amount_chg20": 2.0, "max_turnover_rate": 12.0,
+                        "ret20_penalty": 0.28, "vol20_penalty": 0.12, "amount_chg20_penalty": 0.03,
+                        "turnover_penalty": 0.12, "weak_base_penalty": 0.03, "crash_drawdown_penalty": 0.18,
+                    },
+                    "crash_gate": {"enabled": True, "lookback_days": 20, "crash_states": ["crash", "liquidity_squeeze"], "cooldown_days": 10},
+                    "crash_exit": {"enabled": True, "trigger_states": ["crash", "liquidity_squeeze"], "cooldown_days": 10},
                 },
-                "selection": {"run_id": "fr_full_105_2010_2025_20260606", "min_pred_rank": 0.96},
-                "position": {"n_holdings": 30, "max_single_weight": 0.04, "max_industry_weight": 0.15},
+                "selection": {"run_id": "fr_full_105_2010_2025_20260606", "min_pred_rank": 0.97},
+                "position": {"n_holdings": 24, "max_single_weight": 0.035, "max_industry_weight": 0.12},
             },
             "multi_factor_composite": {
                 "label": "多因子综合", "enabled": True, "weight": 0.18, "rebalance": "monthly",
@@ -174,20 +185,16 @@ def _default_settings() -> dict[str, Any]:
 
 
 def config_db_path() -> Path:
-    env = os.getenv("DESKTOP_CONFIG_DB_PATH", "").strip() or os.getenv("DESKTOP_DB_PATH", "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    return (DATA_ROOT / "meta.db").resolve()
+    # 保留兼容字段名；MySQL 模式下不使用文件数据库路径。
+    return DATA_ROOT
 
 
 def load_settings() -> dict[str, Any]:
     settings = _default_settings()
     db_path = config_db_path()
-    if db_backend() == "sqlite" and not db_path.exists():
-        return settings
     try:
         with connect_db(db_path) as conn:
-            row = conn.execute("SELECT value FROM cfg_app_settings WHERE key = ?", ("settings",)).fetchone()
+            row = conn.execute("SELECT value FROM cfg_app_settings WHERE `key` = ?", ("settings",)).fetchone()
     except Exception:
         return settings
     if not row:
@@ -202,27 +209,14 @@ def load_settings() -> dict[str, Any]:
 def save_settings(settings: dict[str, Any]) -> None:
     payload = json.dumps(_deep_merge(_default_settings(), settings), ensure_ascii=False)
     db_path = config_db_path()
-    if db_backend() == "sqlite":
-        db_path.parent.mkdir(parents=True, exist_ok=True)
     with write_transaction(db_path) as conn:
-        if conn.backend == "mysql":
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS cfg_app_settings (
-                    `key` VARCHAR(255) PRIMARY KEY,
-                    value LONGTEXT NOT NULL,
-                    updated_at VARCHAR(64) NOT NULL
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"""
-            )
-        else:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS cfg_app_settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS cfg_app_settings (
+                `key` VARCHAR(255) PRIMARY KEY,
+                value LONGTEXT NOT NULL,
+                updated_at VARCHAR(64) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"""
+        )
         columns = ["key", "value", "updated_at"]
         conn.execute(
             upsert_sql("cfg_app_settings", columns, ["key"], ["value", "updated_at"]),
@@ -241,7 +235,7 @@ def load_strategy_settings() -> dict[str, dict[str, Any]]:
 def load_strategy(name: str) -> dict[str, Any]:
     strategies = load_strategy_settings()
     if name not in strategies:
-        raise KeyError(f"SQLite cfg_app_settings.settings.strategies 中未找到 {name}")
+        raise KeyError(f"cfg_app_settings.settings.strategies 中未找到 {name}")
     return deepcopy(strategies[name])
 
 
@@ -276,8 +270,6 @@ def _strategy_overrides() -> dict[str, Any]:
 
 def _load_versioned_strategy_settings(base: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     db_path = config_db_path()
-    if db_backend() == "sqlite" and not db_path.exists():
-        return base
     mode = os.getenv("QUANT_STRATEGY_VERSION_MODE", "active").strip().lower() or "active"
     version_spec = _strategy_version_spec()
     try:

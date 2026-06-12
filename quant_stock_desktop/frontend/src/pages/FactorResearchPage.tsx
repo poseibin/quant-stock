@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, Play, RefreshCw, ShieldCheck } from 'lucide-react'
-import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorObservationEvents, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorObservationEvent, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
+import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorAutoTuneRuns, listFactorAutoTuneTrials, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorObservationEvents, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, runFactorAutoTune, runFactorLatestInference, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorAutoTuneRun, type FactorAutoTuneTrial, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorObservationEvent, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
 
 type FactorFamily = {
   name: string
@@ -20,6 +20,7 @@ type PipelineStep = {
 }
 
 type ResearchTab = 'recommend' | 'model' | 'evaluation'
+type AutoTunePresetKey = 'fast' | 'standard' | 'deep'
 
 type GeneralStrategyPlan = {
   buy: number
@@ -33,6 +34,12 @@ const researchTabs: Array<{ key: ResearchTab; label: string }> = [
   { key: 'model', label: '模型训练' },
   { key: 'evaluation', label: '模型评估' }
 ]
+
+const autoTunePresets: Record<AutoTunePresetKey, { label: string; rounds: number; trials: number; hint: string }> = {
+  fast: { label: '快速', rounds: 4, trials: 4, hint: '少量补探' },
+  standard: { label: '标准', rounds: 12, trials: 6, hint: '默认长搜索' },
+  deep: { label: '加深', rounds: 24, trials: 8, hint: '更大参数空间' }
+}
 
 const factorFamilies: FactorFamily[] = [
   { name: '估值', count: 13, examples: 'EP、BP、SP、PE/PB/PS、股息率、行业内估值分位', role: '提供长期均值回归和估值保护', status: 'ready' },
@@ -104,6 +111,9 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
   const [correlations, setCorrelations] = useState<FactorCorrelationResult[]>([])
   const [stressRows, setStressRows] = useState<FactorStressResult[]>([])
   const [admissionRows, setAdmissionRows] = useState<FactorAdmissionComparison[]>([])
+  const [autoTuneRuns, setAutoTuneRuns] = useState<FactorAutoTuneRun[]>([])
+  const [autoTuneTrials, setAutoTuneTrials] = useState<FactorAutoTuneTrial[]>([])
+  const [autoTunePreset, setAutoTunePreset] = useState<AutoTunePresetKey>('standard')
   const [warningRuns, setWarningRuns] = useState<CrashWarningRunSummary[]>([])
   const [warningFeatures, setWarningFeatures] = useState<CrashWarningFeature[]>([])
   const modelSummary = useMemo(() => parseModelSummary(model?.summary_json), [model])
@@ -111,14 +121,19 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
   const stressYears = useMemo(() => stressRows.filter((row) => row.bucket_type === 'year'), [stressRows])
   const stressStates = useMemo(() => stressRows.filter((row) => row.bucket_type === 'market_state'), [stressRows])
   const latestAdmission = admissionRows[0]
-  const bestAdmission = useMemo(() => [...admissionRows].sort((a, b) => b.admission_score - a.admission_score)[0], [admissionRows])
   const latestWarningRun = warningRuns[0]
   const weakestStressRows = useMemo(() => [...stressRows]
     .filter((row) => row.bucket_type !== 'full')
     .sort((a, b) => a.annual_return - b.annual_return)
     .slice(0, 4), [stressRows])
   const parentTasks = useMemo(() => tasks.filter((task) => !task.parent_id), [tasks])
-  const latestTask = parentTasks[0]
+  const researchParentTasks = useMemo(() => parentTasks.filter((task) => task.task_type === 'factor_research'), [parentTasks])
+  const autoTuneTask = useMemo(() => parentTasks.find((task) => task.task_type === 'factor_autotune'), [parentTasks])
+  const latestInferenceTask = useMemo(() => parentTasks.find(isLatestInferenceTask), [parentTasks])
+  const latestInferenceChild = useMemo(() => latestInferenceTask
+    ? tasks.find((task) => task.parent_id === latestInferenceTask.id && task.subtask_key === 'latest_inference')
+    : undefined, [latestInferenceTask, tasks])
+  const latestTask = researchParentTasks.find((task) => !isLatestInferenceTask(task)) || researchParentTasks[0]
   const pipelineSteps = useMemo(() => buildPipelineSteps({
     task: latestTask,
     latestRun: runs[0],
@@ -157,11 +172,14 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
   const startDate = useMemo(() => '20100101', [])
 
   const refresh = useCallback(async () => {
-    const items = (await listTasks({ limit: 300 })).filter((item) => item.task_type === 'factor_research')
+    const items = (await listTasks({ limit: 300 })).filter((item) => item.task_type === 'factor_research' || item.task_type === 'factor_autotune')
     setTasks(items)
     const runItems = await listFactorResearchRuns(20)
     setRuns(runItems)
     setAdmissionRows(await listFactorAdmissionComparisons(30))
+    const autoRuns = await listFactorAutoTuneRuns(20)
+    setAutoTuneRuns(autoRuns)
+    setAutoTuneTrials(await listFactorAutoTuneTrials(autoRuns[0]?.run_id || '', 80))
     const crashRuns = await listCrashWarningRuns(10)
     setWarningRuns(crashRuns)
     setWarningFeatures(await listCrashWarningFeatures(crashRuns[0]?.run_id || '', 12))
@@ -258,6 +276,37 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
     }
   }
 
+  const refreshLatestInference = async () => {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const task = await runFactorLatestInference()
+      await refresh()
+      setNotice(`已启动通用策略最新截面推理：${task.name || task.id}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const startAutoTune = async () => {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const preset = autoTunePresets[autoTunePreset]
+      const task = await runFactorAutoTune(preset.rounds, preset.trials, true)
+      await refresh()
+      setNotice(`已启动通用策略自动调参：${task.name || task.id}，计划 ${preset.rounds} 轮 x ${preset.trials} 次，已探索参数会自动跳过`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="factorResearchPage">
       {notice ? <div className="saveHint">{notice}</div> : null}
@@ -276,17 +325,20 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
 
       {activeTab === 'recommend' ? (
         <>
+      {latestInferenceTask ? (
+        <RunInferenceProgress parentTask={latestInferenceTask} childTask={latestInferenceChild} />
+      ) : null}
       <section className="detailCard">
         <div className="tableHeader">
           <div>
             <div className="sectionLabel">GENERAL STRATEGY</div>
             <h2>通用策略每日股票推荐</h2>
-            <p className="recommendationMeta">基于通用因子模型的最新截面推理，每天给出 Top20% 候选；先看模型分位和准入结果，再决定是否进入持仓计划。</p>
+            <p className="recommendationMeta">基于通用因子模型的最新截面推理，每天给出 Top20% 候选；重新推理只使用当前模型跑最新行情截面，不重新训练模型。</p>
           </div>
           <div className="tableHeaderRight">
-            <button className="secondaryButton startButton" onClick={refresh} disabled={busy}>
+            <button className="secondaryButton startButton" onClick={refreshLatestInference} disabled={busy}>
               <RefreshCw size={16} />
-              刷新推荐
+              重新推理
             </button>
           </div>
         </div>
@@ -456,6 +508,21 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
 
       {activeTab === 'model' ? (
         <>
+      <FactorAutoTunePanel
+        runs={autoTuneRuns}
+        trials={autoTuneTrials}
+        task={autoTuneTask}
+        busy={busy}
+        preset={autoTunePreset}
+        onPresetChange={setAutoTunePreset}
+        onStart={startAutoTune}
+      />
+
+      <FactorAdmissionPanel
+        rows={admissionRows}
+        latestPredictionDate={latestPredictionDate}
+      />
+
       <section className="detailCard">
           <div className="tableHeader">
             <div>
@@ -561,6 +628,15 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
 
       {activeTab === 'evaluation' ? (
         <>
+      <GeneralModelEvaluationPanel
+        model={model}
+        predictions={predictions}
+        latestPredictions={latestPredictions}
+        stressYears={stressYears}
+        modelFeatures={modelFeatures}
+        admissionRows={admissionRows}
+      />
+
       <section className="detailCard">
         <div className="tableHeader">
           <div>
@@ -780,55 +856,6 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
       <section className="detailCard">
         <div className="tableHeader">
           <div>
-            <div className="sectionLabel">ADMISSION COMPARE</div>
-            <h3>模型版本准入对比</h3>
-          </div>
-          <span>{bestAdmission ? `当前最高分 ${bestAdmission.run_id}` : '等待准入评估'}</span>
-        </div>
-        <div className="metricStrip">
-          <div className="metricCard"><span>最新版本</span><b>{latestAdmission?.admission || '-'}</b><em>{latestAdmission?.run_id || '暂无'}</em></div>
-          <div className="metricCard good"><span>最高准入分</span><b>{decimalText(bestAdmission?.admission_score, 2)}</b><em>{bestAdmission?.generated_at || '-'}</em></div>
-          <div className="metricCard"><span>最新年化</span><b>{percentText(latestAdmission?.annual_return)}</b><em>有效期 {dateRangeText(latestAdmission?.effective_start, latestAdmission?.effective_end)}</em></div>
-          <div className="metricCard bad"><span>压力失败</span><b>{numberText(latestAdmission?.stress_bad_event_count)}</b><em>{latestAdmission ? admissionRiskText(latestAdmission) : '-'}</em></div>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>版本</th>
-              <th>准入</th>
-              <th>分数</th>
-              <th>年化</th>
-              <th>最大回撤</th>
-              <th>Sharpe</th>
-              <th>压力惩罚</th>
-              <th>失败点</th>
-              <th>生成时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            {admissionRows.length === 0 ? (
-              <tr><td colSpan={9} className="mutedText">暂无模型准入记录</td></tr>
-            ) : admissionRows.slice(0, 10).map((row) => (
-              <tr key={`${row.run_id}-${row.generated_at}`}>
-                <td><b>{shortRunID(row.run_id)}</b><div className="mono">{dateRangeText(row.effective_start, row.effective_end)}</div></td>
-                <td><span className={`badge ${admissionBadge(row.admission)}`}>{row.admission}</span></td>
-                <td>{decimalText(row.admission_score, 2)}</td>
-                <td className={row.annual_return >= 0 ? 'positive' : 'negative'}>{percentText(row.annual_return)}</td>
-                <td className={row.max_drawdown >= -0.2 ? 'positive' : 'negative'}>{percentText(row.max_drawdown)}</td>
-                <td>{decimalText(row.sharpe, 2)}</td>
-                <td className={row.stress_penalty <= 0 ? 'positive' : 'negative'}>{decimalText(row.stress_penalty, 2)}</td>
-                <td>{admissionRiskText(row)}</td>
-                <td className="mono">{row.generated_at}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {latestAdmission?.reason ? <div className="saveHint">{latestAdmission.reason}</div> : null}
-      </section>
-
-      <section className="detailCard">
-        <div className="tableHeader">
-          <div>
             <div className="sectionLabel">CRASH WARNING</div>
             <h3>股灾预警模型</h3>
           </div>
@@ -1011,6 +1038,253 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
   )
 }
 
+function GeneralModelEvaluationPanel({
+  model,
+  predictions,
+  latestPredictions,
+  stressYears,
+  modelFeatures,
+  admissionRows
+}: {
+  model: FactorModelRun | null
+  predictions: FactorModelPrediction[]
+  latestPredictions: FactorLatestPrediction[]
+  stressYears: FactorStressResult[]
+  modelFeatures: FactorModelFeature[]
+  admissionRows: FactorAdmissionComparison[]
+}) {
+  const summary = parseModelSummary(model?.summary_json)
+  const tiers = buildFactorPredictionTiers(predictions)
+  const yearly = buildFactorYearRows(predictions)
+  const tradeRows = buildFactorTradeValidation(predictions)
+  const recentDates = Array.from(new Set(predictions.map((row) => row.trade_date))).sort().reverse().slice(0, 10)
+  const recentRows = recentDates.map((date) => {
+    const dateRows = predictions.filter((row) => row.trade_date === date).sort((a, b) => b.pred_score - a.pred_score)
+    const top = dateRows.slice(0, 10)
+    return {
+      date,
+      count: dateRows.length,
+      topReturn: avg(top.map((row) => row.realized_return)),
+      rankIC: Number.NaN,
+    }
+  })
+  const bestAdmission = admissionRows
+    .filter((row) => row.admission.includes('启用') || row.admission.includes('准入') || row.admission.includes('限制'))
+    .sort((a, b) => b.admission_score - a.admission_score)[0]
+  const latestDate = latestPredictions[0]?.trade_date || ''
+  const activeSummary = model ? `${model.model_type} · ${model.status}` : '暂无模型'
+  return (
+    <section className="detailCard">
+      <div className="tableHeader">
+        <div>
+          <div className="sectionLabel">MODEL EVALUATION</div>
+          <h3>通用策略效果评估</h3>
+        </div>
+        <span>{latestDate ? `最新截面 ${formatTradeDate(latestDate)}` : activeSummary}</span>
+      </div>
+      <div className="limitModelVerdict">
+        <div>
+          <span className={bestAdmission ? 'positiveText' : model?.status === 'success' ? 'warningText' : 'negativeText'}>
+            {bestAdmission ? bestAdmission.admission : model?.status === 'success' ? '可观察' : '等待训练'}
+          </span>
+          <b>{model?.run_id ? shortRunID(model.run_id) : '等待模型'}</b>
+          <p>
+            {model
+              ? `OOS Rank IC ${decimalText(summary.oos_rank_ic_mean, 3)}，Top-Bottom ${signedPercentText(summary.top_bottom_spread)}，Top20均值 ${signedPercentText(summary.top20_mean_return)}；准入仍需看压力段和最新截面。`
+              : '暂无通用策略模型评估结果。'}
+          </p>
+        </div>
+        <div className="limitModelMetrics">
+          <Mini label="OOS折数" value={numberText(summary.fold_count)} />
+          <Mini label="预测样本" value={numberText(summary.prediction_rows)} />
+          <Mini label="Top候选" value={numberText(summary.top20_rows)} />
+          <Mini label="Rank IC" value={decimalText(summary.oos_rank_ic_mean, 3)} valueClassName={Number(summary.oos_rank_ic_mean) >= 0 ? 'positive' : 'negative'} />
+          <Mini label="Top-Bottom" value={signedPercentText(summary.top_bottom_spread)} valueClassName={Number(summary.top_bottom_spread) >= 0 ? 'positive' : 'negative'} />
+          <Mini label="准入分" value={bestAdmission ? decimalText(bestAdmission.admission_score, 2) : '—'} />
+        </div>
+      </div>
+
+      <div className="limitModelEvalGrid">
+        <div>
+          <div className="formTitle">Top 分层表现</div>
+          <div className="modelEvalTableWrap">
+            <table className="modelEvalTable">
+              <thead>
+                <tr>
+                  <th>层级</th>
+                  <th>单期超额</th>
+                  <th>命中率</th>
+                  <th>样本</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tiers.length === 0 ? (
+                  <tr><td colSpan={4}>暂无 OOS 分层结果</td></tr>
+                ) : tiers.map((row) => (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    <td className={row.avgReturn >= 0 ? 'positive' : 'negative'}>{signedPercentText(row.avgReturn)}</td>
+                    <td>{percentText(row.winRate)}</td>
+                    <td>{numberText(row.count)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <div className="formTitle">分年 Walk-forward</div>
+          <div className="modelEvalTableWrap">
+            <table className="modelEvalTable">
+              <thead>
+                <tr>
+                  <th>年份</th>
+                  <th>Top10超额</th>
+                  <th>命中率</th>
+                  <th>样本</th>
+                </tr>
+              </thead>
+              <tbody>
+                {yearly.length === 0 ? (
+                  <tr><td colSpan={4}>暂无分年结果</td></tr>
+                ) : yearly.map((row) => (
+                  <tr key={row.year}>
+                    <td>{row.year}</td>
+                    <td className={row.avgReturn >= 0 ? 'positive' : 'negative'}>{signedPercentText(row.avgReturn)}</td>
+                    <td>{percentText(row.winRate)}</td>
+                    <td>{numberText(row.count)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div className="formTitle">交易层验证</div>
+      <div className="cardHint">通用策略没有日内触价条件，这里按每个测试截面 TopN 等权持有 20 日超额做近似验证；真实执行仍以推荐页条件单价格为准。</div>
+      <div className="modelEvalTableWrap">
+        <table className="modelEvalTable">
+          <thead>
+            <tr>
+              <th>规则</th>
+              <th>截面/信号</th>
+              <th>胜率</th>
+              <th>单期超额</th>
+              <th>累计近似</th>
+              <th>最大回撤</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tradeRows.length === 0 ? (
+              <tr><td colSpan={6}>暂无交易层验证</td></tr>
+            ) : tradeRows.map((row) => (
+              <tr key={row.label}>
+                <td>{row.label}</td>
+                <td>{row.periods}/{row.signals}</td>
+                <td>{percentText(row.winRate)}</td>
+                <td className={row.avgReturn >= 0 ? 'positive' : 'negative'}>{signedPercentText(row.avgReturn)}</td>
+                <td className={row.compoundReturn >= 0 ? 'positive' : 'negative'}>{signedPercentText(row.compoundReturn)}</td>
+                <td className={row.maxDrawdown >= -0.2 ? 'positive' : 'negative'}>{signedPercentText(row.maxDrawdown)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="limitModelEvalGrid">
+        <div>
+          <div className="formTitle">最近评测切面</div>
+          <div className="limitModelList">
+            {recentRows.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无最近评测切面</div> : recentRows.map((row) => (
+              <div className="limitModelSliceRow" key={row.date}>
+                <b>{formatTradeDate(row.date)}</b>
+                <span>候选 {row.count} · Top10超额 {signedPercentText(row.topReturn)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="formTitle">重要特征</div>
+          <div className="limitModelFeatureList">
+            {modelFeatures.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无特征重要性</div> : modelFeatures.slice(0, 8).map((row) => (
+              <span key={`${row.run_id}-${row.feature}`}>{row.rank_no}. {featureDisplayName(row.feature)}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {stressYears.length > 0 ? (
+        <>
+          <div className="subTableTitle">压力年份</div>
+          <StressTable rows={stressYears.slice(0, 8)} emptyText="暂无年度压力分段" compact />
+        </>
+      ) : null}
+    </section>
+  )
+}
+
+function buildFactorPredictionTiers(rows: FactorModelPrediction[]) {
+  return [1, 3, 5, 10].map((topN) => {
+    const selected = topRowsPerDate(rows, topN)
+    return {
+      label: `Top${topN}`,
+      count: selected.length,
+      avgReturn: avg(selected.map((row) => row.realized_return)),
+      winRate: avg(selected.map((row) => row.realized_return > 0 ? 1 : 0)),
+    }
+  }).filter((row) => row.count > 0)
+}
+
+function buildFactorYearRows(rows: FactorModelPrediction[]) {
+  const years = Array.from(new Set(rows.map((row) => row.test_year).filter(Number.isFinite))).sort((a, b) => a - b)
+  return years.map((year) => {
+    const selected = topRowsPerDate(rows.filter((row) => row.test_year === year), 10)
+    return {
+      year,
+      count: selected.length,
+      avgReturn: avg(selected.map((row) => row.realized_return)),
+      winRate: avg(selected.map((row) => row.realized_return > 0 ? 1 : 0)),
+    }
+  }).filter((row) => row.count > 0)
+}
+
+function buildFactorTradeValidation(rows: FactorModelPrediction[]) {
+  return [3, 5, 10].map((topN) => {
+    const grouped = groupPredictionsByDate(rows)
+    const returns = Array.from(grouped.values()).map((items) => avg(items.sort((a, b) => b.pred_score - a.pred_score).slice(0, topN).map((row) => row.realized_return))).filter(Number.isFinite)
+    const equity = returns.reduce<{ peak: number; value: number; maxDrawdown: number }>((state, item) => {
+      const value = state.value * (1 + item)
+      const peak = Math.max(state.peak, value)
+      const drawdown = peak > 0 ? value / peak - 1 : 0
+      return { value, peak, maxDrawdown: Math.min(state.maxDrawdown, drawdown) }
+    }, { value: 1, peak: 1, maxDrawdown: 0 })
+    return {
+      label: `Top${topN} / 20日持有`,
+      periods: returns.length,
+      signals: returns.length * topN,
+      winRate: avg(returns.map((item) => item > 0 ? 1 : 0)),
+      avgReturn: avg(returns),
+      compoundReturn: equity.value - 1,
+      maxDrawdown: equity.maxDrawdown,
+    }
+  }).filter((row) => row.periods > 0)
+}
+
+function topRowsPerDate(rows: FactorModelPrediction[], topN: number) {
+  return Array.from(groupPredictionsByDate(rows).values()).flatMap((items) => items.sort((a, b) => b.pred_score - a.pred_score).slice(0, topN))
+}
+
+function groupPredictionsByDate(rows: FactorModelPrediction[]) {
+  const grouped = new Map<string, FactorModelPrediction[]>()
+  rows.forEach((row) => {
+    const items = grouped.get(row.trade_date) || []
+    items.push(row)
+    grouped.set(row.trade_date, items)
+  })
+  return grouped
+}
+
 function StressTable({ rows, emptyText, compact = false }: { rows: FactorStressResult[], emptyText: string, compact?: boolean }) {
   return (
     <table className={compact ? 'compactTable' : ''}>
@@ -1093,6 +1367,39 @@ function buildPipelineSteps(input: {
 
 function taskRows(task?: TaskDTO) {
   return Array.isArray(task?.summary?.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
+}
+
+function isLatestInferenceTask(task: TaskDTO) {
+  const profile = String(task.params?.profile || '')
+  const stage = String(task.params?.stage || task.subtask_key || '')
+  return profile === 'inference' || stage === 'latest_inference' || task.name.includes('重新推理')
+}
+
+function RunInferenceProgress({ parentTask, childTask }: { parentTask: TaskDTO; childTask?: TaskDTO }) {
+  const task = childTask || parentTask
+  if (parentTask.status === 'success' || task.status === 'success') return null
+  const rows = taskRows(parentTask)
+  const running = rows.find((row) => row.task_status === 'running' || row.status === 'running') || {}
+  const progress = Math.max(0, Math.min(100, Math.round((Number(task.progress) || 0) * 100)))
+  const stageName = String(task.summary.name || task.summary.stage_name || running.name || running.stage_name || '最新截面推理')
+  const message = factorTaskMessage(task, running)
+  const detail = task.status === 'success'
+    ? '已完成'
+    : task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled'
+      ? statusLabel(task.status)
+      : `${progress}% · ${statusLabel(task.status)}`
+  return (
+    <div className="signalProgress signalProgressStandalone">
+      <div className="signalProgressHeader">
+        <span>{parentTask.name} · {stageName}</span>
+        <span>{detail}</span>
+      </div>
+      <div className="signalProgressBar">
+        <div className="signalProgressBarFill" style={{ width: `${task.status === 'success' ? 100 : progress}%` }} />
+      </div>
+      {message ? <div className={task.status === 'failed' ? 'errorText' : 'cardHint'}>{message}</div> : null}
+    </div>
+  )
 }
 
 function inferredStageStatus(
@@ -1210,6 +1517,12 @@ function percentText(value: unknown, digits = 2) {
   return Number.isFinite(n) ? `${(n * 100).toFixed(digits)}%` : '-'
 }
 
+function signedPercentText(value: unknown, digits = 2) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return `${n > 0 ? '+' : ''}${(n * 100).toFixed(digits)}%`
+}
+
 function percentFromPct(value: unknown, signed = false) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
@@ -1240,6 +1553,10 @@ function generalStrategyPlan(row: FactorLatestPrediction, index: number): Genera
     stop: price * (1 - stopBand),
     shares: roundLotShares(buy, cash)
   }
+}
+
+function Mini({ label, value, valueClassName = '' }: { label: string; value: string; valueClassName?: string }) {
+  return <div className="miniMetric compact"><span>{label}</span><b className={valueClassName}>{value}</b></div>
 }
 
 function observationStatusText(status: string) {
@@ -1325,6 +1642,321 @@ function baseFactor(feature: string) {
   return feature.replace(/_neutral$/, '').replace(/_rank$/, '')
 }
 
+function FactorAutoTunePanel({
+  runs,
+  trials,
+  task,
+  busy,
+  preset,
+  onPresetChange,
+  onStart
+}: {
+  runs: FactorAutoTuneRun[]
+  trials: FactorAutoTuneTrial[]
+  task?: TaskDTO
+  busy: boolean
+  preset: AutoTunePresetKey
+  onPresetChange: (preset: AutoTunePresetKey) => void
+  onStart: () => void
+}) {
+  const latest = runs[0]
+  const summary = parseModelSummary(latest?.summary_json)
+  const presetCfg = autoTunePresets[preset]
+  const bestTrial = trials.find((trial) => trial.trial_id === latest?.best_trial_id) || trials.find((trial) => trial.passed) || trials[0]
+  const running = task?.status === 'running' || task?.status === 'queued' || task?.status === 'created'
+  const progress = Math.round((task?.progress || 0) * 100)
+  const trialCount = Number(summary.trial_count ?? trials.length)
+  const plannedTrials = Number(summary.planned_trials ?? presetCfg.rounds * presetCfg.trials)
+  const skippedExisting = Number(summary.skipped_existing_count ?? 0)
+  const historicalExplored = Number(summary.historical_explored_count ?? 0)
+  return (
+    <section className="detailCard modelVersionCompare">
+      <div className="tableHeader">
+        <div>
+          <div className="sectionLabel">AUTOTUNE LOOP</div>
+          <h3>自动训练调参</h3>
+          <p className="recommendationMeta">程序按已探索参数集合继续搜索，重复组合会跳过；DeepSeek 会读取历史 trial 复盘下一轮方向。</p>
+        </div>
+        <div className="tableHeaderRight">
+          <div className="autoTunePresetGroup" role="group" aria-label="自动调参搜索预算">
+            {(Object.keys(autoTunePresets) as AutoTunePresetKey[]).map((key) => (
+              <button
+                key={key}
+                className={preset === key ? 'active' : ''}
+                onClick={() => onPresetChange(key)}
+                disabled={busy || running}
+                title={`${autoTunePresets[key].rounds} 轮 x ${autoTunePresets[key].trials} 次，已探索参数会跳过`}
+              >
+                {autoTunePresets[key].label}
+              </button>
+            ))}
+          </div>
+          <button className="primaryButton startButton" onClick={onStart} disabled={busy || running} title={`基于最新通用模型做 ${presetCfg.rounds} 轮 x ${presetCfg.trials} 次受控调参`}>
+            <BrainCircuit size={16} />
+            自动调参
+          </button>
+        </div>
+      </div>
+      {task ? (
+        <div className="signalProgress signalProgressStandalone">
+          <div className="signalProgressHeader">
+            <span>{task.summary?.stage as string || statusLabel(task.status)} · {task.summary?.name as string || task.name}</span>
+            <span>{running ? `${progress}%` : statusLabel(task.status)}</span>
+          </div>
+          <div className="signalProgressBar">
+            <div className="signalProgressBarFill" style={{ width: `${running ? Math.max(progress, 8) : 100}%` }} />
+          </div>
+        </div>
+      ) : null}
+      <div className="metricStrip">
+        <div className={`metricCard ${latest?.status === 'success' ? 'good' : latest?.status === 'failed' ? 'bad' : ''}`}>
+          <span>最近结论</span>
+          <b>{latest ? autoTuneRunStatusText(latest) : '未运行'}</b>
+          <em>{latest ? shortRunID(latest.run_id) : '等待自动调参'}</em>
+        </div>
+        <div className={`metricCard ${bestTrial?.passed ? 'good' : ''}`}>
+          <span>最佳 Trial</span>
+          <b>{bestTrial?.trial_id || '—'}</b>
+          <em>{bestTrial ? `${bestTrial.admission || '无准入'} · ${decimalText(bestTrial.admission_score, 2)}` : '暂无结果'}</em>
+        </div>
+        <div className="metricCard">
+          <span>收益 / 回撤</span>
+          <b>{bestTrial ? signedPercentText(bestTrial.annual_return) : '—'}</b>
+          <em>最大回撤 {bestTrial ? signedPercentText(bestTrial.max_drawdown) : '—'}</em>
+        </div>
+        <div className={`metricCard ${bestTrial?.stress_bad_event_count ? 'bad' : bestTrial ? 'good' : ''}`}>
+          <span>压力校验</span>
+          <b>{bestTrial ? (bestTrial.stress_bad_event_count ? '未过' : '通过') : '—'}</b>
+          <em>{bestTrial ? autoTuneRiskText(bestTrial) : '等待 trial'}</em>
+        </div>
+        <div className="metricCard">
+          <span>搜索进度</span>
+          <b>{trialCount ? `${numberText(trialCount)} / ${numberText(plannedTrials)}` : '—'}</b>
+          <em>历史 {numberText(historicalExplored)}，跳过重复 {numberText(skippedExisting)}</em>
+        </div>
+      </div>
+      <div className="autoTuneGridWrap">
+        <div className="autoTuneGrid" role="table" aria-label="自动调参 trial 表格">
+          <div className="autoTuneGridRow autoTuneGridHead" role="row">
+            {['Trial', '状态', '分数', '年化收益', '总收益', '最大回撤', '压力', '原因', 'DeepSeek', '参数'].map((label) => (
+              <div className="autoTuneGridCell" role="columnheader" key={label}>{label}</div>
+            ))}
+          </div>
+          {trials.length === 0 ? (
+            <div className="autoTuneGridEmpty">暂无自动调参记录，点击自动调参后会逐个 trial 展示结果</div>
+          ) : trials.map((trial) => (
+            <div className="autoTuneGridRow" role="row" key={`${trial.run_id}-${trial.trial_id}`}>
+              <div className="autoTuneGridCell autoTuneTrialCell" role="cell">
+                <b>{trial.trial_id}</b>
+                <span title={trial.eval_run_id}>{shortRunID(trial.eval_run_id)}</span>
+              </div>
+              <div className="autoTuneGridCell autoTuneStatusCell" role="cell">
+                <span className={`badge ${admissionBadge(trial.admission)}`}>{trial.admission || '-'}</span>
+                <em>{trial.source === 'deepseek' ? 'DeepSeek' : '规则'}</em>
+              </div>
+              <div className="autoTuneGridCell autoTuneNumberCell" role="cell">{decimalText(trial.admission_score, 2)}</div>
+              <div className={`autoTuneGridCell autoTuneNumberCell ${trial.annual_return >= 0 ? 'positive' : 'negative'}`} role="cell">{signedPercentText(trial.annual_return)}</div>
+              <div className={`autoTuneGridCell autoTuneNumberCell ${trial.total_return >= 0 ? 'positive' : 'negative'}`} role="cell">{signedPercentText(trial.total_return)}</div>
+              <div className="autoTuneGridCell autoTuneNumberCell negative" role="cell">{signedPercentText(trial.max_drawdown)}</div>
+              <div className="autoTuneGridCell autoTuneClamp" role="cell" title={autoTuneRiskText(trial)}>{autoTuneRiskText(trial)}</div>
+              <div className="autoTuneGridCell autoTuneClamp" role="cell" title={trial.reason || ''}>{trial.reason || '—'}</div>
+              <div className="autoTuneGridCell autoTuneClamp" role="cell" title={compactLLMText(trial.llm_direction_json)}>{compactLLMText(trial.llm_direction_json)}</div>
+              <div className="autoTuneGridCell autoTuneParamsCell" role="cell"><code>{compactParamsText(trial.params_json)}</code></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function autoTuneRiskText(trial: FactorAutoTuneTrial) {
+  const risks = []
+  if (trial.stress_bad_event_count) risks.push(`${trial.stress_bad_event_count}个压力段`)
+  if (trial.stress_crash_state_failed) risks.push('股灾失败')
+  if (trial.stress_weak_drawdown_failed) risks.push('弱市失败')
+  return risks.length ? risks.join(' / ') : '压力通过'
+}
+
+function autoTuneRunStatusText(run: FactorAutoTuneRun) {
+  const summary = parseModelSummary(run.summary_json)
+  const reason = String(summary.reason || '')
+  if (run.status === 'success') return '已找到'
+  if (reason === 'search_space_exhausted') return '参数已探完'
+  if (reason === 'no_passed_trial') return '搜索未收敛'
+  return statusLabel(run.status)
+}
+
+function compactParamsText(raw: string) {
+  try {
+    const data = JSON.parse(raw || '{}') as Record<string, unknown>
+    const selection = data.selection as Record<string, unknown> | undefined
+    const position = data.position as Record<string, unknown> | undefined
+    return `rank ${decimalText(selection?.min_pred_rank, 3)} / ${numberText(position?.n_holdings)}只 / 单票${percentText(position?.max_single_weight)}`
+  } catch {
+    return raw ? raw.slice(0, 48) : '-'
+  }
+}
+
+function compactLLMText(raw: string) {
+  try {
+    const data = JSON.parse(raw || '{}') as Record<string, unknown>
+    const next = Array.isArray(data.next_direction) ? data.next_direction.filter(Boolean).join(' / ') : ''
+    const analysis = String(data.analysis_md || '')
+    const error = String(data.error || '')
+    return next || analysis.slice(0, 80) || error || '-'
+  } catch {
+    return '-'
+  }
+}
+
+function FactorAdmissionPanel({
+  rows,
+  latestPredictionDate
+}: {
+  rows: FactorAdmissionComparison[]
+  latestPredictionDate: string
+}) {
+  const admissionRows = rows.slice(0, 10).map((row) => buildFactorAdmission(row, latestPredictionDate))
+  const enabled = admissionRows.find((row) => row.active)
+  const bestGoverned = admissionRows.reduce<FactorAdmissionView | null>((memo, row) => {
+    if (!row.canEnable) return memo
+    return !memo || row.score > memo.score ? row : memo
+  }, null)
+  const bestScored = admissionRows.reduce<FactorAdmissionView | null>((memo, row) => {
+    return !memo || row.score > memo.score ? row : memo
+  }, null)
+  const current = enabled || bestGoverned || bestScored || admissionRows[0]
+  return (
+    <section className="detailCard modelVersionCompare">
+      <div className="tableHeader">
+        <div>
+          <div className="sectionLabel">ADMISSION COMPARE</div>
+          <h3>模型版本准入对比</h3>
+        </div>
+        <span>{enabled ? `启用中 ${shortRunID(enabled.row.run_id)}` : bestGoverned ? `建议启用 ${shortRunID(bestGoverned.row.run_id)}` : '暂无治理通过版本'}</span>
+      </div>
+      <div className="metricStrip">
+        <div className={`metricCard ${enabled?.canEnable ? 'good' : enabled ? 'bad' : ''}`}>
+          <span>当前启用</span>
+          <b>{enabled ? enabled.admission : '暂无'}</b>
+          <em>{enabled?.row.run_id || '未配置可用版本'}</em>
+        </div>
+        <div className="metricCard">
+          <span>最高准入分</span>
+          <b>{bestScored ? decimalText(bestScored.score, 2) : '—'}</b>
+          <em>{bestScored ? `${bestScored.admission} · ${shortRunID(bestScored.row.run_id)}` : '等待训练结果'}</em>
+        </div>
+        <div className={`metricCard ${current?.needsRefresh ? 'bad' : 'good'}`}>
+          <span>最新截面</span>
+          <b>{current?.needsRefresh ? '需更新' : '已覆盖'}</b>
+          <em>{current ? `版本 ${current.cutoffText} / 最新 ${formatTradeDate(latestPredictionDate)}` : '暂无准入记录'}</em>
+        </div>
+        <div className={`metricCard ${current?.complete ? 'good' : 'bad'}`}>
+          <span>训练完整性</span>
+          <b>{current?.complete ? '完整' : '不完整'}</b>
+          <em>{current?.failure || '有效期、指标、压力和截面均通过'}</em>
+        </div>
+      </div>
+      <div className="modelVersionTableWrap">
+        <table className="modelVersionTable">
+          <thead>
+            <tr>
+              <th>版本</th>
+              <th>模型/治理</th>
+              <th>完整性</th>
+              <th>分数</th>
+              <th>核心收益</th>
+              <th>辅助指标</th>
+              <th>风险</th>
+              <th>排序指标</th>
+              <th>训练区间</th>
+              <th>评估员意见</th>
+            </tr>
+          </thead>
+          <tbody>
+            {admissionRows.length === 0 ? (
+              <tr><td colSpan={10} className="mutedText">暂无模型准入记录</td></tr>
+            ) : admissionRows.map((item) => (
+              <tr key={`${item.row.run_id}-${item.row.generated_at}`}>
+                <td>
+                  <b>{item.active ? '已启用' : '候选版本'} · {shortRunID(item.row.run_id)}</b>
+                  {item.active ? <span className="versionActiveTag">启用中</span> : null}
+                  <div className="mono">{item.row.generated_at || '—'}</div>
+                </td>
+                <td><span className={`badge ${admissionBadge(item.admission)}`}>{item.admission}</span></td>
+                <td><span className={`badge ${item.complete ? 'success' : 'failed'}`}>{item.complete ? '完整' : '不完整'}</span></td>
+                <td>{decimalText(item.score, 2)}</td>
+                <td className={item.row.annual_return >= 0 ? 'positive' : 'negative'}><b>年化</b><div>{percentText(item.row.annual_return)}</div></td>
+                <td className={item.row.total_return >= 0 ? 'positive' : 'negative'}><b>总收益</b><div>{percentText(item.row.total_return)}</div></td>
+                <td className={item.row.max_drawdown >= -0.2 ? 'positive' : 'negative'}><b>最大回撤</b><div>{percentText(item.row.max_drawdown)}</div></td>
+                <td><b>Sharpe</b><div>{decimalText(item.row.sharpe, 2)}</div></td>
+                <td>{dateRangeText(item.row.effective_start, item.row.effective_end)}</td>
+                <td className="versionFailureText">{item.failure || item.row.reason || '训练日期、截面、收益回撤和压力检查通过，可进入候选启用。'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+type FactorAdmissionView = {
+  row: FactorAdmissionComparison
+  admission: string
+  active: boolean
+  complete: boolean
+  canEnable: boolean
+  needsRefresh: boolean
+  score: number
+  cutoffText: string
+  failure: string
+}
+
+function buildFactorAdmission(row: FactorAdmissionComparison, latestPredictionDate: string): FactorAdmissionView {
+  const latest = normalizeTradeDate(latestPredictionDate)
+  const effectiveEnd = normalizeTradeDate(row.effective_end)
+  const needsRefresh = Boolean(latest && effectiveEnd && effectiveEnd < latest)
+  const issues: string[] = []
+  if (!row.run_id) issues.push('缺少版本号')
+  if (!row.effective_start || !row.effective_end) issues.push('缺少训练/有效区间')
+  if (!row.generated_at) issues.push('缺少生成时间')
+  if (!Number.isFinite(row.admission_score)) issues.push('缺少准入分')
+  if (!Number.isFinite(row.annual_return) || !Number.isFinite(row.max_drawdown) || !Number.isFinite(row.sharpe)) issues.push('核心绩效指标不完整')
+  if (row.stress_crash_state_failed || row.stress_weak_drawdown_failed || row.stress_bad_event_count > 0) issues.push(`压力失败：${admissionRiskText(row)}`)
+  if (needsRefresh) issues.push('需要用最新截面重新训练/推理')
+  const complete = issues.length === 0
+  const score = Math.max(0, Math.min(100, Number(row.admission_score || 0)))
+  const declaredEnable = row.admission.includes('启用') || row.admission.includes('准入')
+  const metricUsable = score >= 45 && row.annual_return > 0 && row.total_return > 0 && row.max_drawdown > -0.3 && row.sharpe > 0
+  const canEnable = complete && declaredEnable && row.annual_return > 0 && row.max_drawdown > -0.22 && row.sharpe > 0
+  const admission = canEnable
+    ? row.admission
+    : complete
+      ? '继续观察'
+      : metricUsable
+        ? '治理未完整'
+        : '不可启用'
+  return {
+    row,
+    admission,
+    active: canEnable && declaredEnable,
+    complete,
+    canEnable,
+    needsRefresh,
+    score,
+    cutoffText: row.effective_end ? formatTradeDate(row.effective_end) : '—',
+    failure: issues.slice(0, 3).join(' / ')
+  }
+}
+
+function normalizeTradeDate(value?: string) {
+  if (!value) return ''
+  const compact = value.replace(/-/g, '').slice(0, 8)
+  return /^\d{8}$/.test(compact) ? compact : ''
+}
+
 function shortRunID(runID: string) {
   return runID.replace(/^eval_/, '').replace(/^ml_factor_/, '')
 }
@@ -1336,7 +1968,7 @@ function dateRangeText(start?: string, end?: string) {
 
 function admissionBadge(admission: string) {
   if (admission === '通过' || admission === '可准入' || admission === '可启用' || admission === '可模拟') return 'success'
-  if (admission === '继续观察' || admission === '观察') return 'running'
+  if (admission === '继续观察' || admission === '观察' || admission === '治理未完整') return 'running'
   return 'failed'
 }
 

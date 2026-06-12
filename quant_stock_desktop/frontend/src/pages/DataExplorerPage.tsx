@@ -6,10 +6,13 @@ import {
   getDataUpdateStatus,
   emptyRunStatus,
   listDatasetUpdateStatus,
+  checkExternalDependencies,
   type MarketDataFile,
   type RunStatus,
   type DatasetUpdateStatus,
+  type ExternalDependencyStatus,
 } from '../services/app'
+import { formatDate } from '../components/format'
 import { DataHealthPanel } from '../features/data/DataHealthPanel'
 import { DatasetCards } from '../features/data/DatasetCards'
 import { buildJobHealth, jobMetas, type DatasetKey } from '../features/data/dataUtils'
@@ -28,8 +31,22 @@ export function DataExplorerPage() {
   const [phase, setPhase] = useState('all')
   const [updateStatus, setUpdateStatus] = useState<RunStatus | null>(null)
   const [datasetStatuses, setDatasetStatuses] = useState<DatasetUpdateStatus[]>([])
+  const [dependencies, setDependencies] = useState<ExternalDependencyStatus[]>([])
+  const [dependencyLoading, setDependencyLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollStartedAtRef = useRef(0)
+
+  const loadDependencies = useCallback(async () => {
+    setDependencyLoading(true)
+    try {
+      setDependencies(await checkExternalDependencies())
+    } catch (error) {
+      console.error('[data] check external dependencies failed', error)
+      setDependencies([])
+    } finally {
+      setDependencyLoading(false)
+    }
+  }, [])
 
   const load = async () => {
     try {
@@ -53,7 +70,8 @@ export function DataExplorerPage() {
 
   useEffect(() => {
     load()
-  }, [])
+    loadDependencies()
+  }, [loadDependencies])
 
   const stopPoll = useCallback(() => {
     if (pollRef.current) {
@@ -125,6 +143,7 @@ export function DataExplorerPage() {
 
   return (
     <div className="taskPage">
+      <ExternalDependencyPanel items={dependencies} loading={dependencyLoading} onRefresh={loadDependencies} />
       <DatasetCards activeDataset={activeDataset} files={files} openDataset={setActiveDataset} />
       <DataHealthPanel
         items={jobHealth}
@@ -139,6 +158,58 @@ export function DataExplorerPage() {
       />
     </div>
   )
+}
+
+function ExternalDependencyPanel({
+  items,
+  loading,
+  onRefresh,
+}: {
+  items: ExternalDependencyStatus[]
+  loading: boolean
+  onRefresh: () => void
+}) {
+  const ready = items.filter((item) => item.state === 'ready').length
+  const checkedAt = items.map((item) => item.checked_at).sort().pop() || ''
+  return (
+    <div className="tableCard dependencyCard">
+      <div className="tableHeader">
+        <div>
+          <div className="formTitle">外部依赖监控</div>
+          <div className="cardHint">数据库、行情源、模型接口和通知通道的可用性；企业微信默认只检查配置，不主动发消息。</div>
+        </div>
+        <div className="taskActions">
+          <span className="dependencySummary">{items.length ? `${ready}/${items.length} 可用` : '未检测'}</span>
+          <button className="secondaryButton" onClick={onRefresh} disabled={loading}>{loading ? '检测中…' : '重新检测'}</button>
+        </div>
+      </div>
+      <div className="dependencyGrid">
+        {items.length === 0 && (
+          <div className="dependencyEmpty">{loading ? '正在检测外部依赖...' : '暂无检测结果'}</div>
+        )}
+        {items.map((item) => (
+          <div className={`dependencyItem ${item.state}`} key={item.key}>
+            <div className="dependencyItemTop">
+              <span>{item.category}</span>
+              <b>{dependencyStateLabel(item.state)}</b>
+            </div>
+            <strong>{item.name}</strong>
+            <p title={item.message}>{item.message || '—'}</p>
+            <div className="dependencyMeta">
+              <span>{item.latency_ms > 0 ? `${item.latency_ms} ms` : '—'}</span>
+              <span>{formatDate(item.checked_at || checkedAt) || '—'}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function dependencyStateLabel(state: string) {
+  if (state === 'ready') return '可用'
+  if (state === 'missing') return '缺配置'
+  return '异常'
 }
 
 function upsertDatasetStatus(items: DatasetUpdateStatus[], dataset: string, state: string): DatasetUpdateStatus[] {

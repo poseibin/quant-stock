@@ -50,7 +50,7 @@ lh/
 - `market_limit_signal_evaluations` — 涨停/横盘信号评估汇总，记录 T+1/T+3/T+5/T+10 收益、回撤、命中率等
 - `market_limit_signal_tm_slices` — 历史切面时光机，按交易日聚合当时热点、涨停扩散、候选收益和回撤
 
-> 当前桌面和 Python 均按 **MySQL-only** 路径运行，不再使用 SQLite 作为执行后端。旧 `meta.db` 仅作为历史迁移痕迹或本地旧数据参考，不参与新流程。
+> 当前桌面和 Python 均按 **MySQL-only** 路径运行，业务元数据、任务状态、推荐与评估结果统一写入 MySQL。
 
 ---
 

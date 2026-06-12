@@ -288,6 +288,7 @@ func normalize(settings Settings) Settings {
 		settings.ExitRules = defaultExitRules()
 	}
 	settings.GovernanceRules = mergeAnyMap(defaultGovernanceRules(), settings.GovernanceRules)
+	settings.StrategySchedule = normalizeStrategySchedule(settings.StrategySchedule)
 	return settings
 }
 
@@ -312,7 +313,66 @@ func cloneSettings(settings Settings) Settings {
 	settings.PortfolioRisk = cloneAnyMap(settings.PortfolioRisk)
 	settings.ExitRules = cloneAnyMap(settings.ExitRules)
 	settings.GovernanceRules = cloneAnyMap(settings.GovernanceRules)
+	settings.StrategySchedule = cloneStrategySchedule(settings.StrategySchedule)
 	return settings
+}
+
+func normalizeStrategySchedule(schedule StrategyScheduleSettings) StrategyScheduleSettings {
+	schedule.TimeOfDay = strings.TrimSpace(schedule.TimeOfDay)
+	if schedule.TimeOfDay == "" || schedule.TimeOfDay == "15:20" {
+		schedule.TimeOfDay = "22:00"
+	}
+	if len(schedule.Weekdays) == 0 {
+		schedule.Weekdays = []int{1, 2, 3, 4, 5}
+	}
+	if schedule.Targets == nil {
+		schedule.Targets = map[string]bool{
+			"t0":       true,
+			"limit_up": true,
+			"breakout": true,
+			"factor":   false,
+		}
+	} else {
+		defaults := map[string]bool{"t0": true, "limit_up": true, "breakout": true, "factor": false}
+		targets := make(map[string]bool, len(defaults))
+		for key, value := range defaults {
+			targets[key] = value
+		}
+		for key, value := range schedule.Targets {
+			targets[strings.TrimSpace(key)] = value
+		}
+		schedule.Targets = targets
+	}
+	schedule.WechatWebhook = strings.TrimSpace(schedule.WechatWebhook)
+	cleanUsers := make([]string, 0, len(schedule.WechatUsers))
+	seen := map[string]bool{}
+	for _, user := range schedule.WechatUsers {
+		user = strings.Trim(strings.TrimSpace(user), "@")
+		if user == "" || seen[user] {
+			continue
+		}
+		seen[user] = true
+		cleanUsers = append(cleanUsers, user)
+	}
+	schedule.WechatUsers = cleanUsers
+	return schedule
+}
+
+func cloneStrategySchedule(schedule StrategyScheduleSettings) StrategyScheduleSettings {
+	if schedule.Weekdays != nil {
+		schedule.Weekdays = append([]int(nil), schedule.Weekdays...)
+	}
+	if schedule.Targets != nil {
+		targets := make(map[string]bool, len(schedule.Targets))
+		for key, value := range schedule.Targets {
+			targets[key] = value
+		}
+		schedule.Targets = targets
+	}
+	if schedule.WechatUsers != nil {
+		schedule.WechatUsers = append([]string(nil), schedule.WechatUsers...)
+	}
+	return schedule
 }
 
 func mergeAnyMap(defaults map[string]any, current map[string]any) map[string]any {
@@ -445,18 +505,29 @@ func defaultStrategies() map[string]StrategySettings {
 			Enabled:   false,
 			Weight:    0.10,
 			Rebalance: "monthly",
-			Universe:  map[string]any{"exclude_bj": true, "min_total_mv": 2000000000, "max_total_mv": 120000000000, "min_amount": 30000000},
+			Universe:  map[string]any{"exclude_restricted": true, "min_total_mv": 2000000000, "max_total_mv": 120000000000, "min_amount": 30000000},
 			Filters: map[string]any{
 				"exclude_st":     true,
 				"max_day_return": 0.095,
 				"market_regime": map[string]any{
-					"continuous": false, "trend_window": 60, "breadth_window": 20,
+					"continuous": true, "trend_window": 60, "breadth_window": 20,
 					"drawdown_window": 120, "volatility_window": 20,
-					"min_breadth": 0.45, "normal_exposure": 1.0, "weak_exposure": 0.45, "bear_exposure": 0.25,
+					"min_breadth": 0.50, "normal_exposure": 1.0, "weak_exposure": 0.30, "bear_exposure": 0.08,
+					"crisis_guard": true, "crisis_exposure": 0.0, "crisis_drawdown": -0.10, "crisis_short_return": -0.045, "crisis_breadth": 0.34,
+					"risk_state": map[string]any{"enabled": true, "normal_exposure": 1.0, "weak_exposure": 0.25, "post_crash_repair_exposure": 0.35, "liquidity_squeeze_exposure": 0.0, "crash_exposure": 0.0},
 				},
+				"stress_controls": map[string]any{
+					"enabled": true, "states": []any{"weak", "crash", "liquidity_squeeze"},
+					"stress_min_amount_mult": 1.8, "max_ret20": 0.18, "max_vol20": 0.55,
+					"max_amount_chg20": 2.0, "max_turnover_rate": 12.0,
+					"ret20_penalty": 0.28, "vol20_penalty": 0.12, "amount_chg20_penalty": 0.03,
+					"turnover_penalty": 0.12, "weak_base_penalty": 0.03, "crash_drawdown_penalty": 0.18,
+				},
+				"crash_gate": map[string]any{"enabled": true, "lookback_days": 20, "crash_states": []any{"crash", "liquidity_squeeze"}, "cooldown_days": 10},
+				"crash_exit": map[string]any{"enabled": true, "trigger_states": []any{"crash", "liquidity_squeeze"}, "cooldown_days": 10},
 			},
-			Selection: map[string]any{"run_id": "fr_full_105_2010_2025_20260606", "min_pred_rank": 0.96},
-			Position:  map[string]any{"n_holdings": 30, "max_single_weight": 0.04, "max_industry_weight": 0.15},
+			Selection: map[string]any{"run_id": "fr_full_105_2010_2025_20260606", "min_pred_rank": 0.97},
+			Position:  map[string]any{"n_holdings": 24, "max_single_weight": 0.035, "max_industry_weight": 0.12},
 		},
 		"multi_factor_composite": {
 			Label: "多因子综合", Enabled: true, Weight: 0.18, Rebalance: "monthly",

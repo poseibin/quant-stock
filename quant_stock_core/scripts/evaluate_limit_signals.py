@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 from common.infra import status as run_status
 from common.infra.db import add_column, connect_db, table_columns, upsert_sql, write_transaction
+from common.utils.market import price_limit_threshold_pct
 
 
 TASK_NAME = "limit_signal_evaluation"
@@ -52,15 +53,7 @@ def safe_float(value: object, default: float = 0.0) -> float:
 
 
 def limit_threshold(ts_code: str, name: str) -> float:
-    upper_name = (name or "").upper()
-    if "ST" in upper_name:
-        return 4.5
-    code = ts_code or ""
-    if code.startswith("688") or code.startswith("300"):
-        return 19.0
-    if code.startswith("8") or code.startswith("4") or ".BJ" in code:
-        return 28.0
-    return 9.2
+    return price_limit_threshold_pct(ts_code, name)
 
 
 def ensure_tables(conn) -> None:
@@ -159,8 +152,8 @@ def ensure_tables(conn) -> None:
             add_column(conn, "market_limit_signal_tm_slices", name, ddl)
 
 
-def load_predictions(db_path: Path, limit: int) -> list[Prediction]:
-    with connect_db(db_path) as conn:
+def load_predictions(limit: int) -> list[Prediction]:
+    with connect_db(None) as conn:
         ensure_tables(conn)
         rows = conn.execute(
             """SELECT id, signal_type, strategy_version, parameter_key, ts_code, name, industry,
@@ -440,7 +433,7 @@ def slice_score(hit_rate: float, limit_up_hit_rate: float, avg_target_return: fl
     )
 
 
-def write_results(db_path: Path, data_path: Path, predictions: list[Prediction], results: dict[str, dict[str, object]]) -> tuple[int, int]:
+def write_results(data_path: Path, predictions: list[Prediction], results: dict[str, dict[str, object]]) -> tuple[int, int]:
     ts = now_text()
     evaluated = 0
     slice_predictions: dict[tuple[str, str, str, str], list[Prediction]] = {}
@@ -448,7 +441,7 @@ def write_results(db_path: Path, data_path: Path, predictions: list[Prediction],
         key = (pred.signal_type, pred.strategy_version, pred.parameter_key, pred.signal_date)
         slice_predictions.setdefault(key, []).append(pred)
     market_context = load_market_context(data_path, sorted({p.signal_date for p in predictions if p.signal_date}))
-    with write_transaction(db_path) as conn:
+    with write_transaction(None) as conn:
         ensure_tables(conn)
         for pred in predictions:
             result = results.get(pred.id)
@@ -633,15 +626,13 @@ def write_results(db_path: Path, data_path: Path, predictions: list[Prediction],
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", default=os.getenv("DATA_ROOT", "data_store"))
-    parser.add_argument("--db-path", default=os.getenv("DESKTOP_DB_PATH", ""))
     parser.add_argument("--limit", type=int, default=5000)
     args = parser.parse_args()
-    db_path = Path(args.db_path or (Path(args.data_path) / "meta.db")).expanduser().resolve()
     data_path = Path(args.data_path).expanduser().resolve()
     try:
         run_status.begin(TASK_NAME)
         run_status.progress(TASK_NAME, 1, 100, "load", "读取预测快照")
-        predictions = load_predictions(db_path, args.limit)
+        predictions = load_predictions(args.limit)
         if not predictions:
             run_status.done(TASK_NAME, "暂无涨停预测快照，先刷新涨停推荐或横盘突发预警")
             return 0
@@ -659,7 +650,7 @@ def main() -> int:
                 progress = 12 + int(idx / total * 76)
                 run_status.progress(TASK_NAME, progress, 100, "evaluate", f"回看预测 {idx}/{total}")
         run_status.progress(TASK_NAME, 92, 100, "persist", "写入回看指标和参数建议")
-        evaluated, pending = write_results(db_path, data_path, predictions, results)
+        evaluated, pending = write_results(data_path, predictions, results)
         run_status.progress(TASK_NAME, 100, 100, "done", "刷新评估摘要")
         run_status.done(TASK_NAME, f"已回看 {evaluated} 条预测，待样本成熟 {pending} 条")
         print(json.dumps({"evaluated": evaluated, "pending": pending}, ensure_ascii=False), flush=True)

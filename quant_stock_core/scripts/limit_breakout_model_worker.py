@@ -18,6 +18,15 @@ if str(ROOT) not in sys.path:
 
 from common.infra import status as run_status
 from common.infra.db import replace_sql, write_transaction
+from common.utils.market import restricted_exclude_sql
+from scripts.strategy_quality_overlay import (
+    QUALITY_FEATURES,
+    add_quality_overlay,
+    attach_asof_reports,
+    attach_recent_holder_reduce,
+    balance_quality_reports,
+    income_loss_streak_reports,
+)
 from scripts.limit_up_model_worker import (
     limit_threshold,
     metrics_for_top,
@@ -51,7 +60,12 @@ FEATURES = [
     "volume_surge_120",
     "turnover_rate",
     "volume_ratio",
-    "limit_up_count10",
+    "prior_limit_up_count10",
+    "prior_limit_up_count20",
+    "prior_limit_up_count60",
+    "days_since_limit_up",
+    "post_limit_drawdown20",
+    "hot_pullback_score",
     "circ_mv_log",
     "roe",
     "netprofit_margin",
@@ -61,7 +75,10 @@ FEATURES = [
     "industry_up_ratio",
     "industry_limit_up_ratio",
     "market_up_ratio",
+    "market_up_ratio_5",
     "market_limit_up_ratio",
+    "market_risk_pressure",
+    *QUALITY_FEATURES,
 ]
 
 
@@ -99,7 +116,7 @@ def trade_return_from_bounds(entry_price: float, future_high: float, future_low:
     return (1 + gross) * (1 - sell_slippage - commission - stamp_tax) / (1 + buy_slippage + commission) - 1
 
 
-def simulate_breakout_pullback_return(row: pd.Series, hold_days: int, entry_discount: float, touch_days: int, take_profit: float, stop_loss: float, buy_slippage: float, sell_slippage: float, commission: float, stamp_tax: float) -> float | None:
+def simulate_breakout_pullback_return(row: pd.Series, hold_days: int, entry_discount: float, touch_days: int, take_profit: float, stop_loss: float, buy_slippage: float, sell_slippage: float, commission: float, stamp_tax: float, require_rebound: bool = False) -> float | None:
     signal_close = safe_float(row.get("close"))
     if signal_close <= 0:
         return None
@@ -113,6 +130,10 @@ def simulate_breakout_pullback_return(row: pd.Series, hold_days: int, entry_disc
             break
     if touch_day <= 0:
         return None
+    if require_rebound:
+        rebound_close = safe_float(row.get(f"exit_close_{touch_day}d"))
+        if rebound_close <= entry_price:
+            return None
     highs = [safe_float(row.get(f"next_high_{day}d")) for day in range(touch_day, hold_days + 1)]
     lows = [safe_float(row.get(f"next_low_{day}d")) for day in range(touch_day, hold_days + 1)]
     highs = [value for value in highs if value > 0]
@@ -145,18 +166,28 @@ def simulate_breakout_confirmation_return(row: pd.Series, hold_days: int, max_ga
     return trade_return_from_bounds(next_close, future_high, future_low, exit_close, take_profit, stop_loss, buy_slippage, sell_slippage, commission, stamp_tax)
 
 
-def breakout_trade_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry_mode: str, entry_discount: float = 0.0, touch_days: int = 3, max_gap: float = 0.04, max_next_return: float = 0.08, take_profit: float = 0.12, stop_loss: float = -0.055, buy_slippage: float = 0.002, sell_slippage: float = 0.002, commission: float = 0.00025, stamp_tax: float = 0.0005, min_market_up_ratio: float = 0.0, min_market_limit_up_ratio: float = 0.0) -> dict[str, Any]:
+def breakout_trade_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry_mode: str, entry_discount: float = 0.0, touch_days: int = 3, max_gap: float = 0.04, max_next_return: float = 0.08, take_profit: float = 0.12, stop_loss: float = -0.055, buy_slippage: float = 0.002, sell_slippage: float = 0.002, commission: float = 0.00025, stamp_tax: float = 0.0005, min_market_up_ratio: float = 0.0, min_market_limit_up_ratio: float = 0.0, min_industry_ret5: float = -999.0, min_industry_limit_up_ratio: float = 0.0, min_model_score: float = 0.0, max_drawdown60: float = 0.0, max_market_risk_pressure: float | None = None, require_rebound: bool = False) -> dict[str, Any]:
     frame = pred.copy()
     if min_market_up_ratio > 0:
         frame = frame[frame["market_up_ratio"] >= min_market_up_ratio]
     if min_market_limit_up_ratio > 0:
         frame = frame[frame["market_limit_up_ratio"] >= min_market_limit_up_ratio]
+    if min_industry_ret5 > -900:
+        frame = frame[frame["industry_ret5"] >= min_industry_ret5]
+    if min_industry_limit_up_ratio > 0:
+        frame = frame[frame["industry_limit_up_ratio"] >= min_industry_limit_up_ratio]
+    if min_model_score > 0:
+        frame = frame[frame["model_score"] >= min_model_score]
+    if max_drawdown60 < 0 and "drawdown60" in frame:
+        frame = frame[frame["drawdown60"] >= max_drawdown60]
+    if max_market_risk_pressure is not None and "market_risk_pressure" in frame:
+        frame = frame[frame["market_risk_pressure"] <= max_market_risk_pressure]
     signals = top_rows_by_date(frame, int(top_n))
     trade_rows: list[dict[str, Any]] = []
     for row in signals.to_dict("records"):
         series = pd.Series(row)
         if entry_mode == "pullback":
-            ret = simulate_breakout_pullback_return(series, hold_days, entry_discount, touch_days, take_profit, stop_loss, buy_slippage, sell_slippage, commission, stamp_tax)
+            ret = simulate_breakout_pullback_return(series, hold_days, entry_discount, touch_days, take_profit, stop_loss, buy_slippage, sell_slippage, commission, stamp_tax, require_rebound)
         else:
             ret = simulate_breakout_confirmation_return(series, hold_days, max_gap, max_next_return, take_profit, stop_loss, buy_slippage, sell_slippage, commission, stamp_tax)
         if ret is None:
@@ -164,7 +195,7 @@ def breakout_trade_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry
         trade_rows.append({"trade_date": str(row.get("trade_date")), "year": int(str(row.get("trade_date"))[:4]), "return": safe_float(ret)})
     trades = pd.DataFrame(trade_rows)
     if entry_mode == "pullback":
-        label = f"回踩{entry_discount:.0%}买"
+        label = f"回踩{entry_discount:.0%}{'反包' if require_rebound else ''}买"
     else:
         label = "次日确认买"
     if min_market_up_ratio > 0 or min_market_limit_up_ratio > 0:
@@ -185,6 +216,12 @@ def breakout_trade_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry
             "stop_loss": stop_loss,
             "min_market_up_ratio": min_market_up_ratio,
             "min_market_limit_up_ratio": min_market_limit_up_ratio,
+            "min_industry_ret5": min_industry_ret5,
+            "min_industry_limit_up_ratio": min_industry_limit_up_ratio,
+            "min_model_score": min_model_score,
+            "max_drawdown60": max_drawdown60,
+            "max_market_risk_pressure": max_market_risk_pressure,
+            "require_rebound": require_rebound,
             "buy_slippage": buy_slippage,
             "sell_slippage": sell_slippage,
             "commission": commission,
@@ -222,11 +259,21 @@ def breakout_trade_metrics(pred: pd.DataFrame, top_n: int, hold_days: int, entry
 
 def breakout_trading_validation(pred: pd.DataFrame) -> list[dict[str, Any]]:
     return [
-        breakout_trade_metrics(pred, top_n=3, hold_days=5, entry_mode="pullback", entry_discount=-0.05, touch_days=3, stop_loss=-0.06, min_market_up_ratio=0.45, min_market_limit_up_ratio=0.015),
-        breakout_trade_metrics(pred, top_n=3, hold_days=5, entry_mode="pullback", entry_discount=-0.05, touch_days=3, stop_loss=-0.06, min_market_up_ratio=0.45, min_market_limit_up_ratio=0.010),
-        breakout_trade_metrics(pred, top_n=3, hold_days=5, entry_mode="pullback", entry_discount=-0.05, touch_days=3, stop_loss=-0.06, min_market_up_ratio=0.60, min_market_limit_up_ratio=0.020),
-        breakout_trade_metrics(pred, top_n=3, hold_days=5, entry_mode="pullback", entry_discount=-0.02, touch_days=3),
-        breakout_trade_metrics(pred, top_n=5, hold_days=5, entry_mode="pullback", entry_discount=0.00, touch_days=3),
+        breakout_trade_metrics(pred, top_n=1, hold_days=5, entry_mode="pullback", entry_discount=-0.05, touch_days=3, take_profit=0.13, stop_loss=-0.045, min_market_up_ratio=0.50, min_market_limit_up_ratio=0.010, min_industry_ret5=0.0, max_market_risk_pressure=0.45, require_rebound=True),
+        breakout_trade_metrics(pred, top_n=3, hold_days=5, entry_mode="pullback", entry_discount=-0.05, touch_days=3, take_profit=0.13, stop_loss=-0.045, min_market_up_ratio=0.50, min_market_limit_up_ratio=0.010, min_industry_ret5=0.0, max_market_risk_pressure=0.45, require_rebound=True),
+        breakout_trade_metrics(pred, top_n=5, hold_days=5, entry_mode="pullback", entry_discount=-0.04, touch_days=3, take_profit=0.12, stop_loss=-0.045, min_market_up_ratio=0.52, min_industry_ret5=0.01, max_market_risk_pressure=0.40, require_rebound=True),
+        breakout_trade_metrics(pred, top_n=3, hold_days=5, entry_mode="confirm", max_gap=0.025, max_next_return=0.055, take_profit=0.12, stop_loss=-0.045, min_market_up_ratio=0.52, min_industry_ret5=0.0, max_market_risk_pressure=0.45),
+        breakout_trade_metrics(pred, top_n=5, hold_days=5, entry_mode="confirm", max_gap=0.025, max_next_return=0.055, take_profit=0.12, stop_loss=-0.045, min_market_up_ratio=0.55, min_industry_ret5=0.0, max_market_risk_pressure=0.40),
+    ]
+
+
+def hot_pullback_trading_validation(pred: pd.DataFrame) -> list[dict[str, Any]]:
+    return [
+        breakout_trade_metrics(pred, top_n=1, hold_days=10, entry_mode="pullback", entry_discount=-0.05, touch_days=5, take_profit=0.16, stop_loss=-0.05, min_market_up_ratio=0.52, min_industry_ret5=0.0, min_model_score=62.0, max_drawdown60=-0.25, max_market_risk_pressure=0.42, require_rebound=True),
+        breakout_trade_metrics(pred, top_n=3, hold_days=10, entry_mode="pullback", entry_discount=-0.05, touch_days=5, take_profit=0.16, stop_loss=-0.05, min_market_up_ratio=0.52, min_industry_ret5=0.0, min_model_score=62.0, max_drawdown60=-0.25, max_market_risk_pressure=0.42, require_rebound=True),
+        breakout_trade_metrics(pred, top_n=5, hold_days=10, entry_mode="pullback", entry_discount=-0.05, touch_days=5, take_profit=0.16, stop_loss=-0.05, min_market_up_ratio=0.55, min_industry_ret5=0.01, min_model_score=64.0, max_drawdown60=-0.24, max_market_risk_pressure=0.38, require_rebound=True),
+        breakout_trade_metrics(pred, top_n=3, hold_days=10, entry_mode="confirm", max_gap=0.02, max_next_return=0.045, take_profit=0.15, stop_loss=-0.05, min_market_up_ratio=0.55, min_industry_ret5=0.0, min_model_score=64.0, max_drawdown60=-0.25, max_market_risk_pressure=0.40),
+        breakout_trade_metrics(pred, top_n=5, hold_days=10, entry_mode="confirm", max_gap=0.02, max_next_return=0.045, take_profit=0.15, stop_loss=-0.05, min_market_up_ratio=0.58, min_industry_ret5=0.0, min_model_score=66.0, max_drawdown60=-0.24, max_market_risk_pressure=0.36),
     ]
 
 
@@ -380,9 +427,12 @@ def read_market_panel(data_path: Path, start: str, end: str) -> pd.DataFrame:
             SELECT d.ts_code, d.trade_date, d.open, d.high, d.low, d.close, d.pct_chg, d.amount,
                    COALESCE(b.turnover_rate, 0) AS turnover_rate,
                    COALESCE(b.volume_ratio, 0) AS volume_ratio,
+                   COALESCE(b.total_mv, 0) AS total_mv,
                    COALESCE(b.circ_mv, 0) AS circ_mv,
+                   COALESCE(b.pb, 0) AS pb,
                    COALESCE(s.name, '') AS name,
-                   COALESCE(NULLIF(s.industry, ''), '未分类') AS industry
+                   COALESCE(NULLIF(s.industry, ''), '未分类') AS industry,
+                   COALESCE(s.list_status, 'L') AS list_status
             FROM read_parquet('{raw / "daily" / "*.parquet"}') d
             LEFT JOIN read_parquet('{raw / "daily_basic" / "*.parquet"}') b
               ON d.ts_code = b.ts_code AND d.trade_date = b.trade_date
@@ -394,6 +444,7 @@ def read_market_panel(data_path: Path, start: str, end: str) -> pd.DataFrame:
               AND COALESCE(s.list_status, 'L') = 'L'
               AND COALESCE(s.name, '') NOT LIKE '%ST%'
               AND COALESCE(s.name, '') NOT LIKE '退市%'
+              AND {restricted_exclude_sql('s')}
             ORDER BY d.ts_code, d.trade_date
             """
         ).fetch_df()
@@ -411,9 +462,50 @@ def read_market_panel(data_path: Path, start: str, end: str) -> pd.DataFrame:
             ORDER BY ts_code, report_date
             """
         ).fetch_df()
+        balance = con.execute(
+            f"""
+            SELECT ts_code,
+                   COALESCE(NULLIF(ann_date, ''), end_date) AS ann_date,
+                   end_date,
+                   COALESCE(goodwill, 0) AS goodwill,
+                   COALESCE(total_hldr_eqy_exc_min_int, 0) AS equity
+            FROM read_parquet('{raw / "balancesheet" / "*.parquet"}')
+            WHERE ts_code IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) <= '{end}'
+            ORDER BY ts_code, ann_date
+            """
+        ).fetch_df()
+        income = con.execute(
+            f"""
+            SELECT ts_code,
+                   COALESCE(NULLIF(ann_date, ''), end_date) AS ann_date,
+                   end_date,
+                   COALESCE(n_income_attr_p, n_income, 0) AS n_income_attr_p
+            FROM read_parquet('{raw / "income" / "*.parquet"}')
+            WHERE ts_code IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) IS NOT NULL
+              AND COALESCE(NULLIF(ann_date, ''), end_date) <= '{end}'
+            ORDER BY ts_code, end_date
+            """
+        ).fetch_df()
+        holder = con.execute(
+            f"""
+            SELECT ts_code, ann_date, in_de, change_ratio, change_vol
+            FROM read_parquet('{raw / "stk_holdertrade" / "*.parquet"}')
+            WHERE ts_code IS NOT NULL
+              AND ann_date IS NOT NULL
+              AND ann_date <= '{end}'
+            ORDER BY ts_code, ann_date
+            """
+        ).fetch_df()
     finally:
         con.close()
-    return attach_asof_financials(market, financial)
+    out = attach_asof_financials(market, financial)
+    out = attach_asof_reports(out, balance_quality_reports(balance), report_date_col="report_date", value_cols=["goodwill_to_equity"])
+    out = attach_asof_reports(out, income_loss_streak_reports(income), report_date_col="report_date", value_cols=["loss_streak"])
+    out = attach_recent_holder_reduce(out, holder, window_days=180)
+    return out
 
 
 def attach_asof_financials(market: pd.DataFrame, financial: pd.DataFrame) -> pd.DataFrame:
@@ -453,12 +545,23 @@ def attach_asof_financials(market: pd.DataFrame, financial: pd.DataFrame) -> pd.
     return pd.concat(out_parts, ignore_index=True).sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
 
 
-def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.DataFrame:
+def days_since_prior_limit(flags: pd.Series) -> pd.Series:
+    last_seen = -1
+    out: list[int] = []
+    for idx, flag in enumerate(flags.astype(bool).tolist()):
+        out.append(idx - last_seen if last_seen >= 0 else 999)
+        if flag:
+            last_seen = idx
+    return pd.Series(out, index=flags.index)
+
+
+def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int, variant: str = "breakout") -> pd.DataFrame:
     df = raw.copy()
     df["trade_date"] = df["trade_date"].astype(str)
     numeric_cols = [
         "open", "high", "low", "close", "pct_chg", "amount", "turnover_rate",
-        "volume_ratio", "circ_mv", "roe", "netprofit_margin", "debt_to_assets",
+        "volume_ratio", "total_mv", "circ_mv", "pb", "roe", "netprofit_margin", "debt_to_assets",
+        "goodwill_to_equity", "loss_streak", "recent_holder_reduce",
     ]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
@@ -490,7 +593,19 @@ def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.Da
     df["volume_surge_120"] = df["amount"] / amount120.replace(0, np.nan)
     df["circ_mv_log"] = np.log1p(df["circ_mv"].clip(lower=0))
     df["is_limit_up"] = df.apply(lambda row: safe_float(row["pct_chg"]) >= limit_threshold(str(row["ts_code"]), str(row["name"])), axis=1)
-    df["limit_up_count10"] = group["is_limit_up"].transform(lambda s: s.rolling(10, min_periods=1).sum())
+    df["prior_limit_up_count10"] = group["is_limit_up"].transform(lambda s: s.shift(1).rolling(10, min_periods=1).sum())
+    df["prior_limit_up_count20"] = group["is_limit_up"].transform(lambda s: s.shift(1).rolling(20, min_periods=1).sum())
+    df["prior_limit_up_count60"] = group["is_limit_up"].transform(lambda s: s.shift(1).rolling(60, min_periods=1).sum())
+    df["days_since_limit_up"] = group["is_limit_up"].transform(days_since_prior_limit)
+    recent_high20 = group["high"].transform(lambda s: s.shift(1).rolling(20, min_periods=5).max())
+    df["post_limit_drawdown20"] = df["close"] / recent_high20.replace(0, np.nan) - 1
+    df["hot_pullback_score"] = (
+        (df["prior_limit_up_count60"].clip(0, 3) / 3.0) * 0.28
+        + ((df["days_since_limit_up"].clip(5, 60) - 5) / 55.0).rsub(1).clip(0, 1) * 0.18
+        + ((df["drawdown60"].abs() - 0.08) / 0.27).clip(0, 1) * 0.22
+        + ((1.8 - df["volume_surge_120"]) / 1.4).clip(0, 1) * 0.14
+        + ((df["ret5"] + 0.08) / 0.18).clip(0, 1) * 0.18
+    )
 
     df["flat_score"] = (
         ((2.2 - df["base_ratio_500"]) / 1.2).clip(0, 1) * 0.30
@@ -503,7 +618,7 @@ def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.Da
         + (df["ret5"] / 0.18).clip(0, 1) * 0.22
         + ((df["volume_surge_120"] - 1.0) / 4.0).clip(0, 1) * 0.22
         + ((df["breakout_ratio250"] + 0.05) / 0.22).clip(0, 1) * 0.18
-        + (df["limit_up_count10"] / 3.0).clip(0, 1) * 0.10
+        + ((1.5 - df["prior_limit_up_count10"]) / 1.5).clip(0, 1) * 0.10
     )
 
     by_industry = df.groupby(["trade_date", "industry"], sort=False)
@@ -523,42 +638,98 @@ def add_features(raw: pd.DataFrame, start: str, end: str, horizon: int) -> pd.Da
         market_count=("ts_code", "count"),
     ).reset_index()
     market["market_limit_up_ratio"] = market["market_limit_up_count"] / market["market_count"].replace(0, np.nan)
+    market = market.sort_values("trade_date")
+    market["market_up_ratio_5"] = market["market_up_ratio"].rolling(5, min_periods=1).mean()
+    market["market_risk_pressure"] = (
+        (0.52 - market["market_up_ratio_5"]).clip(lower=0.0) / 0.32
+        + (0.006 - market["market_limit_up_ratio"]).clip(lower=0.0) / 0.006
+    ).clip(0, 1)
     df = df.merge(industry.drop(columns=["industry_count"]), on=["trade_date", "industry"], how="left")
     df = df.merge(market.drop(columns=["market_count"]), on="trade_date", how="left")
+    df = add_quality_overlay(df)
 
     next_close = group["close"].shift(-horizon)
     future_high = group["high"].transform(lambda s: s.shift(-1).iloc[::-1].rolling(horizon, min_periods=1).max().iloc[::-1])
     future_low = group["low"].transform(lambda s: s.shift(-1).iloc[::-1].rolling(horizon, min_periods=1).min().iloc[::-1])
-    future_limit = group["is_limit_up"].transform(lambda s: s.shift(-1).iloc[::-1].rolling(horizon, min_periods=1).max().iloc[::-1])
+    first_day_limit = group["is_limit_up"].shift(-1)
     df["entry_open_1d"] = group["open"].shift(-1)
     df["entry_gap_1d"] = df["entry_open_1d"] / df["close"].replace(0, np.nan) - 1
     df["entry_pct_chg_1d"] = group["pct_chg"].shift(-1)
     df["fwd5_return"] = next_close / df["close"].replace(0, np.nan) - 1
     df["fwd5_max_return"] = future_high / df["close"].replace(0, np.nan) - 1
     df["max_drawdown_5d"] = future_low / df["close"].replace(0, np.nan) - 1
-    df["hit_limit_up_5d"] = future_limit.fillna(0).astype(int)
-    for hold_days in (1, 3, 5):
+    # For the flat-breakout model, this compatibility field means "next-day limit-up hit".
+    # The strategy wants the first explosive day, not a late multi-day high-position chase.
+    df["hit_limit_up_1d"] = first_day_limit.fillna(0).astype(int)
+    df["hit_limit_up_5d"] = df["hit_limit_up_1d"]
+    for hold_days in (1, 3, 5, 10):
         df[f"exit_close_{hold_days}d"] = group["close"].shift(-hold_days)
         df[f"future_high_{hold_days}d"] = group["high"].transform(lambda s, h=hold_days: s.shift(-1).iloc[::-1].rolling(h, min_periods=1).max().iloc[::-1])
         df[f"future_low_{hold_days}d"] = group["low"].transform(lambda s, h=hold_days: s.shift(-1).iloc[::-1].rolling(h, min_periods=1).min().iloc[::-1])
         df[f"exit_close_after_confirm_{hold_days}d"] = group["close"].shift(-(hold_days + 1))
-    for day in range(1, 7):
+    for day in range(1, 13):
         df[f"next_high_{day}d"] = group["high"].shift(-day)
         df[f"next_low_{day}d"] = group["low"].shift(-day)
 
-    df["label"] = (((df["fwd5_max_return"] >= 0.10) | (df["hit_limit_up_5d"] > 0)) & (df["max_drawdown_5d"] > -0.12)).astype(int)
+    high_position_after_multi_limit = (df["prior_limit_up_count20"] >= 2) & (df["post_limit_drawdown20"] > -0.18)
+    fwd10_high_return = df["future_high_10d"] / df["close"].replace(0, np.nan) - 1
+    fwd10_drawdown = df["future_low_10d"] / df["close"].replace(0, np.nan) - 1
+    if variant == "hot_pullback":
+        df["label"] = (
+            (fwd10_high_return >= 0.14)
+            & (fwd10_drawdown > -0.065)
+            & (df["hit_limit_up_1d"] == 0)
+            & (df["market_risk_pressure"] <= 0.55)
+            & (df["industry_ret5"] >= -0.01)
+        ).astype(int)
+    else:
+        df["label"] = (
+            (df["hit_limit_up_1d"] > 0)
+            & (df["max_drawdown_5d"] > -0.095)
+            & (df["market_risk_pressure"] <= 0.60)
+            & (df["industry_ret5"] >= -0.015)
+            & ~high_position_after_multi_limit
+        ).astype(int)
     df["year"] = df["trade_date"].str.slice(0, 4).astype(int)
     df = df.replace([np.inf, -np.inf], np.nan)
     df[FEATURES] = df[FEATURES].fillna(0.0)
-    candidate_mask = (
-        (df["flat_score"] >= 0.30)
-        & (df["startup_score"] >= 0.16)
-        & (df["base_ratio_250"].between(1.0, 2.6))
-        & (df["close"] >= 3.0)
-        & (df["amount"] >= 25000)
-        & (df["turnover_rate"] >= 0.25)
-        & (df["trade_date"].between(start, end))
-    )
+    if variant == "hot_pullback":
+        candidate_mask = (
+            (df["prior_limit_up_count60"] >= 1)
+            & (df["days_since_limit_up"].between(5, 60))
+            & (df["drawdown60"].between(-0.30, -0.10))
+            & (df["pct_chg"].between(-4.0, 4.5))
+            & (df["ret5"].between(-0.06, 0.08))
+            & (df["volume_surge_120"].between(0.25, 1.8))
+            & (df["market_risk_pressure"] <= 0.58)
+            & (df["industry_ret5"] >= -0.015)
+            & (df["quality_gate"] == 1)
+            & (df["small_cap_quality_score"] >= 44)
+            & (df["risk_penalty_score"] <= 40)
+            & (df["debt_to_assets"] <= 85)
+            & (df["close"] >= 3.0)
+            & (df["amount"] >= 30000)
+            & (df["turnover_rate"].between(0.35, 12.0))
+            & (df["trade_date"].between(start, end))
+        )
+    else:
+        candidate_mask = (
+            (df["flat_score"] >= 0.38)
+            & (df["startup_score"] >= 0.22)
+            & ((df["prior_limit_up_count20"] <= 1) | (df["post_limit_drawdown20"] <= -0.18))
+            & (df["base_ratio_250"].between(1.0, 2.25))
+            & (df["base_volatility_120"].between(0.40, 4.50))
+            & (df["market_risk_pressure"] <= 0.62)
+            & (df["industry_ret5"] >= -0.015)
+            & (df["quality_gate"] == 1)
+            & (df["small_cap_quality_score"] >= 44)
+            & (df["risk_penalty_score"] <= 40)
+            & (df["debt_to_assets"] <= 85)
+            & (df["close"] >= 3.0)
+            & (df["amount"] >= 30000)
+            & (df["turnover_rate"].between(0.35, 12.0))
+            & (df["trade_date"].between(start, end))
+        )
     return df[candidate_mask].reset_index(drop=True)
 
 
@@ -663,12 +834,12 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
         "rank_ic": safe_float(slices["rank_ic"].mean()) if not slices.empty else 0.0,
         "tiers": tier_metrics_list(pred, tier_set(int(args.top_k)), baseline_return),
         "folds": fold_metrics,
-        "trading_validation": breakout_trading_validation(pred),
+        "trading_validation": hot_pullback_trading_validation(pred) if args.variant == "hot_pullback" else breakout_trading_validation(pred),
         "evaluation_quality": sample_quality_summary(
             data,
             pred,
             fold_metrics,
-            universe_note="模型只评估横盘、启动、流动性达标候选池，不代表全市场无条件预测能力。",
+            universe_note="模型只评估前热点回撤后二次启动候选池，不代表全市场无条件预测能力。" if args.variant == "hot_pullback" else "模型只评估横盘、启动、流动性达标候选池，不代表全市场无条件预测能力。",
             path_note="回踩买用逐日 high/low 判断触达；确认买按次日收盘确认后，从下一交易日开始计算持有收益；同日同时触发止盈/止损按先止损处理。",
         ),
         "test_start": str(pred["trade_date"].min()),
@@ -700,7 +871,7 @@ def write_results(args: argparse.Namespace, summary: dict[str, Any], pred: pd.Da
                 ["run_id", "start_date", "end_date", "horizon", "model_type", "feature_count", "status", "summary_json", "model_path", "created_at", "updated_at"],
                 ["run_id"],
             ),
-            (args.run_id, args.start, args.end, 5, "lgbm_limit_breakout", len(FEATURES), "success", json.dumps(summary, ensure_ascii=False), model_path, now, now),
+            (args.run_id, args.start, args.end, int(args.horizon_days), f"lgbm_limit_breakout_{args.variant}", len(FEATURES), "success", json.dumps(summary, ensure_ascii=False), model_path, now, now),
         )
         conn.executemany(
             replace_sql("limit_breakout_model_features", ["run_id", "feature", "importance", "rank_no", "created_at", "updated_at"], ["run_id", "feature"]),
@@ -750,22 +921,24 @@ def main() -> int:
     parser.add_argument("--min-train-rows", type=int, default=2000)
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--variant", choices=["breakout", "hot_pullback"], default="breakout")
     args = parser.parse_args()
+    args.horizon_days = 10 if args.variant == "hot_pullback" else 5
     try:
         run_status.begin(TASK_NAME)
-        run_status.progress(TASK_NAME, 1, 5, "load", "读取横盘启动训练数据")
+        run_status.progress(TASK_NAME, 1, 5, "load", "读取前热点回撤训练数据" if args.variant == "hot_pullback" else "读取横盘启动训练数据")
         ensure_tables(args.db_path)
         raw = read_market_panel(Path(args.data_path), args.start, args.end)
         if raw.empty:
             raise RuntimeError("日线数据为空，无法训练横盘预警模型")
-        run_status.progress(TASK_NAME, 2, 5, "features", "生成横盘、启动、行业和财务特征")
-        data = add_features(raw, args.start, args.end, 5)
+        run_status.progress(TASK_NAME, 2, 5, "features", "生成前热点、回撤、缩量和行业特征" if args.variant == "hot_pullback" else "生成横盘、启动、行业和财务特征")
+        data = add_features(raw, args.start, args.end, int(args.horizon_days), args.variant)
         if len(data) < int(args.min_train_rows):
             raise RuntimeError(f"候选样本不足: {len(data)}")
         run_status.progress(TASK_NAME, 3, 5, "train", "LightGBM walk-forward 训练")
         summary = train_model(args, data)
         run_status.progress(TASK_NAME, 5, 5, "done", "写入模型结果")
-        run_status.done(TASK_NAME, f"横盘预警模型完成: Top{args.top_k}收益 {summary.get('top_return', 0):.2%}")
+        run_status.done(TASK_NAME, f"{'前热点回撤模型' if args.variant == 'hot_pullback' else '横盘预警模型'}完成: Top{args.top_k}收益 {summary.get('top_return', 0):.2%}")
         print(json.dumps(summary, ensure_ascii=False))
         return 0
     except Exception as exc:

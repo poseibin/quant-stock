@@ -1292,7 +1292,8 @@ h1 {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
   min-width: 0;
   min-height: 48px;
@@ -1310,9 +1311,519 @@ h1 {
 }
 
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   border-color: rgba(255, 176, 0, 0.45);
   box-shadow: 0 0 0 3px rgba(255, 176, 0, 0.08);
+}
+
+.compactTextarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.schedulerCard {
+  display: grid;
+  gap: 16px;
+}
+
+.schedulerCardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.schedulerCardHeader .formTitle {
+  margin-bottom: 8px;
+}
+
+.schedulerToggle {
+  display: inline-flex;
+  min-width: 108px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: #eef2ff;
+  border: 1px solid rgba(255, 176, 0, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 176, 0, 0.10);
+  font-size: 13px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.schedulerToggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #ffb000;
+}
+
+.schedulerSummaryBar {
+  display: grid;
+  grid-template-columns: 0.7fr 1.15fr 1.5fr 0.75fr;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(8, 11, 18, 0.36);
+}
+
+.schedulerSummaryBar div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(14, 18, 28, 0.72);
+}
+
+.schedulerSummaryBar span,
+.schedulerPanelTitle {
+  display: block;
+  color: #8f9ab3;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.schedulerSummaryBar b {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: #eef2ff;
+  font-size: 15px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schedulerEditorGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.schedulerEditorGridSingle {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.schedulerEditorGridSingle .schedulerPanel {
+  max-width: none;
+}
+
+.schedulerPanel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(8, 11, 18, 0.26);
+}
+
+.schedulerPanelTitle {
+  color: #aeb7cb;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.schedulerInlineGrid {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 20px;
+  align-items: end;
+}
+
+.schedulerInlineGrid .runtimeFieldCompact {
+  max-width: 220px;
+}
+
+.schedulerInlineGrid .field,
+.schedulerNotifyPanel .field,
+.schedulerTimeField {
+  margin-bottom: 0;
+}
+
+.schedulerInlineGrid .field em,
+.schedulerNotifyPanel .field em {
+  display: none;
+}
+
+.schedulerSection {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(8, 11, 18, 0.26);
+}
+
+.schedulerSectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.schedulerSectionHead span {
+  color: #eef2ff;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.schedulerSectionHead em {
+  color: #8f9ab3;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.schedulerPlanGrid {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
+  align-items: end;
+}
+
+.schedulerPlanGrid .field,
+.schedulerNotifyGrid .field {
+  margin-bottom: 0;
+}
+
+.schedulerChoiceBlock {
+  min-width: 0;
+}
+
+.formSubTitle {
+  margin-bottom: 10px;
+  color: #aeb7cb;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.chipGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.weekdayGrid {
+  gap: 8px;
+}
+
+.strategyChipGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(112px, 1fr));
+}
+
+.schedulerChip {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 7px 11px;
+  color: #aeb7cb;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 999px;
+  background: rgba(8, 11, 18, 0.54);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.schedulerChip input {
+  width: 14px;
+  height: 14px;
+  accent-color: #ffb000;
+}
+
+.schedulerChip:has(input:checked) {
+  color: #eef2ff;
+  border-color: rgba(255, 176, 0, 0.46);
+  background: rgba(255, 176, 0, 0.14);
+}
+
+.schedulerNotifyGrid {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.3fr) minmax(220px, 0.7fr) minmax(240px, 0.7fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.schedulerNotifyPanel .field {
+  margin-bottom: 0;
+}
+
+.schedulerTinyHelp {
+  margin: 0;
+  color: #8f9ab3;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.schedulerHelp {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 76px;
+  padding: 13px 14px;
+  color: #8f9ab3;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(8, 11, 18, 0.38);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.schedulerHelp b {
+  color: #eef2ff;
+  font-size: 13px;
+}
+
+.settingsActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.schedulerCard > .settingsActions {
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.configCardActions {
+  margin-top: 22px;
+}
+
+.scheduleReport {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  background: rgba(8, 11, 18, 0.42);
+  color: #aeb7cb;
+  font-size: 13px;
+}
+
+.scheduleReport.compact {
+  margin-top: 0;
+}
+
+.scheduleReportHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scheduleReportHead div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.scheduleReport strong {
+  color: #eef2ff;
+  font-size: 15px;
+}
+
+.scheduleReportHead span {
+  color: #8f9ab3;
+  font-size: 12px;
+}
+
+.scheduleReport.success {
+  border-color: rgba(38, 194, 129, 0.22);
+}
+
+.scheduleReport.error {
+  border-color: rgba(239, 83, 80, 0.30);
+}
+
+.scheduleStatusPill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.scheduleStatusPill.success {
+  color: #8ff0c4;
+  background: rgba(38, 194, 129, 0.16);
+}
+
+.scheduleStatusPill.error {
+  color: #ff8a8a;
+  background: rgba(239, 83, 80, 0.16);
+}
+
+.scheduleSummaryTiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scheduleSummaryTiles div,
+.scheduleStep {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(14, 18, 28, 0.62);
+}
+
+.scheduleSummaryTiles span,
+.scheduleStep span {
+  display: block;
+  color: #8f9ab3;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.scheduleSummaryTiles b {
+  display: block;
+  margin-top: 4px;
+  color: #eef2ff;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.scheduleStepGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scheduleStep b {
+  display: block;
+  margin-top: 5px;
+  font-size: 13px;
+}
+
+.scheduleStep.success b {
+  color: #8ff0c4;
+}
+
+.scheduleStep.error b {
+  color: #ff8a8a;
+}
+
+.scheduleStep em {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: #aeb7cb;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scheduleWechatPreview {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
+.scheduleWechatPreview summary {
+  cursor: pointer;
+  color: #ffd166;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.scheduleWechatPreview pre {
+  overflow: auto;
+  max-height: 220px;
+  margin: 10px 0 0;
+  padding: 12px;
+  color: #dfe6f7;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(8, 11, 18, 0.72);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.scheduleHistory {
+  display: grid;
+  gap: 14px;
+}
+
+.scheduleLiveProgress {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 14px 16px;
+  border: 1px solid rgba(77, 145, 255, 0.20);
+  border-radius: 10px;
+  background: rgba(34, 50, 83, 0.34);
+}
+
+.scheduleHistoryList {
+  display: grid;
+  gap: 10px;
+}
+
+.inlineEmpty {
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(8, 11, 18, 0.34);
+}
+
+@media (max-width: 1180px) {
+  .schedulerSummaryBar,
+  .schedulerEditorGrid,
+  .schedulerPlanGrid,
+  .schedulerNotifyGrid,
+  .scheduleStepGrid,
+  .dependencyGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .schedulerHelp {
+    grid-column: 1 / -1;
+  }
+
+  .strategyChipGrid {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .schedulerCardHeader,
+  .schedulerSectionHead {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .schedulerSectionHead em {
+    text-align: left;
+  }
+
+  .schedulerSummaryBar,
+  .schedulerEditorGrid,
+  .schedulerInlineGrid,
+  .schedulerPlanGrid,
+  .schedulerNotifyGrid,
+  .strategyChipGrid,
+  .scheduleSummaryTiles,
+  .scheduleStepGrid,
+  .dependencyGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .strategyConfigGrid {
@@ -2640,6 +3151,123 @@ h1 {
   gap: 10px;
 }
 
+.dependencyCard {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.dependencySummary {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  padding: 0 11px;
+  color: #aeb7cb;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(8, 11, 18, 0.38);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.dependencyGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.dependencyItem,
+.dependencyEmpty {
+  min-width: 0;
+  min-height: 130px;
+  padding: 13px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(12, 17, 27, 0.86), rgba(7, 10, 17, 0.82));
+}
+
+.dependencyEmpty {
+  display: grid;
+  grid-column: 1 / -1;
+  place-items: center;
+  color: #8f9ab3;
+  font-size: 13px;
+}
+
+.dependencyItem {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+}
+
+.dependencyItem.ready {
+  border-color: rgba(38, 194, 129, 0.28);
+}
+
+.dependencyItem.missing {
+  border-color: rgba(255, 176, 0, 0.28);
+}
+
+.dependencyItem.error {
+  border-color: rgba(255, 83, 83, 0.34);
+}
+
+.dependencyItemTop,
+.dependencyMeta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dependencyItemTop span,
+.dependencyMeta {
+  color: #8f9ab3;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.dependencyItemTop b {
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.dependencyItem.ready .dependencyItemTop b {
+  color: #91f2c1;
+  background: rgba(38, 194, 129, 0.14);
+}
+
+.dependencyItem.missing .dependencyItemTop b {
+  color: #ffdf7e;
+  background: rgba(255, 176, 0, 0.14);
+}
+
+.dependencyItem.error .dependencyItemTop b {
+  color: #ff9b9b;
+  background: rgba(255, 83, 83, 0.16);
+}
+
+.dependencyItem strong {
+  color: #eef2ff;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.dependencyItem p {
+  display: -webkit-box;
+  min-height: 38px;
+  margin: 0;
+  overflow: hidden;
+  color: #aeb7cb;
+  font-size: 12px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .datasetCard {
   position: relative;
   display: flex;
@@ -2904,6 +3532,20 @@ th {
 .secondaryButton {
   padding: 7px 12px;
   gap: 6px;
+}
+
+.settingsActions .settingsButton {
+  width: 136px;
+  min-width: 136px;
+  height: 40px;
+  min-height: 40px;
+  margin-top: 0;
+  padding: 0 14px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  line-height: 40px;
+  font-size: 13px;
 }
 
 .quietButton {
@@ -3702,7 +4344,7 @@ th {
 
 .metricStrip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 12px;
   margin-bottom: 18px;
   border: none;
@@ -4781,10 +5423,260 @@ th {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
+.modelVersionCompare {
+  margin-bottom: 18px;
+}
+
+.modelVersionTableWrap {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(8, 11, 18, 0.24);
+}
+
+.modelVersionTable {
+  min-width: 1280px;
+  border: 0;
+}
+
+.modelVersionTable th,
+.modelVersionTable td {
+  white-space: nowrap;
+}
+
+.modelVersionTable th:last-child,
+.modelVersionTable td:last-child {
+  min-width: 260px;
+  white-space: normal;
+}
+
+.modelVersionCompare table b {
+  display: inline-block;
+  margin-right: 8px;
+}
+
+.versionActiveTag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid rgba(38, 194, 129, 0.35);
+  border-radius: 999px;
+  background: rgba(38, 194, 129, 0.12);
+  color: #26c281;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.versionActiveTag.warning {
+  border-color: rgba(255, 183, 0, 0.38);
+  background: rgba(255, 183, 0, 0.12);
+  color: #ffb700;
+}
+
+.versionFailureText {
+  max-width: 260px;
+  color: #a8b3c7;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.autoTuneGridWrap {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(8, 11, 18, 0.24);
+}
+
+.autoTunePresetGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(8, 11, 18, 0.34);
+}
+
+.autoTunePresetGroup button {
+  min-width: 52px;
+  height: 32px;
+  padding: 0 10px;
+  color: #9da8bf;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.autoTunePresetGroup button.active {
+  color: #10141f;
+  background: linear-gradient(180deg, #ffd76b, #ffb000);
+  box-shadow: 0 8px 18px rgba(255, 176, 0, 0.18);
+}
+
+.autoTunePresetGroup button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.autoTuneGrid {
+  min-width: 980px;
+}
+
+.autoTuneGridRow {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 1.3fr)
+    minmax(92px, 0.72fr)
+    minmax(58px, 0.45fr)
+    minmax(78px, 0.58fr)
+    minmax(78px, 0.58fr)
+    minmax(78px, 0.58fr)
+    minmax(120px, 0.9fr)
+    minmax(150px, 1.15fr)
+    minmax(150px, 1.15fr)
+    minmax(130px, 0.95fr);
+  align-items: stretch;
+  min-height: 54px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.autoTuneGridRow:first-child {
+  border-top: 0;
+}
+
+.autoTuneGridHead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 38px;
+  background: rgba(18, 24, 36, 0.98);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.autoTuneGridCell {
+  min-width: 0;
+  padding: 10px 12px;
+  color: #e7ecf8;
+  font-size: 13px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.autoTuneGridCell .badge {
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.autoTuneGridHead .autoTuneGridCell {
+  color: #9da8bf;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.autoTuneTrialCell b {
+  display: block;
+  margin: 0 0 3px;
+  color: #eef2ff;
+  font-size: 13px;
+}
+
+.autoTuneTrialCell span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: #aeb7cb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.autoTuneStatusCell {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+
+.autoTuneStatusCell em {
+  color: #8f99b0;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.autoTuneNumberCell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.autoTuneClamp {
+  display: -webkit-box;
+  max-height: 3.4em;
+  overflow: hidden;
+  color: #b6bfd3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.autoTuneParamsCell code {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  background: transparent;
+  color: #e7ecf8;
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.autoTuneGridEmpty {
+  padding: 20px;
+  color: #8f99b0;
+}
+
+.modelVersionFeatureBlock {
+  margin-top: 18px;
+}
+
 .limitModelEvalGrid {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
   gap: 14px;
+}
+
+.limitModelVerdict + .limitModelEvalGrid,
+.limitValidationGates + .limitModelEvalGrid {
+  margin-top: 24px;
+}
+
+.limitModelEvalGrid + .formTitle,
+.limitModelEvalGrid + div {
+  margin-top: 30px;
+}
+
+.limitModelEvalGrid + div > .formTitle:first-child {
+  margin-top: 0;
+}
+
+.detailCard > .modelEvalTableWrap + .limitModelEvalGrid,
+.limitModelPanel > div + .limitModelColumns,
+.modelEvalTableWrap + .limitModelEvalGrid,
+.modelEvalTableWrap + .limitModelColumns {
+  margin-top: 30px;
 }
 
 .modelEvalTableWrap {

@@ -1,0 +1,17 @@
+[database]
+backend = "mysql"
+dsn = "quant_stock:quant_stock@tcp(127.0.0.1:3306)/quant_stock?parseTime=true&charset=utf8mb4&loc=Local"
+
+[storage]
+data_root = "../data_store"
+
+[data]
+tushare_token = ""
+
+[deepseek]
+token = ""
+model = "deepseek-v4-pro"
+
+[wechat]
+webhook = ""
+users = []

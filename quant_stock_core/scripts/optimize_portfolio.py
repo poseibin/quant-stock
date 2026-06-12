@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -40,8 +39,7 @@ def main() -> None:
     parser.add_argument("--objective", choices=["稳健", "平衡", "进攻"], default="平衡")
     parser.add_argument("--max-candidates", type=int, default=40)
     parser.add_argument("--top-n", type=int, default=10)
-    parser.add_argument("--save", default=None, help="run id；结果写入 SQLite")
-    parser.add_argument("--db-path", default=None)
+    parser.add_argument("--save", default=None, help="run id；结果写入 desktop MySQL")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -57,9 +55,8 @@ def main() -> None:
         top_n=args.top_n,
     )
     if args.save:
-        db_path = _resolve_db_path(args.db_path)
-        save_portfolio_optimization(db_path, args.save, payload)
-        log.info(f"组合优化结果已保存到数据库: {db_path} run_id={args.save}")
+        save_portfolio_optimization(args.save, payload)
+        log.info(f"组合优化结果已保存到数据库 run_id={args.save}")
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default))
     else:
@@ -309,22 +306,9 @@ def _resolve_strategy_names(arg: str) -> list[str]:
     return wanted
 
 
-def _resolve_db_path(value: str | None) -> Path:
-    if value:
-        return Path(value).expanduser().resolve()
-    env = os.getenv("DESKTOP_DB_PATH", "").strip() or os.getenv("DESKTOP_CONFIG_DB_PATH", "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    data_root = os.getenv("DATA_ROOT", "").strip()
-    if data_root:
-        return Path(data_root).expanduser().resolve() / "meta.db"
-    return (ROOT.parent / "data_store" / "meta.db").resolve()
-
-
-def save_portfolio_optimization(db_path: Path, run_id: str, payload: dict[str, Any]) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+def save_portfolio_optimization(run_id: str, payload: dict[str, Any]) -> None:
     generated_at = pd.Timestamp.now().isoformat()
-    with write_transaction(db_path) as conn:
+    with write_transaction() as conn:
         _ensure_tables(conn)
         conn.execute("DELETE FROM eval_portfolio_candidates WHERE run_id = ?", (run_id,))
         now_sql = current_timestamp_sql()

@@ -43,22 +43,21 @@ def main() -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
-    parser.add_argument("--db-path", default=None)
     parser.add_argument("--horizon", type=int, default=3)
     parser.add_argument("--min-train-years", type=int, default=4)
     parser.add_argument("--min-test-year", type=int, default=0)
     args = parser.parse_args()
 
-    ensure_tables(args.db_path)
-    data = build_dataset(args.db_path, args.start, args.end, args.horizon)
+    ensure_tables()
+    data = build_dataset(args.start, args.end, args.horizon)
     if data.empty:
         raise RuntimeError("market_risk_state_daily has no usable rows")
     summary = train_walk_forward(args, data)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
-def ensure_tables(db_path: str | None) -> None:
-    with write_transaction(db_path) as conn:
+def ensure_tables() -> None:
+    with write_transaction() as conn:
         if conn.backend == "mysql":
             conn.execute(
                 """
@@ -147,9 +146,9 @@ def ensure_tables(db_path: str | None) -> None:
             )
 
 
-def build_dataset(db_path: str | None, start: str, end: str, horizon: int) -> pd.DataFrame:
+def build_dataset(start: str, end: str, horizon: int) -> pd.DataFrame:
     warmup_start = (pd.to_datetime(start, format="%Y%m%d") - pd.Timedelta(days=420)).strftime("%Y%m%d")
-    with write_transaction(db_path) as conn:
+    with write_transaction() as conn:
         rows = conn.execute(
             """
             SELECT trade_date, state, COALESCE(risk_score, 0), COALESCE(market_return, 0),
@@ -282,7 +281,7 @@ def train_walk_forward(args: argparse.Namespace, data: pd.DataFrame) -> dict[str
 
     importance = (feature_importance / max(len(models), 1)).sort_values(ascending=False)
     now = now_text()
-    with write_transaction(args.db_path) as conn:
+    with write_transaction() as conn:
         conn.execute("DELETE FROM market_crash_warning_predictions WHERE run_id = ?", (args.run_id,))
         conn.execute("DELETE FROM market_crash_warning_features WHERE run_id = ?", (args.run_id,))
         conn.execute(

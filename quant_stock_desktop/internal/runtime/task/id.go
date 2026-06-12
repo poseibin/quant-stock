@@ -29,6 +29,10 @@ func NewRunID(req CreateRequest) string {
 		prefix = "px"
 	} else if req.TaskType == TypeFactorResearch {
 		prefix = "fr"
+	} else if req.TaskType == TypeFactorAutoTune {
+		prefix = "fat"
+	} else if req.TaskType == TypeModelTraining {
+		prefix = "mt"
 	} else if req.TaskType == TypeLimitSignalEvaluation {
 		prefix = "lse"
 	} else if req.TaskType == TypeT0DailyResearch {

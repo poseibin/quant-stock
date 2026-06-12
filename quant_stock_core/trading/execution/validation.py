@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pandas as pd
 
-from common.infra.db import desktop_db_path, upsert_sql, write_transaction
+from common.infra.db import upsert_sql, write_transaction
 from common.config import RAW_DIR
 from research.data.storage import duckdb_query as dq
 from trading.execution import signal as sig
@@ -195,15 +195,14 @@ def evaluate_history(horizon_days: int = 1) -> pd.DataFrame:
     return df
 
 
-def persist_history(db_path: str | None = None, horizon_days: int = 1) -> list[dict]:
+def persist_history(horizon_days: int = 1) -> list[dict]:
     """把推荐回看写回 rec_hindsight。"""
     df = evaluate_history(horizon_days=horizon_days)
     if df.empty:
         return []
-    path = db_path or str(desktop_db_path())
     now = _now()
     rows: list[dict] = []
-    with write_transaction(path) as conn:
+    with write_transaction(None) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS rec_hindsight (
@@ -291,7 +290,6 @@ def fetch_benchmark(start: str, end: str, code: str = "000300.SH") -> pd.DataFra
 def main() -> None:
     parser = argparse.ArgumentParser(description="刷新 rec_daily_recommendations 回看结果")
     parser.add_argument("--persist", action="store_true", help="写入 rec_hindsight")
-    parser.add_argument("--db-path", default=None, help="meta.db 路径（SQLite 后端使用）")
     parser.add_argument("--horizon-days", type=int, default=1)
     parser.add_argument("--horizons", default="", help="逗号分隔多周期，例如 1,3,5,10,20")
     args = parser.parse_args()
@@ -299,7 +297,7 @@ def main() -> None:
         horizons = [int(x) for x in args.horizons.split(",") if x.strip().isdigit()] if args.horizons else [args.horizon_days]
         rows = []
         for horizon in horizons:
-            rows.extend(persist_history(args.db_path, horizon))
+            rows.extend(persist_history(horizon))
         print(json.dumps({"rows": len(rows)}, ensure_ascii=False))
     else:
         df = evaluate_history(horizon_days=args.horizon_days)

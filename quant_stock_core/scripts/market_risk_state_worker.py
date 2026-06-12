@@ -44,76 +44,40 @@ def main() -> None:
 
 def ensure_table(db_path: str | None) -> None:
     with write_transaction(db_path) as conn:
-        if conn.backend == "mysql":
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS market_risk_state_daily (
-                    trade_date VARCHAR(16) PRIMARY KEY,
-                    state VARCHAR(64) NOT NULL,
-                    risk_score DOUBLE,
-                    market_return DOUBLE,
-                    market_equity DOUBLE,
-                    up_ratio DOUBLE,
-                    down_ratio DOUBLE,
-                    breadth20 DOUBLE,
-                    limit_up_count BIGINT,
-                    limit_down_count BIGINT,
-                    limit_up_ratio DOUBLE,
-                    limit_down_ratio DOUBLE,
-                    limit_down_ratio5 DOUBLE,
-                    amount DOUBLE,
-                    amount_chg20 DOUBLE,
-                    small_large_rel20 DOUBLE,
-                    drawdown20 DOUBLE,
-                    drawdown60 DOUBLE,
-                    drawdown120 DOUBLE,
-                    trend60 DOUBLE,
-                    volatility20 DOUBLE,
-                    universe_count BIGINT,
-                    reason VARCHAR(512),
-                    summary_json LONGTEXT,
-                    created_at VARCHAR(64) NOT NULL,
-                    updated_at VARCHAR(64) NOT NULL,
-                    KEY idx_market_risk_state_state (state),
-                    KEY idx_market_risk_state_score (risk_score)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                """
-            )
-        else:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS market_risk_state_daily (
-                    trade_date TEXT PRIMARY KEY,
-                    state TEXT NOT NULL,
-                    risk_score REAL,
-                    market_return REAL,
-                    market_equity REAL,
-                    up_ratio REAL,
-                    down_ratio REAL,
-                    breadth20 REAL,
-                    limit_up_count INTEGER,
-                    limit_down_count INTEGER,
-                    limit_up_ratio REAL,
-                    limit_down_ratio REAL,
-                    limit_down_ratio5 REAL,
-                    amount REAL,
-                    amount_chg20 REAL,
-                    small_large_rel20 REAL,
-                    drawdown20 REAL,
-                    drawdown60 REAL,
-                    drawdown120 REAL,
-                    trend60 REAL,
-                    volatility20 REAL,
-                    universe_count INTEGER,
-                    reason TEXT,
-                    summary_json TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_market_risk_state_state ON market_risk_state_daily(state);
-                CREATE INDEX IF NOT EXISTS idx_market_risk_state_score ON market_risk_state_daily(risk_score);
-                """
-            )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS market_risk_state_daily (
+                trade_date VARCHAR(16) PRIMARY KEY,
+                state VARCHAR(64) NOT NULL,
+                risk_score DOUBLE,
+                market_return DOUBLE,
+                market_equity DOUBLE,
+                up_ratio DOUBLE,
+                down_ratio DOUBLE,
+                breadth20 DOUBLE,
+                limit_up_count BIGINT,
+                limit_down_count BIGINT,
+                limit_up_ratio DOUBLE,
+                limit_down_ratio DOUBLE,
+                limit_down_ratio5 DOUBLE,
+                amount DOUBLE,
+                amount_chg20 DOUBLE,
+                small_large_rel20 DOUBLE,
+                drawdown20 DOUBLE,
+                drawdown60 DOUBLE,
+                drawdown120 DOUBLE,
+                trend60 DOUBLE,
+                volatility20 DOUBLE,
+                universe_count BIGINT,
+                reason VARCHAR(512),
+                summary_json LONGTEXT,
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL,
+                KEY idx_market_risk_state_state (state),
+                KEY idx_market_risk_state_score (risk_score)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+        )
 
 
 def build_market_risk_state(start: str, end: str) -> pd.DataFrame:

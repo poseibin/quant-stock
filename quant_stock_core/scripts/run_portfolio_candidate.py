@@ -27,7 +27,6 @@ from scripts.optimize_portfolio import (
     _float_or_none,
     _json_default,
     _reason,
-    _resolve_db_path,
     _run_panel,
     _score,
 )
@@ -55,7 +54,6 @@ def main() -> None:
     parser.add_argument("--benchmark", default="000905.SH")
     parser.add_argument("--slippage", type=float, default=0.002)
     parser.add_argument("--objective", choices=["稳健", "平衡", "进攻"], default="平衡")
-    parser.add_argument("--db-path", default=None)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -141,16 +139,15 @@ def main() -> None:
         row["reason"] = _reason(row)
 
     emit({"type": "progress", "stage": "save", "progress": 0.92, "message": "保存候选方案结果"})
-    save_candidate(_resolve_db_path(args.db_path), args.run_id, row)
+    save_candidate(args.run_id, row)
     emit({"type": "result", "stage": "done", "progress": 1.0, "row": row})
 
     if args.json:
         print(json.dumps(row, ensure_ascii=False, indent=2, default=_json_default))
 
 
-def save_candidate(db_path: Path, run_id: str, row: dict[str, Any]) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with write_transaction(db_path) as conn:
+def save_candidate(run_id: str, row: dict[str, Any]) -> None:
+    with write_transaction() as conn:
         now = pd.Timestamp.now().isoformat()
         columns = [
             "run_id", "candidate_id", "rank", "name", "objective", "status", "score",

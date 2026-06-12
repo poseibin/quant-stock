@@ -7,8 +7,8 @@ import duckdb
 import numpy as np
 import pandas as pd
 
+from common.utils.market import restricted_stock_mask
 from common.infra.db import connect_db
-from common.config.settings import DATA_ROOT
 from research.data.storage import duckdb_query as dq
 from trading.strategy.base import BaseStrategy, StrategyConfig
 from trading.strategy.registry import register
@@ -50,8 +50,7 @@ class MLFactorRankerStrategy(BaseStrategy):
 
 
 def _load_predictions(start: str, end: str, run_id: str) -> pd.DataFrame:
-    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
-    with connect_db(db_path) as conn:
+    with connect_db() as conn:
         if not run_id:
             if os.getenv("QUANT_REQUIRE_ML_FACTOR_RUN_ID", "").strip().lower() in {"1", "true", "yes"}:
                 return pd.DataFrame()
@@ -132,9 +131,8 @@ def _attach_market_risk_state(preds: pd.DataFrame) -> pd.DataFrame:
     if preds.empty:
         return preds
     dates = sorted(preds["trade_date"].astype(str).unique().tolist())
-    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
     try:
-        with connect_db(db_path) as conn:
+        with connect_db() as conn:
             rows = conn.execute(
                 """
                 SELECT trade_date, state, COALESCE(risk_score, 0), COALESCE(limit_down_ratio5, 0),
@@ -177,8 +175,8 @@ def _apply_universe(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
     out = df.copy()
     if f.get("exclude_st", True):
         out = out[~out["name"].fillna("").str.contains("ST", na=False)]
-    if u.get("exclude_bj", True):
-        out = out[~out["ts_code"].astype(str).str.endswith(".BJ")]
+    if u.get("exclude_restricted", True):
+        out = out[~restricted_stock_mask(out)]
     if u.get("min_total_mv") is not None:
         out = out[pd.to_numeric(out["total_mv"], errors="coerce").fillna(0) >= float(u["min_total_mv"])]
     if u.get("max_total_mv") is not None:
@@ -383,9 +381,8 @@ def _market_state_series(dates: list[str], lookback_days: int) -> pd.Series:
     pad_days = max(lookback_days * 4, 30)
     start = (pd.to_datetime(min(dates), format="%Y%m%d") - pd.Timedelta(days=pad_days)).strftime("%Y%m%d")
     end = max(dates)
-    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
     try:
-        with connect_db(db_path) as conn:
+        with connect_db() as conn:
             rows = conn.execute(
                 """
                 SELECT trade_date, state
@@ -409,9 +406,8 @@ def _market_risk_frame(dates: list[str], lookback_days: int) -> pd.DataFrame:
     pad_days = max(lookback_days * 4, 30)
     start = (pd.to_datetime(min(dates), format="%Y%m%d") - pd.Timedelta(days=pad_days)).strftime("%Y%m%d")
     end = max(dates)
-    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
     try:
-        with connect_db(db_path) as conn:
+        with connect_db() as conn:
             rows = conn.execute(
                 """
                 SELECT trade_date, state, COALESCE(risk_score, 0), COALESCE(market_return, 0),
@@ -570,9 +566,8 @@ def _apply_crash_warning_model_overlay(weights: pd.DataFrame, start: str, end: s
 def _crash_warning_probability_series(dates: list[str], run_id: str) -> pd.Series:
     if not dates:
         return pd.Series(dtype="float64")
-    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
     try:
-        with connect_db(db_path) as conn:
+        with connect_db() as conn:
             if not run_id:
                 row = conn.execute(
                     "SELECT run_id FROM market_crash_warning_runs WHERE status = ? ORDER BY updated_at DESC LIMIT 1",
@@ -893,9 +888,8 @@ def _risk_state_exposure_map(dates: list[str], cfg: StrategyConfig) -> dict[str,
         "liquidity_squeeze": float(risk_cfg.get("liquidity_squeeze_exposure", 0.10)),
         "crash": float(risk_cfg.get("crash_exposure", 0.05)),
     }
-    db_path = os.getenv("DESKTOP_DB_PATH") or str(DATA_ROOT / "meta.db")
     try:
-        with connect_db(db_path) as conn:
+        with connect_db() as conn:
             rows = conn.execute(
                 """
                 SELECT trade_date, state

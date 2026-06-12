@@ -23,7 +23,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.infra.db import replace_sql, write_transaction
+from common.utils.market import restricted_exclude_sql
 from research.data.storage import duckdb_query as dq
+from scripts.strategy_quality_overlay import add_quality_overlay
 
 
 FACTOR_FAMILY_KEYS = {
@@ -156,9 +158,13 @@ FACTOR_DEFS: dict[str, tuple[str, bool]] = {
     "holder_buy_value_180": ("事件预期", True),
     "holder_buy_count_180": ("事件预期", True),
     "holder_sell_value_180": ("事件预期", False),
+    "small_cap_quality_score": ("质量", True),
+    "risk_penalty_score": ("风险", False),
+    "defensive_quality_score": ("质量", True),
 }
 
 MODEL_FACTOR_ORDER = [
+    "small_cap_quality_score", "defensive_quality_score", "risk_penalty_score",
     "turnover_rate", "turnover_rate_f", "volume_ratio", "turnover_chg20", "amount_chg20",
     "vol20", "vol60", "downvol20", "gap_abs20", "gap_down20", "ret_min20", "ret_min60", "amihud20",
     "bp", "ep", "sp", "dv_ttm", "dv_ratio", "bp_z_ind", "ep_ttm_z_ind", "sp_ttm_z_ind",
@@ -227,14 +233,13 @@ def main() -> None:
     parser.add_argument("--end", required=True)
     parser.add_argument("--freq", default="monthly")
     parser.add_argument("--label", default="fwd20_excess_industry")
-    parser.add_argument("--db-path", default=None)
     parser.add_argument("--min-train-years", type=int, default=4)
     parser.add_argument("--min-test-year", type=int, default=0)
     parser.add_argument("--stress-aware", action="store_true", help="加入市场状态特征和压力样本权重")
     args = parser.parse_args()
     args.stress_aware = bool(args.stress_aware or "stress" in args.run_id.lower())
 
-    ensure_tables(args.db_path)
+    ensure_tables()
     mark_progress(args, 0.01, "阶段启动")
     try:
         if args.stage == "build_factor_panel":
@@ -251,15 +256,15 @@ def main() -> None:
             summary = stress_report(args)
         else:
             summary = validate_research_run(args)
-        mark_stage(args.db_path, args.run_id, args.stage, "success", summary=summary)
+        mark_stage(args.run_id, args.stage, "success", summary=summary)
         print(json.dumps(compact_console_summary(summary), ensure_ascii=False, indent=2))
     except Exception as exc:
-        mark_stage(args.db_path, args.run_id, args.stage, "failed", summary={"stage": args.stage}, error=str(exc))
+        mark_stage(args.run_id, args.stage, "failed", summary={"stage": args.stage}, error=str(exc))
         raise
 
 
-def ensure_tables(db_path: str | None) -> None:
-    with write_transaction(db_path) as conn:
+def ensure_tables() -> None:
+    with write_transaction() as conn:
         if conn.backend == "mysql":
             conn.execute(
                 """
@@ -687,7 +692,7 @@ def build_factor_panel(args: argparse.Namespace) -> dict[str, Any]:
         "families": families,
     }
     now = now_text()
-    with write_transaction(args.db_path) as conn:
+    with write_transaction() as conn:
         conn.execute(
             replace_sql("factor_research_runs", ["run_id", "start_date", "end_date", "freq", "label", "status", "summary_json", "created_at", "updated_at"], ["run_id"]),
             (args.run_id, args.start, args.end, args.freq, args.label, "running", json.dumps(summary, ensure_ascii=False), now, now),
@@ -749,7 +754,7 @@ def evaluate_factors(args: argparse.Namespace) -> dict[str, Any]:
                 mark_progress(args, 0.08 + 0.72 * completed / max(1, len(jobs)), "计算因子 IC", {"completed": completed, "total": len(jobs)})
     rows = sorted(rows, key=lambda row: float(row.get("rank_ic_mean") or -999), reverse=True)
     mark_progress(args, 0.86, "写入 IC / 分层 / 状态 IC 结果", {"variant_count": len(rows), "state_ic_count": len(state_rows)})
-    with write_transaction(args.db_path) as conn:
+    with write_transaction() as conn:
         ic_sql = replace_sql("factor_ic_results", ["run_id", "factor", "family", "variant", "horizon", "ic_mean", "rank_ic_mean", "ic_win_rate", "icir", "status", "summary_json", "created_at", "updated_at"], ["run_id", "factor", "variant", "horizon"])
         quantile_sql = replace_sql("factor_quantile_results", ["run_id", "factor", "variant", "horizon", "q1_return", "q5_return", "long_short_return", "monotonic_score", "summary_json", "created_at", "updated_at"], ["run_id", "factor", "variant", "horizon"])
         state_sql = replace_sql("factor_state_ic_results", ["run_id", "factor", "family", "variant", "horizon", "market_state", "rank_ic_mean", "ic_win_rate", "icir", "n_periods", "n_obs", "status", "summary_json", "created_at", "updated_at"], ["run_id", "factor", "variant", "horizon", "market_state"])
@@ -888,7 +893,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
             "note": import_error or "LightGBM package is not installed yet.",
         }
         model_path = str((data_root() / "factor_research" / args.run_id / "models" / "lightgbm_ranker.txt"))
-        with write_transaction(args.db_path) as conn:
+        with write_transaction() as conn:
             conn.execute(
                 replace_sql("factor_model_runs", ["run_id", "model_type", "label", "feature_count", "status", "summary_json", "model_path", "created_at", "updated_at"], ["run_id"]),
                 (args.run_id, "lightgbm_ranker", args.label, feature_count, "planned", json.dumps(summary, ensure_ascii=False), model_path, now, now),
@@ -901,7 +906,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
 
     panel = pd.read_parquet(panel_path)
     stress_aware = bool(getattr(args, "stress_aware", False))
-    feature_cols = selected_model_features(panel, args.db_path, args.run_id, args.label)
+    feature_cols = selected_model_features(panel, None, args.run_id, args.label)
     if stress_aware:
         feature_cols = _with_market_state_features(feature_cols, panel)
     mark_progress(args, 0.12, "准备训练样本", {"feature_count": len(feature_cols), "stress_aware": stress_aware})
@@ -1003,7 +1008,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
         "top_features": importance_df.head(12).to_dict(orient="records"),
     }
     model_path = str(last_model_path)
-    with write_transaction(args.db_path) as conn:
+    with write_transaction() as conn:
         conn.execute(
             replace_sql("factor_model_runs", ["run_id", "model_type", "label", "feature_count", "status", "summary_json", "model_path", "created_at", "updated_at"], ["run_id"]),
             (args.run_id, "lightgbm_regressor", args.label, feature_count, "success", json.dumps(summary, ensure_ascii=False), model_path, now, now),
@@ -1047,7 +1052,7 @@ def factor_correlation_report(args: argparse.Namespace) -> dict[str, Any]:
         if col in available_cols
     ]
     panel = pd.read_parquet(panel_path, columns=["trade_date", *candidate_cols])
-    ordered = selected_features_from_ic(args.db_path, args.run_id, args.label)
+    ordered = selected_features_from_ic(None, args.run_id, args.label)
     ordered = [col for col in ordered if col in candidate_cols]
     if not ordered:
         ordered = [
@@ -1087,7 +1092,7 @@ def factor_correlation_report(args: argparse.Namespace) -> dict[str, Any]:
     report_path = data_root() / "factor_research" / args.run_id / "factor_correlation_report.parquet"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_parquet(report_path, index=False, compression="zstd")
-    with write_transaction(args.db_path) as conn:
+    with write_transaction() as conn:
         conn.execute("DELETE FROM factor_correlation_results WHERE run_id = ?", (args.run_id,))
         sql = replace_sql(
             "factor_correlation_results",
@@ -1134,7 +1139,7 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
     lgb, import_error = import_lightgbm()
     if lgb is None:
         raise RuntimeError(import_error or "LightGBM package is not installed")
-    model_path = _model_path_from_db(args.db_path, args.run_id)
+    model_path = _model_path_from_db(None, args.run_id)
     if not model_path:
         raise FileNotFoundError(f"model path not found for run_id={args.run_id}")
     model_file = Path(model_path)
@@ -1142,7 +1147,7 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError(f"model file not found: {model_file}")
     booster = lgb.Booster(model_file=str(model_file))
     booster_features = [str(feature) for feature in booster.feature_name() if str(feature)]
-    feature_cols = booster_features or _model_features_from_db(args.db_path, args.run_id)
+    feature_cols = booster_features or _model_features_from_db(None, args.run_id)
     if not feature_cols:
         panel_path = panel_path_for(args.run_id)
         if not panel_path.exists():
@@ -1155,7 +1160,7 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
             if col in available_cols
         ]
         panel = pd.read_parquet(panel_path, columns=["trade_date", "ts_code", *candidate_cols])
-        feature_cols = selected_model_features(panel, args.db_path, args.run_id, args.label)
+        feature_cols = selected_model_features(panel, None, args.run_id, args.label)
     if not feature_cols:
         raise RuntimeError("no model features available for latest inference")
     mark_progress(args, 0.18, "生成当前最新截面")
@@ -1183,7 +1188,7 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
     prediction_path.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(prediction_path, index=False, compression="zstd")
     now = now_text()
-    with write_transaction(args.db_path) as conn:
+    with write_transaction() as conn:
         conn.execute("DELETE FROM factor_latest_predictions WHERE run_id = ?", (args.run_id,))
         sql = replace_sql(
             "factor_latest_predictions",
@@ -1231,7 +1236,7 @@ def stress_report(args: argparse.Namespace) -> dict[str, Any]:
     cfg["selection"] = dict(cfg.get("selection") or {})
     cfg["selection"]["run_id"] = args.run_id
     regime = dict((cfg.get("filters") or {}).get("market_regime") or {})
-    for key in ["daily_risk_overlay", "risk_state_only", "risk_state", "crisis_guard"]:
+    for key in ["daily_risk_overlay", "risk_state_only"]:
         regime.pop(key, None)
     cfg["filters"] = dict(cfg.get("filters") or {})
     cfg["filters"]["market_regime"] = regime
@@ -1282,13 +1287,13 @@ def stress_report(args: argparse.Namespace) -> dict[str, Any]:
         segment = returns.loc[max(start, active_start):min(end, active_end)]
         if not segment.empty:
             rows.append(_stress_metric_row("event", key, label, segment, weights.loc[segment.index], metric_summary))
-    rows.extend(_market_state_stress_rows(args.db_path, args.run_id, returns, weights, metric_summary))
+    rows.extend(_market_state_stress_rows(None, args.run_id, returns, weights, metric_summary))
 
     now = now_text()
     report_path = data_root() / "factor_research" / args.run_id / "stress_report.parquet"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_parquet(report_path, index=False, compression="zstd")
-    with write_transaction(args.db_path) as conn:
+    with write_transaction() as conn:
         conn.execute("DELETE FROM factor_model_stress_results WHERE run_id = ?", (args.run_id,))
         sql = replace_sql(
             "factor_model_stress_results",
@@ -1338,15 +1343,15 @@ def stress_report(args: argparse.Namespace) -> dict[str, Any]:
 def validate_research_run(args: argparse.Namespace) -> dict[str, Any]:
     mark_progress(args, 0.10, "检查研究产物完整性")
     checks = [
-        _research_count_check(args.db_path, "factor_panel_meta", "factor_panel_meta", "run_id = ?", (args.run_id,), 1),
-        _research_count_check(args.db_path, "factor_ic_results", "factor_ic_results", "run_id = ?", (args.run_id,), 20),
-        _research_count_check(args.db_path, "factor_state_ic_results", "factor_state_ic_results", "run_id = ?", (args.run_id,), 10),
-        _research_count_check(args.db_path, "factor_model_runs", "factor_model_runs", "run_id = ? AND status = 'success'", (args.run_id,), 1),
-        _research_count_check(args.db_path, "factor_model_features", "factor_model_features", "run_id = ?", (args.run_id,), 10),
-        _research_count_check(args.db_path, "factor_model_predictions", "factor_model_predictions", "run_id = ?", (args.run_id,), 100),
-        _research_count_check(args.db_path, "factor_latest_predictions", "factor_latest_predictions", "run_id = ?", (args.run_id,), 100),
-        _research_count_check(args.db_path, "factor_model_stress_results", "factor_model_stress_results", "run_id = ?", (args.run_id,), 4),
-        _research_count_check(args.db_path, "eval_strategy_admission", "eval_strategy_admission", "run_id = ? AND strategy = 'ml_factor_ranker'", ("eval_" + args.run_id,), 1),
+        _research_count_check(None, "factor_panel_meta", "factor_panel_meta", "run_id = ?", (args.run_id,), 1),
+        _research_count_check(None, "factor_ic_results", "factor_ic_results", "run_id = ?", (args.run_id,), 20),
+        _research_count_check(None, "factor_state_ic_results", "factor_state_ic_results", "run_id = ?", (args.run_id,), 10),
+        _research_count_check(None, "factor_model_runs", "factor_model_runs", "run_id = ? AND status = 'success'", (args.run_id,), 1),
+        _research_count_check(None, "factor_model_features", "factor_model_features", "run_id = ?", (args.run_id,), 10),
+        _research_count_check(None, "factor_model_predictions", "factor_model_predictions", "run_id = ?", (args.run_id,), 100),
+        _research_count_check(None, "factor_latest_predictions", "factor_latest_predictions", "run_id = ?", (args.run_id,), 100),
+        _research_count_check(None, "factor_model_stress_results", "factor_model_stress_results", "run_id = ?", (args.run_id,), 4),
+        _research_count_check(None, "eval_strategy_admission", "eval_strategy_admission", "run_id = ? AND strategy = 'ml_factor_ranker'", ("eval_" + args.run_id,), 1),
     ]
     paths = [
         ("monthly_factor_panel", panel_path_for(args.run_id)),
@@ -1713,7 +1718,7 @@ def correlation_sample(panel: pd.DataFrame, cols: list[str], *, max_rows: int = 
     return sampled[cols]
 
 
-def mark_stage(db_path: str | None, run_id: str, stage: str, status: str, *, summary: dict[str, Any], error: str = "") -> None:
+def mark_stage(run_id: str, stage: str, status: str, *, summary: dict[str, Any], error: str = "") -> None:
     sequence = {
         "build_factor_panel": 1,
         "evaluate_factors": 2,
@@ -1724,7 +1729,7 @@ def mark_stage(db_path: str | None, run_id: str, stage: str, status: str, *, sum
         "validate_research_run": 8,
     }.get(stage, 0)
     now = now_text()
-    with write_transaction(db_path) as conn:
+    with write_transaction() as conn:
         conn.execute(
             replace_sql("factor_research_stage_results", ["run_id", "stage", "sequence", "status", "summary_json", "error", "created_at", "updated_at"], ["run_id", "stage"]),
             (run_id, stage, sequence, status, json.dumps(summary, ensure_ascii=False), error, now, now),
@@ -1740,7 +1745,7 @@ def mark_progress(args: argparse.Namespace, progress: float, message: str, extra
     }
     if extra:
         payload.update(extra)
-    mark_stage(args.db_path, args.run_id, args.stage, "running", summary=payload)
+    mark_stage(args.run_id, args.stage, "running", summary=payload)
 
 
 def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, require_label: bool = True) -> pd.DataFrame:
@@ -1810,6 +1815,7 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
         AND p.amount IS NOT NULL AND p.amount > 1000
         {label_filter}
         AND COALESCE(sb.name, '') NOT LIKE '%ST%'
+        AND {restricted_exclude_sql('sb')}
     ), fin AS (
       SELECT ts_code, ann_date, end_date, roe, roe_dt, roe_waa, roe_yearly, roa, roa_yearly,
              roic, grossprofit_margin, gross_margin, netprofit_margin, profit_to_gr, profit_to_op,
@@ -1920,6 +1926,29 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
         ).dt.days,
     }
     panel = pd.concat([panel, pd.DataFrame(derived_cols, index=panel.index)], axis=1)
+    quality_input = panel.copy()
+    quality_input["close"] = quality_input["adj_close"]
+    quality_input["recent_holder_reduce"] = (
+        pd.to_numeric(quality_input.get("holder_sell_value_180", 0), errors="coerce").fillna(0.0) > 0
+    ).astype(float)
+    quality_input["loss_streak"] = np.where(
+        pd.to_numeric(quality_input.get("netprofit_margin", 0), errors="coerce").fillna(0.0) < 0,
+        1.0,
+        0.0,
+    )
+    quality_frame = add_quality_overlay(quality_input)
+    weak_state = (
+        pd.to_numeric(quality_frame.get("mkt_state_weak", 0), errors="coerce").fillna(0.0)
+        + pd.to_numeric(quality_frame.get("mkt_state_crash", 0), errors="coerce").fillna(0.0)
+        + pd.to_numeric(quality_frame.get("mkt_state_liquidity_squeeze", 0), errors="coerce").fillna(0.0)
+    ).clip(0, 1)
+    panel["small_cap_quality_score"] = pd.to_numeric(quality_frame["small_cap_quality_score"], errors="coerce")
+    panel["risk_penalty_score"] = pd.to_numeric(quality_frame["risk_penalty_score"], errors="coerce")
+    panel["defensive_quality_score"] = (
+        panel["small_cap_quality_score"].fillna(0.0) * (1.0 + weak_state * 0.22)
+        - panel["risk_penalty_score"].fillna(0.0) * (0.35 + weak_state * 0.30)
+        - pd.to_numeric(panel.get("vol20", 0), errors="coerce").fillna(0.0).clip(lower=0) * 10.0 * weak_state
+    )
     z_cols = {}
     for source, out_col in [("ep", "ep_ttm_z_ind"), ("bp", "bp_z_ind"), ("sp", "sp_ttm_z_ind")]:
         grouped = panel.groupby(["trade_date", "industry"])[source]

@@ -103,8 +103,8 @@ func (repo *Repository) List(query Query) ([]Task, error) {
 
 func (repo *Repository) HasRunningEvaluation(excludeID string) (bool, error) {
 	row := repo.db.QueryRow(`SELECT COUNT(*) FROM task_jobs
-		WHERE task_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?) AND status IN ('queued', 'running') AND id <> ?`,
-		string(TypeEvaluationTimeMachine), string(TypeStrategyEvaluation), string(TypePortfolioOptimization), string(TypeWalkForwardEvaluation), string(TypeParameterExperiment), string(TypeFactorResearch), string(TypeLimitSignalEvaluation), string(TypeT0DailyResearch), string(TypeT0TimeMachine), excludeID)
+		WHERE task_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AND status IN ('queued', 'running') AND id <> ?`,
+		string(TypeEvaluationTimeMachine), string(TypeStrategyEvaluation), string(TypePortfolioOptimization), string(TypeWalkForwardEvaluation), string(TypeParameterExperiment), string(TypeFactorResearch), string(TypeFactorAutoTune), string(TypeModelTraining), string(TypeLimitSignalEvaluation), string(TypeT0DailyResearch), string(TypeT0TimeMachine), excludeID)
 	var count int
 	if err := row.Scan(&count); err != nil {
 		return false, err

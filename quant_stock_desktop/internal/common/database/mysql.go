@@ -74,7 +74,7 @@ func migrateMySQLSchema(conn *sql.DB) error {
 		return err
 	}
 	for _, stmt := range mysqlSchemaStatements() {
-		if _, err := conn.Exec(stmt); err != nil {
+		if err := db.ExecSchemaStatement(stmt); err != nil {
 			return fmt.Errorf("mysql schema: %w\n%s", err, stmt)
 		}
 	}
@@ -82,92 +82,68 @@ func migrateMySQLSchema(conn *sql.DB) error {
 }
 
 func mysqlSchemaStatements() []string {
-	out := make([]string, 0)
-	for _, stmt := range sqliteBaseSchemaStatements() {
-		converted, ok := sqliteStatementToMySQL(stmt)
-		if ok {
-			out = append(out, converted)
-		}
+	out := make([]string, 0, len(baseSchemaStatements()))
+	for _, stmt := range baseSchemaStatements() {
+		out = append(out, mysqlizeSchemaStatement(stmt)...)
 	}
 	return out
 }
 
-func sqliteStatementToMySQL(stmt string) (string, bool) {
-	s := strings.TrimSpace(stmt)
-	if s == "" {
-		return "", false
+func mysqlizeSchemaStatement(stmt string) []string {
+	trimmed := strings.TrimSpace(stmt)
+	if trimmed == "" {
+		return nil
 	}
-	upper := strings.ToUpper(s)
-	if strings.HasPrefix(upper, "CREATE UNIQUE INDEX") || strings.HasPrefix(upper, "CREATE INDEX") {
-		return "", false
+	upper := strings.ToUpper(trimmed)
+	if strings.Contains(upper, "WHERE IS_ACTIVE = 1") {
+		return nil
 	}
-	if strings.HasPrefix(upper, "INSERT OR IGNORE") {
-		return strings.Replace(s, "INSERT OR IGNORE", "INSERT IGNORE", 1), true
+	out := trimmed
+	out = strings.ReplaceAll(out, "CREATE UNIQUE INDEX IF NOT EXISTS", "CREATE UNIQUE INDEX")
+	out = strings.ReplaceAll(out, "CREATE INDEX IF NOT EXISTS", "CREATE INDEX")
+	out = strings.ReplaceAll(out, "INSERT OR IGNORE", "INSERT IGNORE")
+	out = strings.ReplaceAll(out, "INTEGER PRIMARY KEY AUTOINCREMENT", "BIGINT PRIMARY KEY AUTO_INCREMENT")
+	out = regexp.MustCompile(`(?i)\bINTEGER\b`).ReplaceAllString(out, "BIGINT")
+	out = regexp.MustCompile(`(?i)\bREAL\b`).ReplaceAllString(out, "DOUBLE")
+	out = regexp.MustCompile(`(?i)\bTEXT\s+NOT\s+NULL\s+DEFAULT\s+'[^']*'`).ReplaceAllString(out, "VARCHAR(255) NOT NULL DEFAULT ''")
+	out = regexp.MustCompile(`(?i)\bTEXT\s+DEFAULT\s+'[^']*'`).ReplaceAllString(out, "VARCHAR(255) DEFAULT ''")
+	out = regexp.MustCompile(`(?i)\bTEXT\s+NOT\s+NULL`).ReplaceAllString(out, "VARCHAR(255) NOT NULL")
+	out = regexp.MustCompile(`(?i)\bTEXT\b`).ReplaceAllString(out, "VARCHAR(255)")
+	for _, column := range []string{"config_json", "validation_json", "summary_json", "params_json", "payload_json", "result_json", "plan_json", "reasons_json", "risks_json", "rules_json", "metrics_json", "breakdown_json", "outcome_json"} {
+		out = regexp.MustCompile("`?"+column+"`?\\s+VARCHAR\\(255\\)(\\s+NOT\\s+NULL)?(\\s+DEFAULT\\s+'[^']*')?").ReplaceAllStringFunc(out, func(fragment string) string {
+			nullable := ""
+			if strings.Contains(strings.ToUpper(fragment), "NOT NULL") {
+				nullable = " NOT NULL"
+			}
+			return column + " LONGTEXT" + nullable
+		})
 	}
-	if !strings.HasPrefix(upper, "CREATE TABLE") {
-		return "", false
-	}
-	s = strings.TrimSpace(strings.TrimSuffix(s, ";"))
-	s = strings.TrimSpace(strings.TrimSuffix(s, ")"))
-	s = strings.ReplaceAll(s, "INTEGER PRIMARY KEY AUTOINCREMENT", "BIGINT PRIMARY KEY AUTO_INCREMENT")
-	s = strings.ReplaceAll(s, "INTEGER PRIMARY KEY", "BIGINT PRIMARY KEY")
-	s = regexp.MustCompile(`\bINTEGER\b`).ReplaceAllString(s, "BIGINT")
-	s = regexp.MustCompile(`\bREAL\b`).ReplaceAllString(s, "DOUBLE")
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		lines[i] = mysqlColumnLine(line)
-	}
-	s = strings.Join(lines, "\n")
-	return s + "\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci", true
+	out = strings.ReplaceAll(out, "data_market_files(file_path)", "data_market_files(file_path(191))")
+	out = strings.ReplaceAll(out, "data_stock_basic(ts_code, symbol, name, industry)", "data_stock_basic(ts_code, symbol, name, industry)")
+	return []string{out}
 }
 
-func mysqlColumnLine(line string) string {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || strings.HasPrefix(strings.ToUpper(trimmed), "CREATE TABLE") {
-		return line
+func (db *DB) execMySQLCreateIndexIfNeeded(statement string) (bool, error) {
+	match := regexp.MustCompile(`(?is)^\s*CREATE\s+(UNIQUE\s+)?INDEX\s+` + "`?" + `([A-Za-z0-9_]+)` + "`?" + `\s+ON\s+` + "`?" + `([A-Za-z0-9_]+)` + "`?" + `\s*\((.+)\)\s*;?\s*$`).FindStringSubmatch(statement)
+	if match == nil {
+		return false, nil
 	}
-	if strings.HasPrefix(strings.ToUpper(trimmed), "PRIMARY KEY") {
-		return quoteMySQLConstraintColumns(line)
+	indexName := match[2]
+	tableName := match[3]
+	var count int
+	err := db.conn.QueryRow(
+		`SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
+		tableName,
+		indexName,
+	).Scan(&count)
+	if err != nil {
+		return true, err
 	}
-	if strings.HasPrefix(strings.ToUpper(trimmed), "UNIQUE") {
-		return quoteMySQLConstraintColumns(line)
+	if count > 0 {
+		return true, nil
 	}
-	parts := strings.Fields(trimmed)
-	if len(parts) < 2 {
-		return line
-	}
-	column := strings.Trim(parts[0], "`,")
-	line = strings.Replace(line, parts[0], quoteMySQLIdent(column), 1)
-	if strings.ToUpper(parts[1]) != "TEXT" {
-		return line
-	}
-	mysqlType := "VARCHAR(191)"
-	if strings.Contains(column, "json") || strings.Contains(column, "message") ||
-		strings.Contains(column, "reason") || strings.Contains(column, "note") ||
-		strings.Contains(column, "payload") || strings.Contains(column, "config") ||
-		strings.Contains(column, "value") {
-		mysqlType = "LONGTEXT"
-	}
-	line = strings.Replace(line, "TEXT", mysqlType, 1)
-	if mysqlType == "LONGTEXT" {
-		line = strings.ReplaceAll(line, " NOT NULL DEFAULT ''", " NOT NULL")
-		line = strings.ReplaceAll(line, " NOT NULL DEFAULT '{}'", " NOT NULL")
-		line = strings.ReplaceAll(line, " NOT NULL DEFAULT '[]'", " NOT NULL")
-	}
-	return line
-}
-
-func quoteMySQLConstraintColumns(line string) string {
-	start := strings.Index(line, "(")
-	end := strings.LastIndex(line, ")")
-	if start < 0 || end <= start {
-		return line
-	}
-	columns := strings.Split(line[start+1:end], ",")
-	for i, column := range columns {
-		columns[i] = quoteMySQLIdent(strings.Trim(strings.TrimSpace(column), "`"))
-	}
-	return line[:start+1] + strings.Join(columns, ", ") + line[end:]
+	_, err = db.conn.Exec(statement)
+	return true, err
 }
 
 func quoteMySQLIdent(value string) string {

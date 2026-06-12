@@ -22,10 +22,10 @@ class StrategyConfig:
 
     @classmethod
     def from_yaml(cls, name: str, path: str | None = None) -> "StrategyConfig":
-        """Load strategy settings from desktop SQLite.
+        """Load strategy settings from desktop MySQL.
 
         The method name is kept for compatibility with existing strategy
-        factories; ``path`` is ignored because SQLite is now the source.
+        factories; ``path`` is ignored because MySQL is now the source.
         """
         d = load_strategy(name)
         return cls(

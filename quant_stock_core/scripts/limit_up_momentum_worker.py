@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from common.infra.db import upsert_sql, write_transaction
 from common.infra import status as run_status
+from common.utils.market import price_limit_threshold_pct
 
 
 TASK_NAME = "limit_up_momentum"
@@ -86,14 +87,7 @@ def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
 
 
 def limit_threshold(ts_code: str, name: str) -> float:
-    if "ST" in str(name).upper():
-        return 4.5
-    code = str(ts_code)
-    if code.startswith("688") or code.startswith("300"):
-        return 19.0
-    if code.startswith("8") or code.startswith("4") or ".BJ" in code:
-        return 28.0
-    return 9.2
+    return price_limit_threshold_pct(ts_code, name)
 
 
 def read_table(con: duckdb.DuckDBPyConnection, path: Path) -> pd.DataFrame:
@@ -388,7 +382,7 @@ def scan(data_path: Path, lookback: int, history_days: int, limit: int, on_progr
 def ensure_tables(conn) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS market_limit_momentum_cache (
-            cache_key TEXT NOT NULL, rank INTEGER NOT NULL DEFAULT 0, ts_code TEXT NOT NULL,
+            cache_key TEXT NOT NULL, rank_no INTEGER NOT NULL DEFAULT 0, ts_code TEXT NOT NULL,
             trade_date TEXT NOT NULL DEFAULT '', score REAL NOT NULL DEFAULT 0,
             payload_json TEXT NOT NULL, generated_at TEXT NOT NULL, updated_at TEXT NOT NULL,
             PRIMARY KEY(cache_key, ts_code)
@@ -460,7 +454,7 @@ def ensure_prediction_tables(conn) -> None:
     )
 
 
-def write_cache(db_path: Path, cache_key: str, items: list[MomentumCandidate]) -> None:
+def write_cache(db_path: Path | None, cache_key: str, items: list[MomentumCandidate]) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with write_transaction(db_path) as conn:
         ensure_tables(conn)
@@ -480,7 +474,7 @@ def write_cache(db_path: Path, cache_key: str, items: list[MomentumCandidate]) -
             rows.append((cache_key, idx, item.ts_code, item.trade_date, item.score, payload, ts, ts))
         conn.executemany(
             """INSERT INTO market_limit_momentum_cache(
-                cache_key, rank, ts_code, trade_date, score, payload_json, generated_at, updated_at
+                cache_key, rank_no, ts_code, trade_date, score, payload_json, generated_at, updated_at
             ) VALUES(?,?,?,?,?,?,?,?)""",
             rows,
         )
@@ -515,7 +509,7 @@ def write_cache(db_path: Path, cache_key: str, items: list[MomentumCandidate]) -
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", required=True)
-    parser.add_argument("--db-path", required=True)
+    parser.add_argument("--db-path", default="")
     parser.add_argument("--cache-key", required=True)
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--lookback", type=int, default=20)
@@ -523,6 +517,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         run_status.begin(TASK_NAME)
+        cache_db_path = Path(args.db_path).expanduser().resolve() if args.db_path else None
         run_status.progress(TASK_NAME, 1, 100, "load", "读取涨停与基础行情")
         def report_scan(idx: int, total: int, phase: str) -> None:
             stage = "feature" if phase == "feature" else "event"
@@ -536,7 +531,7 @@ def main() -> int:
 
         items = scan(Path(args.data_path), args.lookback, args.history_days, args.limit, report_scan)
         run_status.progress(TASK_NAME, 98, 100, "persist", f"写入 {len(items)} 个短线候选")
-        write_cache(Path(args.db_path), args.cache_key, items)
+        write_cache(cache_db_path, args.cache_key, items)
         run_status.progress(TASK_NAME, 100, 100, "done", "刷新页面缓存")
         run_status.done(TASK_NAME, f"已生成 {len(items)} 个涨停推荐候选")
         print(json.dumps({"count": len(items), "cache_key": args.cache_key}, ensure_ascii=False), flush=True)

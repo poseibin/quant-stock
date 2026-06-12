@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Activity, Database, Flame, FlaskConical, Radar, Repeat2, Search, Settings as SettingsIcon, WalletCards } from 'lucide-react'
+import { Activity, BellRing, Database, Flame, FlaskConical, Radar, Repeat2, Search, Settings, WalletCards } from 'lucide-react'
 import { getAppInfo, getPositionRecommendation, type AppInfo } from './services/app'
 import { DashboardPage } from './pages/DashboardPage'
 import { DataExplorerPage } from './pages/DataExplorerPage'
@@ -7,13 +7,14 @@ import { LimitBreakoutPage } from './pages/LimitBreakoutPage'
 import { FactorResearchPage } from './pages/FactorResearchPage'
 import { PositionPage } from './pages/PositionPage'
 import { PolicySupportPage } from './pages/PolicySupportPage'
-import { StockResearchPage } from './pages/StockResearchPage'
+import { ScheduleNotifyPage } from './pages/ScheduleNotifyPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { StockResearchPage } from './pages/StockResearchPage'
 import { T0AssistantPage } from './pages/T0AssistantPage'
 import 'react-data-grid/lib/styles.css'
 import './styles.css'
 
-type Page = 'dashboard' | 'factorResearch' | 'positions' | 't0Assistant' | 'research' | 'policySupport' | 'breakout' | 'flatBreakout' | 'data' | 'settings'
+type Page = 'dashboard' | 'factorResearch' | 'positions' | 't0Assistant' | 'research' | 'policySupport' | 'breakout' | 'flatBreakout' | 'scheduleNotify' | 'data' | 'settings'
 
 type NavigationState = {
   page: Page
@@ -29,10 +30,11 @@ const pages: Array<{ id: Page; label: string; icon: typeof Activity }> = [
   { id: 't0Assistant', label: '做T助手', icon: Repeat2 },
   { id: 'breakout', label: '涨停预警', icon: Flame },
   { id: 'flatBreakout', label: '横盘预警', icon: Radar },
+  { id: 'scheduleNotify', label: '定时通知', icon: BellRing },
   { id: 'research', label: '个股研究', icon: Search },
   { id: 'policySupport', label: '托底监测', icon: Radar },
   { id: 'data', label: '数据管理', icon: Database },
-  { id: 'settings', label: '设置', icon: SettingsIcon }
+  { id: 'settings', label: '设置', icon: Settings }
 ]
 
 const navigationStorageKey = 'quant-stock.navigation'
@@ -162,6 +164,7 @@ function titleOf(page: Page) {
     case 'policySupport': return '托底监测'
     case 'breakout': return '涨停预警'
     case 'flatBreakout': return '横盘预警'
+    case 'scheduleNotify': return '定时通知'
     case 'data': return '数据管理'
     case 'settings': return '设置'
   }
@@ -176,6 +179,7 @@ function renderPage(page: Page, appInfo: AppInfo, openResearch: (tsCode: string,
   if (page === 'policySupport') return <PolicySupportPage onOpenResearch={openResearch} />
   if (page === 'breakout') return <LimitBreakoutPage mode="momentum" onOpenResearch={openResearch} />
   if (page === 'flatBreakout') return <LimitBreakoutPage mode="breakout" onOpenResearch={openResearch} />
+  if (page === 'scheduleNotify') return <ScheduleNotifyPage />
   if (page === 'data') return <DataExplorerPage />
   if (page === 'settings') return <SettingsPage />
 

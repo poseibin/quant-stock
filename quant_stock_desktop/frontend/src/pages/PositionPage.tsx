@@ -123,16 +123,29 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   const [error, setError] = useState('')
   const [confirmReset, setConfirmReset] = useState(false)
 
-  const load = () => {
+  const load = async () => {
     setLoading(true)
     setError('')
-    Promise.all([getPositionSummary(), getPositionRecommendation()])
-      .then(([nextSummary, nextRecommendation]) => {
-        setSummary(nextSummary)
-        setRecommendation(nextRecommendation)
-      })
-      .catch((err: Error) => setError(err.message || '加载持仓失败'))
-      .finally(() => setLoading(false))
+    let quoteWarning = ''
+    try {
+      let nextSummary: PositionSummary
+      try {
+        nextSummary = await refreshPositionRealtimeQuotes()
+      } catch (err) {
+        quoteWarning = err instanceof Error ? err.message : '刷新实时价失败'
+        nextSummary = await getPositionSummary()
+      }
+      const nextRecommendation = await getPositionRecommendation()
+      setSummary(nextSummary)
+      setRecommendation(nextRecommendation)
+      if (quoteWarning) {
+        setError(`${quoteWarning}，已显示最近一次持仓估值`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载持仓失败')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const buildRebalancePlan = (nextRecommendation: PositionRecommendation, nextSummary: PositionSummary): RebalancePlanRow[] => {
@@ -179,7 +192,7 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   }
 
   const buildRebalanceTrades = (nextRecommendation: PositionRecommendation, nextSummary: PositionSummary): TradeRequest[] => {
-    return buildRebalancePlan(nextRecommendation, nextSummary).filter((item) => item.triggered).map((item) => ({
+    return buildRebalancePlan(nextRecommendation, nextSummary).map((item) => ({
       ts_code: item.ts_code,
       action: item.tradeAction,
       shares: item.trade_shares,
@@ -255,9 +268,9 @@ export function PositionPage({ onOpenResearch }: { onOpenResearch?: (tsCode: str
   const rebalanceStats = useMemo(() => buildRebalanceStats(executablePlan), [executablePlan])
   const rebalanced = recommendation?.rebalanced ?? false
   const recommendationMeta = recommendation
-    ? `决策日 ${recommendation.date} · 目标 ${recommendation.n_holdings} 只 / ${percent(recommendation.total_weight)} · 可执行 ${rebalanceCount} 笔 · 买 ${recommendation.n_buy} / 卖 ${recommendation.n_sell}${rebalanced ? ` · 今日已执行 ${recommendation.rebalance_trades || 0} 笔` : ''}`
+    ? `决策日 ${recommendation.date} · 可试仓候选 ${rebalancePlan.length} 只 / ${percent(recommendation.total_weight)} · 价到可执行 ${rebalanceCount} 笔 · 买 ${rebalanceStats.buyCount} / 卖 ${rebalanceStats.sellCount}${rebalanced ? ` · 今日已执行 ${recommendation.rebalance_trades || 0} 笔` : ''}`
     : ''
-  const rebalanceDisabled = loading || saving || rebalanceCount === 0
+  const rebalanceDisabled = loading || saving || rebalancePlan.length === 0
   const clearDisabled = loading || saving || clearing || refreshingQuotes || !summary
   return (
     <div className="positionPage">
@@ -403,7 +416,7 @@ function RebalancePanel({ recommendation, loading, saving, rebalanced, rebalance
         </div>
         <div className="tableHeaderRight">
           <button className="secondaryButton rebalanceButton" onClick={onRebalance} disabled={rebalanceDisabled}>
-            {saving ? '调仓中...' : `执行调仓${executableCount > 0 ? ` ${executableCount}` : ''}`}
+            {saving ? '调仓中...' : executableCount > 0 ? `价到入池 ${executableCount}` : '检查价到'}
           </button>
         </div>
       </div>
@@ -455,7 +468,7 @@ function RebalancePanel({ recommendation, loading, saving, rebalanced, rebalance
                 <td>{percent(item.from_weight)} → {percent(item.to_weight)}</td>
               </tr>
             ))}
-            {!loading && plan.length === 0 ? <tr><td colSpan={13} className="emptyCell">暂无调仓计划</td></tr> : null}
+            {!loading && plan.length === 0 ? <tr><td colSpan={13} className="emptyCell">暂无可试仓候选</td></tr> : null}
             {loading ? <tr><td colSpan={13} className="emptyCell">加载中...</td></tr> : null}
           </tbody>
         </table>

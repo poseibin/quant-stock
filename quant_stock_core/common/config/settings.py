@@ -1,28 +1,56 @@
-"""全局配置入口
+"""全局配置入口。
 
-所有运行时配置统一从此模块读取，支持 .env 覆盖。
+固定运行配置统一读取 quant_stock_core/config.toml。
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Final
-
-from dotenv import load_dotenv
+from typing import Any, Final
 
 PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env")
+CONFIG_PATH: Final[Path] = PROJECT_ROOT / "config.toml"
+_CONFIG: Final[dict[str, Any]] = {}
+
+if CONFIG_PATH.exists():
+    try:
+        import tomllib
+
+        _CONFIG.update(tomllib.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+    except Exception:
+        _CONFIG.clear()
+
+
+def _section(name: str) -> dict[str, Any]:
+    value = _CONFIG.get(name, {})
+    return value if isinstance(value, dict) else {}
+
+
+def _config_str(section: str, key: str, default: str = "") -> str:
+    value = _section(section).get(key, default)
+    return value.strip() if isinstance(value, str) else default
+
+
+def _config_list(section: str, key: str) -> list[str]:
+    value = _section(section).get(key, [])
+    if isinstance(value, list):
+        return [str(item).strip().lstrip("@") for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip().lstrip("@") for item in value.replace("，", ",").replace("\n", ",").split(",") if item.strip()]
+    return []
 
 
 # ---------------------------------------------------------------------------
 # 数据源
 # ---------------------------------------------------------------------------
-TUSHARE_TOKEN: Final[str] = os.getenv("TUSHARE_TOKEN", "")
+TUSHARE_TOKEN: Final[str] = _config_str("data", "tushare_token")
+DEEPSEEK_TOKEN: Final[str] = _config_str("deepseek", "token")
+DEEPSEEK_MODEL: Final[str] = _config_str("deepseek", "model", "deepseek-v4-pro")
 
 # ---------------------------------------------------------------------------
 # 存储路径
 # ---------------------------------------------------------------------------
-DATA_ROOT: Final[Path] = Path(os.getenv("DATA_ROOT", PROJECT_ROOT.parent / "data_store")).resolve()
+DATA_ROOT: Final[Path] = Path(_config_str("storage", "data_root", str(PROJECT_ROOT.parent / "data_store"))).resolve()
 RAW_DIR: Final[Path] = DATA_ROOT / "raw"
 FACTOR_CACHE_DIR: Final[Path] = DATA_ROOT / "factor_cache"
 BACKTEST_DIR: Final[Path] = DATA_ROOT / "backtest_results"
@@ -82,14 +110,15 @@ BJ_LIMIT_PCT: Final[float] = 0.30                 # 北交所 30%
 # ---------------------------------------------------------------------------
 # 推送
 # ---------------------------------------------------------------------------
-DINGTALK_WEBHOOK: Final[str] = os.getenv("DINGTALK_WEBHOOK", "")
-WECHAT_WEBHOOK:   Final[str] = os.getenv("WECHAT_WEBHOOK", "")
+DINGTALK_WEBHOOK: Final[str] = _config_str("dingtalk", "webhook")
+WECHAT_WEBHOOK:   Final[str] = _config_str("wechat", "webhook")
+WECHAT_USERS:     Final[list[str]] = _config_list("wechat", "users")
 
 
 def ensure_token() -> str:
     """确保 Tushare Token 已配置，否则给出明确报错。"""
     if not TUSHARE_TOKEN:
         raise RuntimeError(
-            "TUSHARE_TOKEN 未配置：请复制 .env.example 为 .env 并填入 token"
+            "Tushare token 未配置：请复制 config.example.toml 为 config.toml，并在 [data].tushare_token 填入 token"
         )
     return TUSHARE_TOKEN

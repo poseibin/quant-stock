@@ -27,7 +27,7 @@ import { strategyLabel } from './PositionPage'
 
 echarts.use([CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
-const evaluationTaskTypes = new Set(['evaluation_time_machine', 'eval_strategy_admission', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment'])
+const evaluationTaskTypes = new Set(['evaluation_time_machine', 'eval_strategy_admission', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment', 'factor_research', 'model_training'])
 
 function money(value: number) {
   return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -112,13 +112,18 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
   const signalStats = buildSignalStats(recommendation)
   const hindsightSummary = summarizeHindsight(hindsight)
   const dataQuality = governance.data_quality || {}
-  const missingData = asStringArray(dataQuality.missing)
+  const displayDataQuality = buildDataQualityFallback(dataQuality, datasetStatus, dataStatus)
+  const missingData = asStringArray(displayDataQuality.missing)
   const recovery = governance.recovery || {}
+  const displayRecovery = buildRecoveryFallback(recovery, topLevelTasks)
   const latestRisk = governance.risk?.[0]
-  const walkSummary = summarizeStatus(governance.walk || [], 'pass')
-  const paramSummary = summarizeStatus(governance.params || [], 'stable')
+  const walkRows = governance.walk?.length ? governance.walk : taskRowsAsStatus(topLevelTasks, 'walk_forward_evaluation')
+  const paramRows = governance.params?.length ? governance.params : taskRowsAsStatus(topLevelTasks, 'parameter_experiment')
+  const walkSummary = summarizeStatus(walkRows, 'pass')
+  const paramSummary = summarizeStatus(paramRows, 'stable')
   const topPromotion = (governance.promotion || [])[0]
-  const topAttribution = (governance.portfolio_attribution || [])[0]
+  const promotionFallback = topPromotion || recommendationSourcePromotion(recommendation)
+  const topAttribution = (governance.portfolio_attribution || [])[0] || aggregateRecommendationSources(recommendation)[0]
   const events = buildEvents({ recommendation, summary, tasks: topLevelTasks, dataStatus, datasetStatus })
   const currentTaskLabel = runningTask ? `${runningTask.name} · ${Math.round(runningTask.progress * 100)}%` : '无'
 
@@ -201,13 +206,13 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
           <p>推荐回看、数据闸门、任务恢复和策略晋级统一看这里</p>
         </div>
         <div className="governanceSummaryGrid">
-          <SummaryTile title="推荐回看" value={hindsight.length ? `${hindsight.length} 日` : '暂无'} hint={`加权 ${formatNullablePercent(hindsightSummary.weightedReturn)} · 命中 ${formatNullablePercent(hindsightSummary.hitRate, 100)}`} />
-          <SummaryTile title="数据闸门" value={String(dataQuality.status || '—')} hint={missingData.length ? `缺少 ${missingData.join('、')}` : `数据集 ${Object.keys(asRecord(dataQuality.datasets) || {}).length}`} tone={missingData.length ? 'negative' : 'positive'} />
-          <SummaryTile title="任务恢复" value={`${num(recovery.total)} 个`} hint={`可重跑 ${num(recovery.retryable_failed)} · 阻断 ${num(recovery.blocked_failed)}`} tone={num(recovery.blocked_failed) ? 'negative' : ''} />
-          <SummaryTile title="风险暴露" value={latestRisk ? `${latestRisk.n_holdings} 只` : '暂无'} hint={latestRisk ? `总仓 ${percent(latestRisk.total_weight)} · 单票 ${percent(latestRisk.max_single_weight)}` : '等待审计快照'} />
+          <SummaryTile title="推荐回看" value={hindsight.length ? `${hindsight.length} 日` : recommendation ? `${recommendation.rows.length} 条` : '暂无'} hint={hindsight.length ? `加权 ${formatNullablePercent(hindsightSummary.weightedReturn)} · 命中 ${formatNullablePercent(hindsightSummary.hitRate, 100)}` : recommendation ? `决策日 ${formatCompactDate(recommendation.date)} · 可执行 ${recommendation.n_buy + recommendation.n_sell}` : '等待推荐或回看'} />
+          <SummaryTile title="数据闸门" value={String(displayDataQuality.status || '—')} hint={missingData.length ? `缺少 ${missingData.join('、')}` : `数据集 ${Object.keys(asRecord(displayDataQuality.datasets) || {}).length}`} tone={missingData.length || dataFailed ? 'negative' : 'positive'} />
+          <SummaryTile title="任务恢复" value={`${num(displayRecovery.total)} 个`} hint={`可重跑 ${num(displayRecovery.retryable_failed)} · 阻断 ${num(displayRecovery.blocked_failed)}`} tone={num(displayRecovery.blocked_failed) ? 'negative' : ''} />
+          <SummaryTile title="风险暴露" value={latestRisk ? `${latestRisk.n_holdings} 只` : summary ? `${summary.n_holdings} 只` : '暂无'} hint={latestRisk ? `总仓 ${percent(latestRisk.total_weight)} · 单票 ${percent(latestRisk.max_single_weight)}` : summary ? `总仓 ${percent(risk.positionWeight)} · 单票 ${risk.topPosition ? percent(risk.topPosition.weight) : '—'}` : '等待持仓'} />
           <SummaryTile title="Walk-forward" value={`${walkSummary.pass}/${walkSummary.total}`} hint={`通过率 ${formatNullablePercent(walkSummary.rate, 100)} · 失败 ${walkSummary.fail}`} tone={walkSummary.fail ? 'negative' : ''} />
           <SummaryTile title="参数实验" value={`${paramSummary.pass}/${paramSummary.total}`} hint={`稳定率 ${formatNullablePercent(paramSummary.rate, 100)} · 不稳 ${paramSummary.fail}`} tone={paramSummary.fail ? 'negative' : ''} />
-          <SummaryTile title="策略晋级" value={topPromotion ? strategyLabel(topPromotion.strategy) : '暂无'} hint={topPromotion ? `${promotionLabel(topPromotion.recommended_status)} · v${topPromotion.strategy_version} · ${Math.round(topPromotion.score * 100)}%` : '等待准入结果'} />
+          <SummaryTile title="策略晋级" value={promotionFallback ? strategyLabel(promotionFallback.strategy) : '暂无'} hint={promotionFallback ? `${promotionLabel(promotionFallback.recommended_status)} · v${promotionFallback.strategy_version} · ${Math.round(promotionFallback.score * 100)}%` : '等待准入结果'} />
           <SummaryTile title="组合归因" value={topAttribution ? strategyLabel(String(topAttribution.strategy || '')) : '暂无'} hint={topAttribution ? `权重 ${percent(num(topAttribution.weight))}` : '等待时光机结果'} />
         </div>
       </section>
@@ -417,8 +422,8 @@ function formatCompactDate(value: string) {
 function buildSignalStats(recommendation: PositionRecommendation | null) {
   const rows = recommendation?.rows || []
   return rows.reduce((stats, row) => {
-    if (row.action === 'BUY' || row.action === 'ADD') stats.buy += 1
-    if (row.action === 'SELL' || row.action === 'TRIM') stats.sell += 1
+    if (row.action === 'BUY' || row.action === 'ADD' || row.action === '新建' || row.action === '加仓') stats.buy += 1
+    if (row.action === 'SELL' || row.action === 'TRIM' || row.action === '减仓' || row.action === '清仓') stats.sell += 1
     return stats
   }, { buy: 0, sell: 0 })
 }
@@ -525,6 +530,76 @@ function summarizeStatus(rows: Array<{ status: string }>, passStatus: string) {
   const pass = rows.filter((row) => row.status === passStatus).length
   const fail = rows.filter((row) => row.status === 'fail' || row.status === 'unstable' || row.status === 'rejected').length
   return { total, pass, fail, rate: total ? pass / total : null }
+}
+
+function taskRowsAsStatus(tasks: TaskDTO[], taskType: string): Array<{ status: string }> {
+  const passStatus = taskType === 'parameter_experiment' ? 'stable' : 'pass'
+  return tasks
+    .filter((task) => task.task_type === taskType)
+    .map((task) => {
+      if (task.status === 'success') return { status: passStatus }
+      if (task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled') {
+        return { status: taskType === 'parameter_experiment' ? 'unstable' : 'fail' }
+      }
+      return { status: 'research' }
+    })
+}
+
+function buildDataQualityFallback(dataQuality: Record<string, unknown>, datasetStatus: DatasetUpdateStatus[], runStatus: RunStatus | null) {
+  const existingDatasets = asRecord(dataQuality.datasets)
+  if (Object.keys(existingDatasets || {}).length > 0) return dataQuality
+  const datasets: Record<string, unknown> = {}
+  datasetStatus.forEach((item) => {
+    datasets[item.dataset] = {
+      state: item.state,
+      rows: item.rows_written,
+      progress_done: item.progress_done,
+      progress_total: item.progress_total,
+      updated_at: item.updated_at
+    }
+  })
+  const missing = datasetStatus
+    .filter((item) => item.state === 'failed' || item.state === 'error')
+    .map((item) => item.dataset)
+  let status = datasetStatus.length ? 'pass' : String(dataQuality.status || '—')
+  if (missing.length) status = 'blocked'
+  if (datasetStatus.some((item) => item.state === 'running') || runStatus?.state === 'running') status = 'running'
+  return { ...dataQuality, status, missing, datasets }
+}
+
+function buildRecoveryFallback(recovery: Record<string, unknown>, tasks: TaskDTO[]) {
+  if (num(recovery.total) > 0) return recovery
+  const failed = tasks.filter((task) => task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled')
+  const retryable = failed.filter((task) => task.max_attempts <= 0 || task.attempt < task.max_attempts)
+  return {
+    ...recovery,
+    total: tasks.length,
+    retryable_failed: retryable.length,
+    blocked_failed: failed.length - retryable.length
+  }
+}
+
+function aggregateRecommendationSources(recommendation: PositionRecommendation | null): Array<Record<string, unknown>> {
+  const weights = new Map<string, number>()
+  recommendation?.rows.forEach((row) => {
+    row.sources?.forEach((source) => {
+      weights.set(source.strategy, (weights.get(source.strategy) || 0) + source.weight)
+    })
+  })
+  return [...weights.entries()]
+    .map(([strategy, weight]) => ({ strategy, weight }))
+    .sort((left, right) => num(right.weight) - num(left.weight))
+}
+
+function recommendationSourcePromotion(recommendation: PositionRecommendation | null) {
+  const source = recommendation?.active_strategy_versions?.find((item) => item.strategy !== 'account_rebalance')
+  if (!source) return null
+  return {
+    strategy: source.strategy,
+    recommended_status: source.mode || 'research',
+    strategy_version: source.version || 1,
+    score: source.weight || 0
+  }
 }
 
 function summarizeHindsight(rows: RecommendationHindsight[]) {

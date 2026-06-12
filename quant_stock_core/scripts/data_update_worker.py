@@ -1,6 +1,6 @@
 """Tushare data update worker for the desktop app.
 
-Go starts this script and keeps rendering SQLite status. Python owns the data
+Go starts this script and keeps rendering MySQL status. Python owns the data
 pulling and parquet writes because pandas/pyarrow handles the wide financial
 tables more predictably than the Go parquet writer.
 """
@@ -62,7 +62,7 @@ PHASES: dict[str, list[str]] = {
     "basic": ["stock_basic", "trade_cal"],
     "price": ["daily", "daily_basic", "adj_factor"],
     "finance": ["income", "balancesheet", "cashflow", "fina_indicator", "forecast"],
-    "event": ["stk_holdertrade", "top10_holders", "top_list", "top_inst"],
+    "event": ["stk_holdertrade", "top_list", "top_inst", "top10_holders"],
 }
 
 API_INTERVAL = {
@@ -196,8 +196,7 @@ def year_ranges_between(start: str, end: str) -> list[tuple[str, str]]:
 
 
 class StatusStore:
-    def __init__(self, db_path: Path) -> None:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: Path | None = None) -> None:
         self.conn = connect_db(db_path, isolation_level=None)
         self.ensure_tables()
 
@@ -455,13 +454,14 @@ class DataStore:
 
 
 class Worker:
-    def __init__(self, token: str, data_root: Path, db_path: Path, phase: str, start_date: str, dataset: str = "") -> None:
+    def __init__(self, token: str, data_root: Path, db_path: Path | None, phase: str, start_date: str, dataset: str = "", exclude_datasets: str = "") -> None:
         self.client = TushareClient(token)
         self.store = DataStore(data_root)
         self.status = StatusStore(db_path)
         self.phase = phase if phase in PHASES else "all"
         self.start_date = normalize_date(start_date)
         self.dataset = str(dataset or "").strip()
+        self.exclude_datasets = {item.strip() for item in str(exclude_datasets or "").split(",") if item.strip()}
 
     def jobs(self) -> list[str]:
         if self.dataset:
@@ -472,8 +472,8 @@ class Worker:
             out: list[str] = []
             for names in PHASES.values():
                 out.extend(names)
-            return out
-        return PHASES[self.phase]
+            return [name for name in out if name not in self.exclude_datasets]
+        return [name for name in PHASES[self.phase] if name not in self.exclude_datasets]
 
     def run(self) -> None:
         jobs = self.jobs()
@@ -724,17 +724,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--phase", default="all")
     parser.add_argument("--start-date", default="")
     parser.add_argument("--dataset", default="")
+    parser.add_argument("--exclude-datasets", default="")
     parser.add_argument("--token", default=os.getenv("TUSHARE_TOKEN", ""))
     parser.add_argument("--data-path", default=os.getenv("DATA_ROOT", ""))
-    parser.add_argument("--db-path", default=os.getenv("DESKTOP_DB_PATH", ""))
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     data_root = Path(args.data_path or os.getenv("DATA_ROOT", "")).expanduser().resolve()
-    db_path = Path(args.db_path or data_root / "meta.db").expanduser().resolve()
-    status = StatusStore(db_path)
+    status = StatusStore(None)
 
     def handle_signal(signum: int, _frame: Any) -> None:
         status.error(f"更新进程收到退出信号 {signum}")
@@ -751,10 +750,11 @@ def main() -> int:
         worker = Worker(
             token,
             data_root,
-            db_path,
+            None,
             str(args.phase or "all").strip().lower(),
             str(args.start_date or ""),
             str(args.dataset or ""),
+            str(args.exclude_datasets or ""),
         )
         worker.run()
         return 0

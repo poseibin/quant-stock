@@ -1,0 +1,20 @@
+[database]
+backend = "mysql"
+dsn = "quant_stock:quant_stock@tcp(127.0.0.1:3306)/quant_stock?parseTime=true&charset=utf8mb4&loc=Local"
+
+# Optional bootstrap, only needed when the app should create database/user.
+# admin_dsn = "admin_user:admin_password@tcp(127.0.0.1:3306)/?parseTime=true&charset=utf8mb4&loc=Local&multiStatements=true"
+# database = "quant_stock"
+# user = "quant_stock"
+# password = "quant_stock"
+
+[data]
+tushare_token = ""
+
+[deepseek]
+token = ""
+model = "deepseek-v4-pro"
+
+[wechat]
+webhook = ""
+users = []

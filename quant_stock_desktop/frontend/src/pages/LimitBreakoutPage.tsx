@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  activateStrategyModelRun,
   getActiveStrategyModelRun,
   getLimitBreakoutModelRunStatus,
   getLimitUpModelRunStatus,
@@ -382,6 +381,7 @@ function SignalSummaryPanel({
   variant,
   error = '',
   loading = false,
+  status = null,
   onRefresh,
 }: {
   predictions: LimitUpModelPrediction[]
@@ -389,6 +389,7 @@ function SignalSummaryPanel({
   variant: 'momentum' | 'breakout'
   error?: string
   loading?: boolean
+  status?: RunStatus | null
   onRefresh?: () => void
 }) {
   const summary = summarizePredictions(predictions, run, variant)
@@ -409,6 +410,7 @@ function SignalSummaryPanel({
           </div>
         )}
       </div>
+      <RunStatusProgress status={status} />
       <div className="metricStrip">
         <div className={`metricCard ${summary.verdict === '可观察' ? 'good' : ''}`}>
           <span>模型结论</span>
@@ -702,6 +704,7 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
   const [activeModelRunID, setActiveModelRunID] = useState('')
   const [modelError, setModelError] = useState('')
   const [modelLoading, setModelLoading] = useState(false)
+  const [modelRunSource, setModelRunSource] = useState<'recommend' | 'training' | null>(null)
 
   const loadModel = async () => {
     try {
@@ -728,8 +731,9 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
     }
   }
 
-  const trainModel = async () => {
+  const trainModel = async (source: 'recommend' | 'training' = 'training') => {
     setModelLoading(true)
+    setModelRunSource(source)
     setModelError('')
     setModelStatus({
       task: 'limit_up_model',
@@ -747,20 +751,6 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
     })
     try {
       await runLimitUpModelTraining()
-      await loadModel()
-    } catch (err) {
-      setModelError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setModelLoading(false)
-    }
-  }
-
-  const activateRun = async (runID: string) => {
-    setModelLoading(true)
-    setModelError('')
-    try {
-      const active = await activateStrategyModelRun({ strategy: 'limit_up_model', run_id: runID })
-      setActiveModelRunID(active.run_id)
       await loadModel()
     } catch (err) {
       setModelError(err instanceof Error ? err.message : String(err))
@@ -792,7 +782,8 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
           variant="momentum"
           error={modelError}
           loading={modelLoading || modelStatus?.state === 'running'}
-          onRefresh={trainModel}
+          status={modelRunSource === 'recommend' ? modelStatus : null}
+          onRefresh={() => trainModel('recommend')}
         />
       )}
 
@@ -812,12 +803,11 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
           run={activeRun}
           runs={modelRuns}
           activeRunID={activeModelRunID || activeRun?.run_id || ''}
-          status={modelStatus}
+          status={modelRunSource === 'training' ? modelStatus : null}
           features={modelFeatures}
           error={modelError}
           loading={modelLoading}
-          onTrain={trainModel}
-          onActivateRun={activateRun}
+          onTrain={() => trainModel('training')}
           variant="momentum"
         />
       )}
@@ -825,7 +815,7 @@ function MomentumPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
       {view === 'evaluation' && (
         <LimitUpModelEvaluationPanel
           run={activeRun}
-          status={modelStatus}
+          status={modelRunSource === 'training' ? modelStatus : null}
           slices={modelSlices}
           features={modelFeatures}
           error={modelError}
@@ -846,7 +836,6 @@ function LimitUpModelTrainingPanel({
   error,
   loading,
   onTrain,
-  onActivateRun,
   variant = 'momentum'
 }: {
   run?: LimitUpModelRunSummary
@@ -857,7 +846,6 @@ function LimitUpModelTrainingPanel({
   error: string
   loading: boolean
   onTrain: () => void
-  onActivateRun?: (runID: string) => void
   variant?: 'momentum' | 'breakout'
 }) {
   const running = status?.state === 'running'
@@ -904,8 +892,6 @@ function LimitUpModelTrainingPanel({
         runs={runs || []}
         activeRunID={activeRunID || run?.run_id || ''}
         features={features}
-        loading={loading}
-        onActivateRun={onActivateRun}
         variant={variant}
       />
       <div className="limitModelVerdict">
@@ -973,46 +959,99 @@ function ModelVersionPanel({
   runs,
   activeRunID,
   features,
-  loading,
-  onActivateRun,
   variant
 }: {
   runs: LimitUpModelRunSummary[]
   activeRunID: string
   features: LimitUpModelFeature[]
-  loading: boolean
-  onActivateRun?: (runID: string) => void
   variant: 'momentum' | 'breakout'
 }) {
-  const title = variant === 'breakout' ? '横盘模型版本' : '涨停模型版本'
+  const title = variant === 'breakout' ? '横盘模型版本准入对比' : '涨停模型版本准入对比'
+  const topLabel = variant === 'breakout' ? 'Top3' : 'Top10'
+  const latestCutoff = runs.reduce((latest, item) => {
+    const value = item.latest_date || item.end_date || ''
+    return value > latest ? value : latest
+  }, '')
+  const rows = runs.slice(0, 10).map((item) => buildLimitVersionAdmission(item, activeRunID, latestCutoff, variant))
+  const enabled = rows.find((item) => item.active && item.canEnable)
+  const best = rows.reduce<LimitVersionAdmission | null>((memo, item) => {
+    if (!item.canEnable) return memo
+    return !memo || item.score > memo.score ? item : memo
+  }, null)
+  const current = enabled || best || rows[0]
   return (
-    <div className="limitModelColumns twoColumns">
-      <div>
-        <div className="formTitle">{title}</div>
-        <div className="limitModelList">
-          {runs.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无模型版本</div> : runs.map((item) => {
-            const active = item.run_id === activeRunID
-            return (
-              <div className="limitModelSliceRow" key={item.run_id}>
-                <b>{active ? '当前版本' : '历史版本'} · {dateLabel(item.updated_at || item.end_date)}</b>
-                <span>
-                  <span className="mono">{shortRunID(item.run_id)}</span>
-                  {' · '}{dateLabel(item.start_date)} - {dateLabel(item.end_date)}
-                  {' · '}{item.status}
-                  {' · '}Top{variant === 'breakout' ? '3' : '10'} {pct(item.top_return)}
-                  {' · '}Rank IC {Number.isFinite(item.rank_ic) ? item.rank_ic.toFixed(3) : '—'}
-                </span>
-                {!active ? (
-                  <button className="secondaryButton compactButton" onClick={() => onActivateRun?.(item.run_id)} disabled={loading || !onActivateRun}>
-                    设为当前版本
-                  </button>
-                ) : null}
-              </div>
-            )
-          })}
+    <section className="detailCard modelVersionCompare">
+      <div className="tableHeader">
+        <div>
+          <div className="sectionLabel">ADMISSION COMPARE</div>
+          <h3>{title}</h3>
+        </div>
+        <span>{enabled ? `启用中 ${shortRunID(enabled.run.run_id)}` : best ? `建议启用 ${shortRunID(best.run.run_id)}` : '暂无可启用版本'}</span>
+      </div>
+      <div className="metricStrip">
+        <div className={`metricCard ${enabled?.canEnable ? 'good' : enabled ? 'bad' : ''}`}>
+          <span>已启用版本</span>
+          <b>{enabled ? enabled.admission : '暂无'}</b>
+          <em>{enabled?.run.run_id || '未配置 active run'}</em>
+        </div>
+        <div className="metricCard">
+          <span>最高准入分</span>
+          <b>{best ? best.score.toFixed(2) : '—'}</b>
+          <em>{best ? `${topLabel} ${pct(best.run.top_return)}` : '完整版本才参与最优'}</em>
+        </div>
+        <div className={`metricCard ${current?.needsRefresh ? 'bad' : 'good'}`}>
+          <span>最新截面</span>
+          <b>{current?.needsRefresh ? '需更新' : '已覆盖'}</b>
+          <em>{current ? `版本 ${dateLabel(current.cutoffDate)} / 最新 ${dateLabel(latestCutoff)}` : '暂无训练记录'}</em>
+        </div>
+        <div className={`metricCard ${current?.complete ? 'good' : 'bad'}`}>
+          <span>训练完整性</span>
+          <b>{current?.complete ? '完整' : '不完整'}</b>
+          <em>{current?.failure || '样本、折数、日期和交易验证均通过'}</em>
         </div>
       </div>
-      <div>
+      <div className="modelVersionTableWrap">
+        <table className="modelVersionTable">
+          <thead>
+            <tr>
+              <th>版本</th>
+              <th>准入</th>
+              <th>完整性</th>
+              <th>分数</th>
+              <th>核心收益</th>
+              <th>辅助指标</th>
+              <th>风险</th>
+              <th>排序指标</th>
+              <th>训练区间</th>
+              <th>评估员意见</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr><td colSpan={10} className="mutedText">暂无模型版本</td></tr>
+            ) : rows.map((item) => (
+              <tr key={item.run.run_id}>
+                <td>
+                  <b>{item.active && item.canEnable ? '已启用' : item.active ? '当前版本' : '候选版本'} · {shortRunID(item.run.run_id)}</b>
+                  {item.active && item.canEnable ? <span className="versionActiveTag">启用中</span> : null}
+                  {item.active && !item.canEnable ? <span className="versionActiveTag warning">未准入</span> : null}
+                  <div className="mono">{dateLabel(item.run.updated_at || item.run.end_date)}</div>
+                </td>
+                <td><span className={`badge ${admissionBadgeClass(item.admission)}`}>{item.admission}</span></td>
+                <td><span className={`badge ${item.complete ? 'success' : 'failed'}`}>{item.complete ? '完整' : '不完整'}</span></td>
+                <td>{item.score.toFixed(2)}</td>
+                <td className={marketTone(item.run.top_return)}><b>{topLabel}</b><div>{pct(item.run.top_return)}</div></td>
+                <td className={marketTone(item.run.top_excess_return)}><b>超额</b><div>{pct(item.run.top_excess_return)}</div></td>
+                <td className={drawdownTone(item.run.top_drawdown)}><b>回撤</b><div>{pct(item.run.top_drawdown)}</div></td>
+                <td className={icTone(item.run.rank_ic)}><b>Rank IC</b><div>{Number.isFinite(item.run.rank_ic) ? item.run.rank_ic.toFixed(3) : '—'}</div></td>
+                <td>{dateLabel(item.run.start_date)} - {dateLabel(item.run.end_date)}</td>
+                <td className="versionFailureText">{item.failure || '训练日期、截面、样本、折数和交易验证通过，可进入候选启用。'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="modelVersionFeatureBlock">
         <div className="formTitle">当前版本因子</div>
         <div className="limitModelFeatureList">
           {features.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无特征重要性</div> : features.map((item) => (
@@ -1020,8 +1059,78 @@ function ModelVersionPanel({
           ))}
         </div>
       </div>
-    </div>
+    </section>
   )
+}
+
+type LimitVersionAdmission = {
+  run: LimitUpModelRunSummary
+  active: boolean
+  complete: boolean
+  canEnable: boolean
+  needsRefresh: boolean
+  admission: string
+  score: number
+  failure: string
+  cutoffDate: string
+}
+
+function buildLimitVersionAdmission(
+  run: LimitUpModelRunSummary,
+  activeRunID: string,
+  latestCutoff: string,
+  variant: 'momentum' | 'breakout'
+): LimitVersionAdmission {
+  const summary = parseLimitUpRunSummary(run)
+  const foldCount = summary.evaluation_quality?.fold_count || summary.folds?.length || 0
+  const sampleRows = summary.evaluation_quality?.sample_rows || run.rows || 0
+  const predictionRows = summary.evaluation_quality?.prediction_rows || run.latest_count || 0
+  const trading = bestTradingValidation(run)
+  const cutoffDate = run.latest_date || run.end_date || ''
+  const needsRefresh = Boolean(latestCutoff && cutoffDate && cutoffDate < latestCutoff)
+  const startYear = Number((run.start_date || '').slice(0, 4))
+  const issues: string[] = []
+  if (!['success', 'trained', 'done'].includes(String(run.status || '').toLowerCase())) issues.push('训练状态未完成')
+  if (!Number.isFinite(startYear) || startYear > 2016) issues.push('训练起点偏晚')
+  if (sampleRows < 5000) issues.push('样本量不足')
+  if (predictionRows <= 0) issues.push('缺少最新截面推理')
+  if (foldCount < 3) issues.push('walk-forward 折数不足')
+  if (!Number.isFinite(run.rank_ic)) issues.push('缺少 Rank IC')
+  if (!Number.isFinite(run.top_return) || !Number.isFinite(run.top_excess_return)) issues.push('缺少 Top 分层收益')
+  if (!trading || trading.trade_count <= 0) issues.push('缺少交易层验证')
+  if (needsRefresh) issues.push('需要用最新截面重新训练/推理')
+  const complete = issues.length === 0
+  const tradePass = tradeLayerPass(run, variant)
+  const canEnable = complete && tradePass && run.rank_ic > -0.02
+  const score = Math.max(0, Math.min(100,
+    (complete ? 42 : 18) +
+    Math.max(-10, Math.min(24, run.top_excess_return * 220)) +
+    Math.max(-8, Math.min(16, run.top_return * 120)) +
+    Math.max(-8, Math.min(12, run.rank_ic * 180)) +
+    (run.top_drawdown > -0.25 ? 6 : -6)
+  ))
+  const admission = canEnable
+    ? '可启用'
+    : complete
+      ? '继续观察'
+      : '不可启用'
+  return {
+    run,
+    active: run.run_id === activeRunID,
+    complete,
+    canEnable,
+    needsRefresh,
+    admission: run.run_id === activeRunID && canEnable ? '已启用' : admission,
+    score,
+    failure: issues.slice(0, 3).join(' / '),
+    cutoffDate
+  }
+}
+
+function admissionBadgeClass(value: string) {
+  if (value === '已启用' || value === '可启用') return 'success'
+  if (value === '继续观察') return 'running'
+  return 'failed'
 }
 
 function LimitUpModelEvaluationPanel({
@@ -1262,6 +1371,7 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
   const [activeModelRunID, setActiveModelRunID] = useState('')
   const [modelError, setModelError] = useState('')
   const [modelLoading, setModelLoading] = useState(false)
+  const [modelRunSource, setModelRunSource] = useState<'recommend' | 'training' | null>(null)
 
   const loadModel = async () => {
     try {
@@ -1288,8 +1398,9 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
     }
   }
 
-  const trainModel = async () => {
+  const trainModel = async (source: 'recommend' | 'training' = 'training') => {
     setModelLoading(true)
+    setModelRunSource(source)
     setModelError('')
     setModelStatus({
       task: 'limit_breakout_model',
@@ -1307,20 +1418,6 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
     })
     try {
       await runLimitBreakoutModelTraining()
-      await loadModel()
-    } catch (err) {
-      setModelError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setModelLoading(false)
-    }
-  }
-
-  const activateRun = async (runID: string) => {
-    setModelLoading(true)
-    setModelError('')
-    try {
-      const active = await activateStrategyModelRun({ strategy: 'limit_breakout_model', run_id: runID })
-      setActiveModelRunID(active.run_id)
       await loadModel()
     } catch (err) {
       setModelError(err instanceof Error ? err.message : String(err))
@@ -1348,12 +1445,11 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
           run={activeRun}
           runs={modelRuns}
           activeRunID={activeModelRunID || activeRun?.run_id || ''}
-          status={modelStatus}
+          status={modelRunSource === 'training' ? modelStatus : null}
           features={modelFeatures}
           error={modelError}
           loading={modelLoading}
-          onTrain={trainModel}
-          onActivateRun={activateRun}
+          onTrain={() => trainModel('training')}
           variant="breakout"
         />
       )}
@@ -1361,7 +1457,7 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
       {view === 'evaluation' && (
         <LimitUpModelEvaluationPanel
           run={activeRun}
-          status={modelStatus}
+          status={modelRunSource === 'training' ? modelStatus : null}
           slices={modelSlices}
           features={modelFeatures}
           error={modelError}
@@ -1376,7 +1472,8 @@ function BreakoutPanel({ view, onOpenResearch, onDataUpdated }: { view: SignalVi
           variant="breakout"
           error={modelError}
           loading={modelLoading || modelStatus?.state === 'running'}
-          onRefresh={trainModel}
+          status={modelRunSource === 'recommend' ? modelStatus : null}
+          onRefresh={() => trainModel('recommend')}
         />
       )}
 

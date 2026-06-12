@@ -20,6 +20,8 @@ export function CancelPositionSignal():Promise<position.RunStatus>;
 
 export function CancelTask(arg1:string):Promise<task.DTO>;
 
+export function CheckExternalDependencies():Promise<Array<main.ExternalDependencyStatus>>;
+
 export function ClearLimitBreakoutCandidates():Promise<void>;
 
 export function ClearLimitUpMomentumCandidates():Promise<void>;
@@ -92,6 +94,10 @@ export function ListDatasetUpdateStatus():Promise<Array<datafetch.DatasetStatus>
 
 export function ListFactorAdmissionComparisons(arg1:number):Promise<Array<main.FactorAdmissionComparison>>;
 
+export function ListFactorAutoTuneRuns(arg1:number):Promise<Array<main.FactorAutoTuneRun>>;
+
+export function ListFactorAutoTuneTrials(arg1:string,arg2:number):Promise<Array<main.FactorAutoTuneTrial>>;
+
 export function ListFactorCorrelationResults(arg1:string,arg2:number):Promise<Array<main.FactorCorrelationResult>>;
 
 export function ListFactorICResults(arg1:string,arg2:number):Promise<Array<main.FactorICResult>>;
@@ -146,6 +152,8 @@ export function ListRecommendationHindsight():Promise<Array<main.RecommendationH
 
 export function ListStockBasic(arg1:market.StockBasicQuery):Promise<Array<market.StockBasic>>;
 
+export function ListStrategyScheduleReports():Promise<Array<main.StrategyScheduleReport>>;
+
 export function ListStrategyVersions(arg1:string):Promise<Array<main.StrategyVersionDTO>>;
 
 export function ListT0DailyBacktests(arg1:number):Promise<Array<main.T0DailyBacktest>>;
@@ -180,6 +188,10 @@ export function ReviewStrategyVersion(arg1:main.StrategyVersionActivateRequest):
 
 export function RunDataUpdate(arg1:datafetch.UpdateRequest):Promise<void>;
 
+export function RunFactorAutoTune(arg1:number,arg2:number,arg3:boolean):Promise<task.DTO>;
+
+export function RunFactorLatestInference():Promise<task.DTO>;
+
 export function RunLimitBreakoutModelTraining():Promise<void>;
 
 export function RunLimitSignalEvaluation():Promise<void>;
@@ -187,6 +199,8 @@ export function RunLimitSignalEvaluation():Promise<void>;
 export function RunLimitUpModelTraining():Promise<void>;
 
 export function RunPolicySupportAnalysis():Promise<void>;
+
+export function RunStrategyScheduleNow():Promise<main.StrategyScheduleReport>;
 
 export function RunT0DailyResearch():Promise<void>;
 
@@ -199,3 +213,5 @@ export function ScanMarketDataFiles():Promise<Array<market.DataFileDTO>>;
 export function SetStrategyVersionStatus(arg1:main.StrategyVersionStatusRequest):Promise<Array<main.StrategyVersionDTO>>;
 
 export function StartTask(arg1:string):Promise<task.DTO>;
+
+export function TestStrategyScheduleWechat():Promise<main.StrategyScheduleReport>;

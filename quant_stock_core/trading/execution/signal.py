@@ -3,7 +3,7 @@
 生成下一交易日的目标持仓与买卖建议。
 
 设计原则：
-  - 唯一存储：SQLite 表 rec_daily_recommendations（按 date 主键），不再有任何文件缓存。
+  - 唯一存储：MySQL 表 rec_daily_recommendations（按 date 主键），不再有任何文件缓存。
   - prev（"上一次持仓"）= portfolio_pool_holdings 当前实盘权重。
     → 持仓为空 → buy/sell 全部基于 0 权重对比 → 不会出现"减仓/清仓"幽灵。
   - 每次调用 generate() 都重新跑策略 combiner，永不命中缓存。
@@ -130,7 +130,7 @@ def generate(
     )
     if not strategies:
         raise RuntimeError(
-            "SQLite 配置表中没有启用的策略"
+            "MySQL 配置表中没有启用的策略"
             + (f"（filter={strategies_filter}）" if strategies_filter else "")
         )
 

@@ -72,12 +72,6 @@ func (manager *Manager) Start(req StartRequest) (ProcessInfo, error) {
 	if req.DataPath != "" {
 		cmd.Env = append(cmd.Env, "DATA_ROOT="+req.DataPath)
 	}
-	if req.DBPath != "" {
-		cmd.Env = append(cmd.Env, "DESKTOP_DB_PATH="+req.DBPath)
-	}
-	if req.ConfigDBPath != "" {
-		cmd.Env = append(cmd.Env, "DESKTOP_CONFIG_DB_PATH="+req.ConfigDBPath)
-	}
 	if req.DBBackend != "" {
 		cmd.Env = append(cmd.Env, "DESKTOP_DB_BACKEND="+req.DBBackend)
 	}

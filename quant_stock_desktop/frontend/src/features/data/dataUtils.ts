@@ -19,8 +19,8 @@ export const datasetCards: DatasetCardConfig[] = [
   { id: 'daily_basic', title: '每日指标', name: 'daily_basic', desc: '估值、换手率、量比等指标', datasets: ['daily_basic'], expectedYears: [2010, 2026] },
   { id: 'adj_factor', title: '复权因子', name: 'adj_factor', desc: '前后复权计算所需因子', datasets: ['adj_factor'], expectedYears: [2010, 2026] },
   { id: 'finance', title: '财务数据', name: 'income / balancesheet / cashflow', desc: '利润表、资产负债表、现金流', datasets: ['income', 'balancesheet', 'cashflow'], expectedYears: [2010, 2026] },
-  { id: 'top10_holders', title: '前十大股东', name: 'top10_holders', desc: '国家队跟踪所需的十大股东数据', datasets: ['top10_holders'], expectedYears: [2024, 2026] },
-  { id: 'top_list', title: '龙虎榜', name: 'top_list / top_inst', desc: '龙虎榜明细和机构席位数据', datasets: ['top_list', 'top_inst'], expectedYears: [2024, 2026] }
+  { id: 'top_list', title: '龙虎榜', name: 'top_list / top_inst', desc: '龙虎榜明细和机构席位数据', datasets: ['top_list', 'top_inst'], expectedYears: [2024, 2026] },
+  { id: 'top10_holders', title: '前十大股东', name: 'top10_holders', desc: '国家队跟踪所需的十大股东数据', datasets: ['top10_holders'], expectedYears: [2024, 2026] }
 ]
 
 // 每个数据集（与后端 JobEntry.Name 一一对应）的展示元数据。
@@ -52,9 +52,9 @@ export const jobMetas: JobMeta[] = [
   { name: 'fina_indicator', title: '财务指标', category: 'finance', expectedYears: [2010, 2026] },
   { name: 'forecast', title: '业绩预告', category: 'finance', expectedYears: [2010, 2026] },
   { name: 'stk_holdertrade', title: '股东增减持', category: 'event', expectedYears: [2010, 2026] },
-  { name: 'top10_holders', title: '前十大股东', category: 'event', expectedYears: [2024, 2026] },
   { name: 'top_list', title: '龙虎榜明细', category: 'event', expectedYears: [2024, 2026] },
-  { name: 'top_inst', title: '龙虎榜机构', category: 'event', expectedYears: [2024, 2026] }
+  { name: 'top_inst', title: '龙虎榜机构', category: 'event', expectedYears: [2024, 2026] },
+  { name: 'top10_holders', title: '前十大股东', category: 'event', expectedYears: [2024, 2026] }
 ]
 
 export function partitionYear(partition: string) {

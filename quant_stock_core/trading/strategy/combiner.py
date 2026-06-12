@@ -1,6 +1,6 @@
 """多策略组合器
 
-按 desktop SQLite 配置中的权重，把各子策略的目标持仓加权合成。
+按 desktop MySQL 配置中的权重，把各子策略的目标持仓加权合成。
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from . import registry
 def load_all(path: str | None = None,
              enabled_only_for: list[str] | None = None,
              force_names: list[str] | None = None) -> list[BaseStrategy]:
-    """读取 desktop SQLite 中已启用的策略实例。
+    """读取 desktop MySQL 中已启用的策略实例。
 
     策略经由 strategy/registry.py 的 @register 装饰器自动注册，
     无需在此维护硬编码清单。
@@ -23,7 +23,7 @@ def load_all(path: str | None = None,
     enabled_only_for: 若给定，则只加载列表中的策略（其余即便 enabled 也跳过），
                       用于「单策略隔离回测」。
     force_names:      显式指定要参与的策略名（来自「新增评估」勾选的插件）。
-                      命中的策略即便 SQLite 配置中 enabled=false 也会被强制加载，
+                      命中的策略即便 MySQL 配置中 enabled=false 也会被强制加载，
                       让用户可以自由选择任意已注册插件参与本次评估。
     """
     cfg = load_strategy_settings()

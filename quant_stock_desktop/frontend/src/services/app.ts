@@ -6,6 +6,9 @@ declare global {
           GetAppInfo: () => Promise<AppInfo>
           GetSettings: () => Promise<SettingsResponse>
           SaveSettings: (settings: Settings) => Promise<SettingsResponse>
+          RunStrategyScheduleNow: () => Promise<StrategyScheduleReport>
+          TestStrategyScheduleWechat: () => Promise<StrategyScheduleReport>
+          ListStrategyScheduleReports: () => Promise<StrategyScheduleReport[]>
           ApplyPortfolioCandidate: (request: ApplyPortfolioCandidateRequest) => Promise<SettingsResponse>
           GetSignalPortfolioContext: () => Promise<SignalPortfolioContext>
           ListStrategyVersions: (strategy: string) => Promise<StrategyVersion[]>
@@ -20,6 +23,8 @@ declare global {
           RefreshGovernanceAudit: () => Promise<GovernanceDashboard>
           ListGovernanceDashboard: () => Promise<GovernanceDashboard>
           AnalyzePortfolioTask: (id: string) => Promise<TaskDTO>
+          RunFactorLatestInference: () => Promise<TaskDTO>
+          RunFactorAutoTune: (maxRounds: number, trialsPerRound: number, useDeepSeek: boolean) => Promise<TaskDTO>
           CreateTask: (request: CreateTaskRequest) => Promise<TaskDTO>
           StartTask: (id: string) => Promise<TaskDTO>
           RetryTask: (id: string) => Promise<TaskDTO>
@@ -63,6 +68,8 @@ declare global {
           ListFactorLatestPredictions: (runID: string, limit: number) => Promise<FactorLatestPrediction[]>
           ListFactorObservationEvents: (limit: number) => Promise<FactorObservationEvent[]>
           ListFactorAdmissionComparisons: (limit: number) => Promise<FactorAdmissionComparison[]>
+          ListFactorAutoTuneRuns: (limit: number) => Promise<FactorAutoTuneRun[]>
+          ListFactorAutoTuneTrials: (runID: string, limit: number) => Promise<FactorAutoTuneTrial[]>
           ListCrashWarningRuns: (limit: number) => Promise<CrashWarningRunSummary[]>
           ListCrashWarningFeatures: (runID: string, limit: number) => Promise<CrashWarningFeature[]>
           RunLimitUpModelTraining: () => Promise<void>
@@ -99,6 +106,7 @@ declare global {
           RunDataUpdate: (req: DataUpdateRequest) => Promise<void>
           GetDataUpdateStatus: () => Promise<RunStatus>
           ListDatasetUpdateStatus: () => Promise<DatasetUpdateStatus[]>
+          CheckExternalDependencies: () => Promise<ExternalDependencyStatus[]>
         }
       }
     }
@@ -124,6 +132,33 @@ export interface Settings {
   portfolio_risk: Record<string, unknown>
   exit_rules: Record<string, unknown>
   governance_rules: Record<string, unknown>
+  strategy_schedule: StrategyScheduleSettings
+}
+
+export interface StrategyScheduleSettings {
+  enabled: boolean
+  time_of_day: string
+  weekdays: number[]
+  targets: Record<string, boolean>
+  wechat_webhook: string
+  wechat_users: string[]
+}
+
+export interface StrategyScheduleReport {
+  started_at: string
+  finished_at: string
+  success: boolean
+  message: string
+  wechat_content?: string
+  rows: StrategyScheduleReportRow[]
+  recommendation?: PositionRecommendation
+}
+
+export interface StrategyScheduleReportRow {
+  target: string
+  label: string
+  status: string
+  message: string
 }
 
 const fallbackSettingsKey = 'quant-stock.settings.preview'
@@ -585,6 +620,45 @@ export interface FactorAdmissionComparison {
   stress_crash_state_failed: boolean
   stress_weak_drawdown_failed: boolean
   generated_at: string
+}
+
+export interface FactorAutoTuneRun {
+  run_id: string
+  base_model_run_id: string
+  start_date: string
+  end_date: string
+  status: string
+  best_trial_id: string
+  best_model_run_id: string
+  best_admission: string
+  best_score: number
+  summary_json: string
+  created_at: string
+  updated_at: string
+}
+
+export interface FactorAutoTuneTrial {
+  run_id: string
+  trial_id: string
+  round_no: number
+  source: string
+  model_run_id: string
+  eval_run_id: string
+  params_json: string
+  llm_direction_json: string
+  admission: string
+  admission_score: number
+  reason: string
+  annual_return: number
+  total_return: number
+  max_drawdown: number
+  sharpe: number
+  stress_bad_event_count: number
+  stress_crash_state_failed: boolean
+  stress_weak_drawdown_failed: boolean
+  passed: boolean
+  created_at: string
+  updated_at: string
 }
 
 export interface CrashWarningRunSummary {
@@ -1145,7 +1219,19 @@ function defaultSettings(): Settings {
       market_regime: { enabled: false, trend_window: 60, breadth_window: 20, min_breadth: 0.45, normal_exposure: 1, weak_exposure: 0.5, bear_exposure: 0.3 }
     },
     exit_rules: { enabled: true, stop_loss: -0.12, trailing_stop: -0.08, trailing_exec: 'next_open', slippage: 0.003 },
-    governance_rules: defaultGovernanceRules()
+    governance_rules: defaultGovernanceRules(),
+    strategy_schedule: defaultStrategySchedule()
+  }
+}
+
+function defaultStrategySchedule(): StrategyScheduleSettings {
+  return {
+    enabled: false,
+    time_of_day: '22:00',
+    weekdays: [1, 2, 3, 4, 5],
+    targets: { t0: true, limit_up: true, breakout: true, factor: false },
+    wechat_webhook: '',
+    wechat_users: []
   }
 }
 
@@ -1163,7 +1249,12 @@ function readFallbackSettings(): Settings {
       strategies: { ...defaults.strategies, ...(saved.strategies || {}) },
       portfolio_risk: { ...defaults.portfolio_risk, ...(saved.portfolio_risk || {}) },
       exit_rules: { ...defaults.exit_rules, ...(saved.exit_rules || {}) },
-      governance_rules: { ...defaults.governance_rules, ...(saved.governance_rules || {}) }
+      governance_rules: { ...defaults.governance_rules, ...(saved.governance_rules || {}) },
+      strategy_schedule: {
+        ...defaults.strategy_schedule,
+        ...(saved.strategy_schedule || {}),
+        targets: { ...defaults.strategy_schedule.targets, ...(saved.strategy_schedule?.targets || {}) }
+      }
     }
   } catch {
     return defaults
@@ -1228,6 +1319,39 @@ export async function saveSettings(settings: Settings): Promise<SettingsResponse
     settings,
     issues: []
   }
+}
+
+export async function runStrategyScheduleNow(): Promise<StrategyScheduleReport> {
+  if (window.go?.main?.App?.RunStrategyScheduleNow) {
+    return window.go.main.App.RunStrategyScheduleNow()
+  }
+  return {
+    started_at: new Date().toISOString(),
+    finished_at: new Date().toISOString(),
+    success: true,
+    message: '预览模式未连接后端',
+    rows: []
+  }
+}
+
+export async function testStrategyScheduleWechat(): Promise<StrategyScheduleReport> {
+  if (window.go?.main?.App?.TestStrategyScheduleWechat) {
+    return window.go.main.App.TestStrategyScheduleWechat()
+  }
+  return {
+    started_at: new Date().toISOString(),
+    finished_at: new Date().toISOString(),
+    success: true,
+    message: '预览模式未连接后端',
+    rows: []
+  }
+}
+
+export async function listStrategyScheduleReports(): Promise<StrategyScheduleReport[]> {
+  if (window.go?.main?.App?.ListStrategyScheduleReports) {
+    return (await window.go.main.App.ListStrategyScheduleReports()) || []
+  }
+  return []
 }
 
 export async function applyPortfolioCandidate(request: ApplyPortfolioCandidateRequest): Promise<SettingsResponse> {
@@ -1346,6 +1470,22 @@ export async function analyzePortfolioTask(id: string): Promise<TaskDTO> {
   return { ...task, summary: { ai_analysis: '开发模式占位：连接桌面应用后可运行量化优化分析。' } }
 }
 
+export async function runFactorLatestInference(): Promise<TaskDTO> {
+  if (window.go?.main?.App?.RunFactorLatestInference) {
+    return window.go.main.App.RunFactorLatestInference()
+  }
+  const now = new Date().toISOString()
+  return { ...mockTask({ name: '通用策略重新推理', task_type: 'factor_research', params: { profile: 'inference' } }), status: 'running', started_at: now, updated_at: now }
+}
+
+export async function runFactorAutoTune(maxRounds = 12, trialsPerRound = 6, useDeepSeek = true): Promise<TaskDTO> {
+  if (window.go?.main?.App?.RunFactorAutoTune) {
+    return window.go.main.App.RunFactorAutoTune(maxRounds, trialsPerRound, useDeepSeek)
+  }
+  const now = new Date().toISOString()
+  return { ...mockTask({ name: '通用策略自动调参', task_type: 'factor_autotune', params: { max_rounds: maxRounds, trials_per_round: trialsPerRound, use_deepseek: useDeepSeek } }), status: 'running', started_at: now, updated_at: now }
+}
+
 export async function createTask(request: CreateTaskRequest): Promise<TaskDTO> {
   if (window.go?.main?.App?.CreateTask) {
     return window.go.main.App.CreateTask(request)
@@ -1460,6 +1600,20 @@ export async function listFactorObservationEvents(limit = 80): Promise<FactorObs
 export async function listFactorAdmissionComparisons(limit = 30): Promise<FactorAdmissionComparison[]> {
   if (window.go?.main?.App?.ListFactorAdmissionComparisons) {
     return (await window.go.main.App.ListFactorAdmissionComparisons(limit)) || []
+  }
+  return []
+}
+
+export async function listFactorAutoTuneRuns(limit = 20): Promise<FactorAutoTuneRun[]> {
+  if (window.go?.main?.App?.ListFactorAutoTuneRuns) {
+    return (await window.go.main.App.ListFactorAutoTuneRuns(limit)) || []
+  }
+  return []
+}
+
+export async function listFactorAutoTuneTrials(runID = '', limit = 80): Promise<FactorAutoTuneTrial[]> {
+  if (window.go?.main?.App?.ListFactorAutoTuneTrials) {
+    return (await window.go.main.App.ListFactorAutoTuneTrials(runID, limit)) || []
   }
   return []
 }
@@ -1961,9 +2115,9 @@ export async function listT0TimeMachineResults(limit = 100): Promise<T0TimeMachi
 
 export async function runT0DailyResearch(): Promise<void> {
   const task = await createTask({
-    name: '日线做T研究',
-    task_type: 't0_daily_research',
-    params: {}
+    name: '做T模型训练',
+    task_type: 'model_training',
+    params: { strategy: 't0_daily' }
   })
   await startTask(task.id)
 }
@@ -2086,6 +2240,7 @@ export interface DataUpdateRequest {
   phase: string
   start_date: string
   dataset?: string
+  exclude_datasets?: string[]
 }
 
 export async function runDataUpdate(req: DataUpdateRequest): Promise<void> {
@@ -2115,11 +2270,35 @@ export interface DatasetUpdateStatus {
   updated_at: string
 }
 
+export interface ExternalDependencyStatus {
+  key: string
+  name: string
+  category: string
+  state: string
+  latency_ms: number
+  message: string
+  checked_at: string
+}
+
 export async function listDatasetUpdateStatus(): Promise<DatasetUpdateStatus[]> {
   if (window.go?.main?.App?.ListDatasetUpdateStatus) {
     return (await window.go.main.App.ListDatasetUpdateStatus()) || []
   }
   return []
+}
+
+export async function checkExternalDependencies(): Promise<ExternalDependencyStatus[]> {
+  if (window.go?.main?.App?.CheckExternalDependencies) {
+    return (await window.go.main.App.CheckExternalDependencies()) || []
+  }
+  const checkedAt = new Date().toISOString()
+  return [
+    { key: 'mysql', name: 'MySQL 数据库', category: '基础设施', state: 'ready', latency_ms: 2, message: '开发模式占位', checked_at: checkedAt },
+    { key: 'tushare', name: 'Tushare 数据接口', category: '行情/财务数据', state: 'missing', latency_ms: 0, message: '桌面端连接后检测', checked_at: checkedAt },
+    { key: 'deepseek', name: 'DeepSeek 模型接口', category: 'AI 调参/复盘', state: 'missing', latency_ms: 0, message: '桌面端连接后检测', checked_at: checkedAt },
+    { key: 'realtime_quote', name: '实时行情接口', category: '实时价格', state: 'ready', latency_ms: 180, message: '开发模式占位', checked_at: checkedAt },
+    { key: 'wechat', name: '企业微信机器人', category: '通知', state: 'missing', latency_ms: 0, message: '桌面端连接后检测', checked_at: checkedAt },
+  ]
 }
 
 function mockTask(request: CreateTaskRequest): TaskDTO {

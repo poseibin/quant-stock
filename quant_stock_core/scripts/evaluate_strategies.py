@@ -7,7 +7,7 @@
 - 与 small_cap_quality 的持仓重合度和收益相关性
 
 默认会评估所有已注册策略，包括 disabled 的候选策略；是否进入实盘组合
-由 desktop SQLite 配置中的 enabled 决定。
+由 desktop MySQL 配置中的 enabled 决定。
 """
 from __future__ import annotations
 
@@ -43,9 +43,9 @@ def main() -> None:
     parser.add_argument("--benchmark", default="000905.SH")
     parser.add_argument("--slippage", type=float, default=0.002)
     parser.add_argument("--baseline", default="small_cap_quality")
-    parser.add_argument("--save", default=None, help="保存 run id；结果写入 SQLite eval_strategy_admission 表")
+    parser.add_argument("--save", default=None, help="保存 run id；结果写入 MySQL eval_strategy_admission 表")
     parser.add_argument("--append-save", action="store_true", help="追加保存单个策略结果，不清空同 run_id 已有记录")
-    parser.add_argument("--db-path", default=None, help="SQLite 路径，默认 DESKTOP_DB_PATH 或 DATA_ROOT/meta.db")
+    parser.add_argument("--db-path", default=None, help="兼容旧参数；MySQL 模式忽略文件路径")
     parser.add_argument("--strategy-version-mode", choices=["active", "latest"], default="latest", help="策略参数版本：评估默认 latest，实盘推股默认 active")
     parser.add_argument("--strategy-version-json", default="{}", help="指定策略版本，如 {\"small_cap_quality\": 3}")
     parser.add_argument("--export-files", action="store_true", help="额外导出 JSON/CSV 到 backtest_results/<save>/")
@@ -83,7 +83,7 @@ def main() -> None:
         save_eval_strategy_admission(db_path, args.save, payload, delete_existing=not args.append_save)
         log.info(f"策略评估结果已保存到 {db_backend()}: {db_path} run_id={args.save}")
         if args.export_files:
-            log.info("--export-files 已废弃：策略评估结果统一写入 SQLite，不再导出 JSON/CSV")
+            log.info("--export-files 已废弃：策略评估结果统一写入 MySQL，不再导出 JSON/CSV")
 
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default))
@@ -535,20 +535,11 @@ def _quote(items: list[str]) -> str:
     return ",".join(f"'{x}'" for x in items)
 
 
-def _resolve_db_path(value: str | None) -> Path:
-    if value:
-        return Path(value).expanduser().resolve()
-    env = os.getenv("DESKTOP_DB_PATH", "").strip() or os.getenv("DESKTOP_CONFIG_DB_PATH", "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    data_root = os.getenv("DATA_ROOT", "").strip()
-    if data_root:
-        return (Path(data_root).expanduser().resolve() / "meta.db")
-    return (ROOT.parent / "data_store" / "meta.db").resolve()
+def _resolve_db_path(value: str | None) -> str | None:
+    return value or None
 
 
-def save_eval_strategy_admission(db_path: Path, run_id: str, payload: dict[str, Any], *, delete_existing: bool = True) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+def save_eval_strategy_admission(db_path: str | None, run_id: str, payload: dict[str, Any], *, delete_existing: bool = True) -> None:
     generated_at = pd.Timestamp.now().isoformat()
     start = str(payload.get("start") or "")
     end = str(payload.get("end") or "")
@@ -645,138 +636,70 @@ def _ensure_eval_strategy_admission_table(conn) -> None:
     if table_exists(conn, "eval_strategy_admission"):
         cols = table_columns(conn, "eval_strategy_admission")
         if "run_id" not in cols:
-            if conn.backend == "mysql":
-                conn.execute("RENAME TABLE eval_strategy_admission TO eval_strategy_admission_legacy")
-            else:
-                conn.execute("ALTER TABLE eval_strategy_admission RENAME TO eval_strategy_admission_legacy")
-    if conn.backend == "mysql":
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS eval_strategy_admission (
-                run_id VARCHAR(255) NOT NULL,
-                strategy VARCHAR(255) NOT NULL,
-                label VARCHAR(255) NOT NULL DEFAULT '',
-                enabled BIGINT NOT NULL DEFAULT 0,
-                status VARCHAR(255) NOT NULL DEFAULT '',
-                admission VARCHAR(255) NOT NULL DEFAULT '',
-                admission_score DOUBLE,
-                reason LONGTEXT NOT NULL,
-                start_date VARCHAR(64) NOT NULL,
-                end_date VARCHAR(64) NOT NULL,
-                benchmark VARCHAR(255) NOT NULL DEFAULT '',
-                baseline VARCHAR(255) NOT NULL DEFAULT '',
-                total_return DOUBLE,
-                annual_return DOUBLE,
-                annual_volatility DOUBLE,
-                sharpe DOUBLE,
-                max_drawdown DOUBLE,
-                calmar DOUBLE,
-                win_rate DOUBLE,
-                n_days BIGINT,
-                month_count BIGINT,
-                monthly_win_rate DOUBLE,
-                worst_month_return DOUBLE,
-                positive_3m_rate DOUBLE,
-                avg_turnover DOUBLE,
-                avg_holdings DOUBLE,
-                avg_total_mv DOUBLE,
-                avg_amount DOUBLE,
-                effective_start VARCHAR(64) NOT NULL DEFAULT '',
-                effective_end VARCHAR(64) NOT NULL DEFAULT '',
-                effective_n_days BIGINT,
-                full_total_return DOUBLE,
-                full_annual_return DOUBLE,
-                full_annual_volatility DOUBLE,
-                full_sharpe DOUBLE,
-                full_max_drawdown DOUBLE,
-                full_calmar DOUBLE,
-                full_win_rate DOUBLE,
-                full_n_days BIGINT,
-                full_avg_turnover DOUBLE,
-                overlap_with_baseline DOUBLE,
-                corr_with_baseline DOUBLE,
-                return_score DOUBLE,
-                drawdown_score DOUBLE,
-                risk_adjusted_score DOUBLE,
-                cost_score DOUBLE,
-                capacity_score DOUBLE,
-                stability_score DOUBLE,
-                independence_score DOUBLE,
-                strategy_version BIGINT,
-                strategy_version_mode VARCHAR(255),
-                error LONGTEXT NOT NULL,
-                generated_at VARCHAR(64) NOT NULL,
-                payload_json LONGTEXT NOT NULL,
-                created_at VARCHAR(64) NOT NULL,
-                updated_at VARCHAR(64) NOT NULL,
-                PRIMARY KEY(run_id, strategy)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """
-        )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS eval_strategy_admission (
-                run_id TEXT NOT NULL,
-                strategy TEXT NOT NULL,
-                label TEXT NOT NULL DEFAULT '',
-                enabled INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT '',
-                admission TEXT NOT NULL DEFAULT '',
-                admission_score REAL,
-                reason TEXT NOT NULL DEFAULT '',
-                start_date TEXT NOT NULL,
-                end_date TEXT NOT NULL,
-                benchmark TEXT NOT NULL DEFAULT '',
-                baseline TEXT NOT NULL DEFAULT '',
-                total_return REAL,
-                annual_return REAL,
-                annual_volatility REAL,
-                sharpe REAL,
-                max_drawdown REAL,
-                calmar REAL,
-                win_rate REAL,
-                n_days INTEGER,
-                month_count INTEGER,
-                monthly_win_rate REAL,
-                worst_month_return REAL,
-                positive_3m_rate REAL,
-                avg_turnover REAL,
-                avg_holdings REAL,
-                avg_total_mv REAL,
-                avg_amount REAL,
-                effective_start TEXT NOT NULL DEFAULT '',
-                effective_end TEXT NOT NULL DEFAULT '',
-                effective_n_days INTEGER,
-                full_total_return REAL,
-                full_annual_return REAL,
-                full_annual_volatility REAL,
-                full_sharpe REAL,
-                full_max_drawdown REAL,
-                full_calmar REAL,
-                full_win_rate REAL,
-                full_n_days INTEGER,
-                full_avg_turnover REAL,
-                overlap_with_baseline REAL,
-                corr_with_baseline REAL,
-                return_score REAL,
-                drawdown_score REAL,
-                risk_adjusted_score REAL,
-                cost_score REAL,
-                capacity_score REAL,
-                stability_score REAL,
-                independence_score REAL,
-                strategy_version INTEGER,
-                strategy_version_mode TEXT,
-                error TEXT NOT NULL DEFAULT '',
-                generated_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY(run_id, strategy)
-            )
-            """
-        )
+            conn.execute("RENAME TABLE eval_strategy_admission TO eval_strategy_admission_legacy")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS eval_strategy_admission (
+            run_id VARCHAR(255) NOT NULL,
+            strategy VARCHAR(255) NOT NULL,
+            label VARCHAR(255) NOT NULL DEFAULT '',
+            enabled BIGINT NOT NULL DEFAULT 0,
+            status VARCHAR(255) NOT NULL DEFAULT '',
+            admission VARCHAR(255) NOT NULL DEFAULT '',
+            admission_score DOUBLE,
+            reason LONGTEXT NOT NULL,
+            start_date VARCHAR(64) NOT NULL,
+            end_date VARCHAR(64) NOT NULL,
+            benchmark VARCHAR(255) NOT NULL DEFAULT '',
+            baseline VARCHAR(255) NOT NULL DEFAULT '',
+            total_return DOUBLE,
+            annual_return DOUBLE,
+            annual_volatility DOUBLE,
+            sharpe DOUBLE,
+            max_drawdown DOUBLE,
+            calmar DOUBLE,
+            win_rate DOUBLE,
+            n_days BIGINT,
+            month_count BIGINT,
+            monthly_win_rate DOUBLE,
+            worst_month_return DOUBLE,
+            positive_3m_rate DOUBLE,
+            avg_turnover DOUBLE,
+            avg_holdings DOUBLE,
+            avg_total_mv DOUBLE,
+            avg_amount DOUBLE,
+            effective_start VARCHAR(64) NOT NULL DEFAULT '',
+            effective_end VARCHAR(64) NOT NULL DEFAULT '',
+            effective_n_days BIGINT,
+            full_total_return DOUBLE,
+            full_annual_return DOUBLE,
+            full_annual_volatility DOUBLE,
+            full_sharpe DOUBLE,
+            full_max_drawdown DOUBLE,
+            full_calmar DOUBLE,
+            full_win_rate DOUBLE,
+            full_n_days BIGINT,
+            full_avg_turnover DOUBLE,
+            overlap_with_baseline DOUBLE,
+            corr_with_baseline DOUBLE,
+            return_score DOUBLE,
+            drawdown_score DOUBLE,
+            risk_adjusted_score DOUBLE,
+            cost_score DOUBLE,
+            capacity_score DOUBLE,
+            stability_score DOUBLE,
+            independence_score DOUBLE,
+            strategy_version BIGINT,
+            strategy_version_mode VARCHAR(255),
+            error LONGTEXT NOT NULL,
+            generated_at VARCHAR(64) NOT NULL,
+            payload_json LONGTEXT NOT NULL,
+            created_at VARCHAR(64) NOT NULL,
+            updated_at VARCHAR(64) NOT NULL,
+            PRIMARY KEY(run_id, strategy)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    )
     _ensure_columns(
         conn,
         "eval_strategy_admission",
