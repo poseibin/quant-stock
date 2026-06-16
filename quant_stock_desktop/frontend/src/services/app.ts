@@ -25,6 +25,8 @@ declare global {
           AnalyzePortfolioTask: (id: string) => Promise<TaskDTO>
           RunFactorLatestInference: () => Promise<TaskDTO>
           RunFactorAutoTune: (maxRounds: number, trialsPerRound: number, useDeepSeek: boolean) => Promise<TaskDTO>
+          RunProfitArenaLatestInference: () => Promise<TaskDTO>
+          GetProfitArenaMarketDate: () => Promise<string>
           CreateTask: (request: CreateTaskRequest) => Promise<TaskDTO>
           StartTask: (id: string) => Promise<TaskDTO>
           RetryTask: (id: string) => Promise<TaskDTO>
@@ -72,6 +74,12 @@ declare global {
           ListFactorAutoTuneTrials: (runID: string, limit: number) => Promise<FactorAutoTuneTrial[]>
           ListCrashWarningRuns: (limit: number) => Promise<CrashWarningRunSummary[]>
           ListCrashWarningFeatures: (runID: string, limit: number) => Promise<CrashWarningFeature[]>
+          RunProfitArenaTraining: () => Promise<void>
+          GetProfitArenaRunStatus: () => Promise<RunStatus>
+          ListProfitArenaRuns: (limit: number) => Promise<ProfitArenaRunSummary[]>
+          ListProfitArenaEvaluations: (runID: string, limit: number) => Promise<ProfitArenaEvaluation[]>
+          ListProfitArenaPredictions: (runID: string, limit: number) => Promise<ProfitArenaPrediction[]>
+          ListProfitArenaFeatures: (runID: string, limit: number) => Promise<ProfitArenaFeature[]>
           RunLimitUpModelTraining: () => Promise<void>
           GetLimitUpModelRunStatus: () => Promise<RunStatus>
           ListLimitUpModelRuns: (limit: number) => Promise<LimitUpModelRunSummary[]>
@@ -126,6 +134,9 @@ export interface Settings {
   default_rebalance_freq: number
   task_concurrency: number
   tushare_token: string
+  llm_provider: string
+  openai_token: string
+  openai_model: string
   deepseek_token: string
   deepseek_model: string
   strategies: Record<string, StrategySettings>
@@ -689,6 +700,83 @@ export interface CrashWarningFeature {
   rank_no: number
 }
 
+export interface ProfitArenaRunSummary {
+  run_id: string
+  start_date: string
+  end_date: string
+  train_mode: string
+  model_type: string
+  feature_count: number
+  status: string
+  best_scope: string
+  best_horizon: number
+  best_top_n: number
+  best_compound_return: number
+  summary_json: string
+  model_path: string
+  updated_at: string
+}
+
+export interface ProfitArenaEvaluation {
+  run_id: string
+  scope: string
+  horizon: number
+  top_n: number
+  min_pred_return: number
+  min_market_up_ratio: number
+  min_market_ret5: number
+  min_market_amount_chg5: number
+  min_industry_up_ratio: number
+  segment: string
+  trade_count: number
+  trade_days: number
+  avg_return: number
+  win_rate: number
+  compound_return: number
+  annual_return: number
+  max_drawdown: number
+  sharpe: number
+  capital_compound_return: number
+  capital_annual_return: number
+  capital_max_drawdown: number
+  capital_sharpe: number
+  capital_final_equity: number
+  summary_json: string
+  updated_at: string
+}
+
+export interface ProfitArenaPrediction {
+  run_id: string
+  scope: string
+  horizon: number
+  trade_date: string
+  ts_code: string
+  name: string
+  industry: string
+  size_bucket: string
+  price: number
+  pred_return: number
+  model_score: number
+  realized_return: number
+  future_return: number
+  future_max_return: number
+  future_drawdown: number
+  crash_prob: number
+  exit_date: string
+  is_latest: boolean
+  summary_json: string
+  updated_at: string
+}
+
+export interface ProfitArenaFeature {
+  run_id: string
+  scope: string
+  horizon: number
+  feature: string
+  importance: number
+  rank_no: number
+}
+
 export interface LimitUpModelRunSummary {
   run_id: string
   start_date: string
@@ -1207,6 +1295,9 @@ function defaultSettings(): Settings {
     default_rebalance_freq: 5,
     task_concurrency: 2,
     tushare_token: '',
+    llm_provider: 'openai',
+    openai_token: '',
+    openai_model: 'gpt-5.5',
     deepseek_token: '',
     deepseek_model: 'deepseek-v4-pro',
     strategies: defaultStrategies(),
@@ -1229,7 +1320,7 @@ function defaultStrategySchedule(): StrategyScheduleSettings {
     enabled: false,
     time_of_day: '22:00',
     weekdays: [1, 2, 3, 4, 5],
-    targets: { t0: true, limit_up: true, breakout: true, factor: false },
+    targets: { arena: true },
     wechat_webhook: '',
     wechat_users: []
   }
@@ -1478,6 +1569,21 @@ export async function runFactorLatestInference(): Promise<TaskDTO> {
   return { ...mockTask({ name: '通用策略重新推理', task_type: 'factor_research', params: { profile: 'inference' } }), status: 'running', started_at: now, updated_at: now }
 }
 
+export async function runProfitArenaLatestInference(): Promise<TaskDTO> {
+  if (window.go?.main?.App?.RunProfitArenaLatestInference) {
+    return window.go.main.App.RunProfitArenaLatestInference()
+  }
+  const now = new Date().toISOString()
+  return { ...mockTask({ name: '收益擂台重新推理', task_type: 'model_training', params: { strategy: 'profit_arena_model', profile: 'inference' } }), status: 'running', started_at: now, updated_at: now }
+}
+
+export async function getProfitArenaMarketDate(): Promise<string> {
+  if (window.go?.main?.App?.GetProfitArenaMarketDate) {
+    return window.go.main.App.GetProfitArenaMarketDate()
+  }
+  return ''
+}
+
 export async function runFactorAutoTune(maxRounds = 12, trialsPerRound = 6, useDeepSeek = true): Promise<TaskDTO> {
   if (window.go?.main?.App?.RunFactorAutoTune) {
     return window.go.main.App.RunFactorAutoTune(maxRounds, trialsPerRound, useDeepSeek)
@@ -1628,6 +1734,47 @@ export async function listCrashWarningRuns(limit = 20): Promise<CrashWarningRunS
 export async function listCrashWarningFeatures(runID = '', limit = 20): Promise<CrashWarningFeature[]> {
   if (window.go?.main?.App?.ListCrashWarningFeatures) {
     return (await window.go.main.App.ListCrashWarningFeatures(runID, limit)) || []
+  }
+  return []
+}
+
+export async function runProfitArenaTraining(): Promise<void> {
+  if (window.go?.main?.App?.RunProfitArenaTraining) {
+    return window.go.main.App.RunProfitArenaTraining()
+  }
+}
+
+export async function getProfitArenaRunStatus(): Promise<RunStatus> {
+  if (window.go?.main?.App?.GetProfitArenaRunStatus) {
+    return window.go.main.App.GetProfitArenaRunStatus()
+  }
+  return emptyRunStatus('profit_arena_model')
+}
+
+export async function listProfitArenaRuns(limit = 20): Promise<ProfitArenaRunSummary[]> {
+  if (window.go?.main?.App?.ListProfitArenaRuns) {
+    return (await window.go.main.App.ListProfitArenaRuns(limit)) || []
+  }
+  return []
+}
+
+export async function listProfitArenaEvaluations(runID = '', limit = 100): Promise<ProfitArenaEvaluation[]> {
+  if (window.go?.main?.App?.ListProfitArenaEvaluations) {
+    return (await window.go.main.App.ListProfitArenaEvaluations(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listProfitArenaPredictions(runID = '', limit = 100): Promise<ProfitArenaPrediction[]> {
+  if (window.go?.main?.App?.ListProfitArenaPredictions) {
+    return (await window.go.main.App.ListProfitArenaPredictions(runID, limit)) || []
+  }
+  return []
+}
+
+export async function listProfitArenaFeatures(runID = '', limit = 50): Promise<ProfitArenaFeature[]> {
+  if (window.go?.main?.App?.ListProfitArenaFeatures) {
+    return (await window.go.main.App.ListProfitArenaFeatures(runID, limit)) || []
   }
   return []
 }
@@ -2295,7 +2442,7 @@ export async function checkExternalDependencies(): Promise<ExternalDependencySta
   return [
     { key: 'mysql', name: 'MySQL 数据库', category: '基础设施', state: 'ready', latency_ms: 2, message: '开发模式占位', checked_at: checkedAt },
     { key: 'tushare', name: 'Tushare 数据接口', category: '行情/财务数据', state: 'missing', latency_ms: 0, message: '桌面端连接后检测', checked_at: checkedAt },
-    { key: 'deepseek', name: 'DeepSeek 模型接口', category: 'AI 调参/复盘', state: 'missing', latency_ms: 0, message: '桌面端连接后检测', checked_at: checkedAt },
+    { key: 'llm', name: 'ChatGPT/OpenAI 模型接口', category: 'AI 调参/复盘', state: 'missing', latency_ms: 0, message: '桌面端连接后检测', checked_at: checkedAt },
     { key: 'realtime_quote', name: '实时行情接口', category: '实时价格', state: 'ready', latency_ms: 180, message: '开发模式占位', checked_at: checkedAt },
     { key: 'wechat', name: '企业微信机器人', category: '通知', state: 'missing', latency_ms: 0, message: '桌面端连接后检测', checked_at: checkedAt },
   ]

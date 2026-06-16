@@ -8,6 +8,9 @@ type Settings struct {
 	DefaultRebalanceFreq int                         `json:"default_rebalance_freq"`
 	TaskConcurrency      int                         `json:"task_concurrency"`
 	TushareToken         string                      `json:"tushare_token"`
+	LLMProvider          string                      `json:"llm_provider"`
+	OpenAIToken          string                      `json:"openai_token"`
+	OpenAIModel          string                      `json:"openai_model"`
 	DeepSeekToken        string                      `json:"deepseek_token"`
 	DeepSeekModel        string                      `json:"deepseek_model"`
 	Strategies           map[string]StrategySettings `json:"strategies"`

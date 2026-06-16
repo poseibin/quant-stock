@@ -1,7 +1,11 @@
-"""Train a market-level crash warning classifier.
+"""Train market regime risk classifiers.
 
-The model predicts whether the next 1-3 trading days will contain a crash or
-liquidity shock using only market state features known at today's close.
+This is not a "predict tomorrow's crash" model.  It estimates whether the
+current close belongs to a regime that is unsuitable for small-cap strategies:
+market drawdown risk, small-cap ecology deterioration, style shift away from
+small caps, or repair. Features are close-of-day values and labels are future
+windows, so the model is intended for after-close next-session risk gating. The
+historical ``shock_prob`` output is kept for strategy compatibility.
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.infra.db import replace_sql, write_transaction
+from common.infra.db import add_column, replace_sql, table_columns, write_transaction
 
 
 FEATURES = [
@@ -36,6 +40,24 @@ FEATURES = [
 ]
 
 SHOCK_STATES = {"crash", "liquidity_squeeze"}
+
+TARGETS = {
+    "shock": "label",
+    "market_risk": "market_risk_label",
+    "smallcap_ecology": "smallcap_ecology_risk_label",
+    "style_shift": "style_shift_label",
+    "liquidity_squeeze": "liquidity_squeeze_label",
+    "repair": "repair_label",
+}
+
+PROB_COLUMNS = {
+    "shock": "shock_prob",
+    "market_risk": "market_risk_prob",
+    "smallcap_ecology": "smallcap_ecology_risk_prob",
+    "style_shift": "style_shift_prob",
+    "liquidity_squeeze": "liquidity_squeeze_prob",
+    "repair": "repair_prob",
+}
 
 
 def main() -> None:
@@ -95,7 +117,21 @@ def ensure_tables() -> None:
                     run_id VARCHAR(255) NOT NULL,
                     trade_date VARCHAR(16) NOT NULL,
                     shock_prob DOUBLE,
+                    market_risk_prob DOUBLE,
+                    smallcap_ecology_risk_prob DOUBLE,
+                    style_shift_prob DOUBLE,
+                    liquidity_squeeze_prob DOUBLE,
+                    repair_prob DOUBLE,
+                    risk_prob DOUBLE,
+                    final_smallcap_risk DOUBLE,
+                    suggested_exposure DOUBLE,
+                    regime VARCHAR(64) NOT NULL DEFAULT '',
                     label BIGINT NOT NULL DEFAULT 0,
+                    market_risk_label BIGINT NOT NULL DEFAULT 0,
+                    smallcap_ecology_risk_label BIGINT NOT NULL DEFAULT 0,
+                    style_shift_label BIGINT NOT NULL DEFAULT 0,
+                    liquidity_squeeze_label BIGINT NOT NULL DEFAULT 0,
+                    repair_label BIGINT NOT NULL DEFAULT 0,
                     test_year BIGINT,
                     summary_json LONGTEXT,
                     created_at VARCHAR(64) NOT NULL,
@@ -135,7 +171,21 @@ def ensure_tables() -> None:
                     run_id TEXT NOT NULL,
                     trade_date TEXT NOT NULL,
                     shock_prob REAL,
+                    market_risk_prob REAL,
+                    smallcap_ecology_risk_prob REAL,
+                    style_shift_prob REAL,
+                    liquidity_squeeze_prob REAL,
+                    repair_prob REAL,
+                    risk_prob REAL,
+                    final_smallcap_risk REAL,
+                    suggested_exposure REAL,
+                    regime TEXT NOT NULL DEFAULT '',
                     label INTEGER NOT NULL DEFAULT 0,
+                    market_risk_label INTEGER NOT NULL DEFAULT 0,
+                    smallcap_ecology_risk_label INTEGER NOT NULL DEFAULT 0,
+                    style_shift_label INTEGER NOT NULL DEFAULT 0,
+                    liquidity_squeeze_label INTEGER NOT NULL DEFAULT 0,
+                    repair_label INTEGER NOT NULL DEFAULT 0,
                     test_year INTEGER,
                     summary_json TEXT,
                     created_at TEXT NOT NULL,
@@ -144,6 +194,26 @@ def ensure_tables() -> None:
                 );
                 """
             )
+        existing = table_columns(conn, "market_crash_warning_predictions")
+        for name, ddl in [
+            ("market_risk_prob", "DOUBLE"),
+            ("smallcap_ecology_risk_prob", "DOUBLE"),
+            ("style_shift_prob", "DOUBLE"),
+            ("liquidity_squeeze_prob", "DOUBLE"),
+            ("repair_prob", "DOUBLE"),
+            ("risk_prob", "DOUBLE"),
+            ("final_smallcap_risk", "DOUBLE"),
+            ("suggested_exposure", "DOUBLE"),
+            ("regime", "VARCHAR(64) NOT NULL DEFAULT ''"),
+            ("market_risk_label", "BIGINT NOT NULL DEFAULT 0"),
+            ("smallcap_ecology_risk_label", "BIGINT NOT NULL DEFAULT 0"),
+            ("style_shift_label", "BIGINT NOT NULL DEFAULT 0"),
+            ("liquidity_squeeze_label", "BIGINT NOT NULL DEFAULT 0"),
+            ("repair_label", "BIGINT NOT NULL DEFAULT 0"),
+        ]:
+            if name not in existing:
+                sqlite_ddl = ddl.replace("DOUBLE", "REAL").replace("BIGINT", "INTEGER").replace("VARCHAR(64)", "TEXT")
+                add_column(conn, "market_crash_warning_predictions", name, ddl if conn.backend == "mysql" else sqlite_ddl)
 
 
 def build_dataset(start: str, end: str, horizon: int) -> pd.DataFrame:
@@ -157,7 +227,9 @@ def build_dataset(start: str, end: str, horizon: int) -> pd.DataFrame:
                    COALESCE(limit_down_ratio5, 0), COALESCE(amount_chg20, 0),
                    COALESCE(small_large_rel20, 0), COALESCE(drawdown20, 0),
                    COALESCE(drawdown60, 0), COALESCE(drawdown120, 0),
-                   COALESCE(trend60, 0), COALESCE(volatility20, 0)
+                   COALESCE(trend60, 0), COALESCE(volatility20, 0),
+                   COALESCE(index_anchor_ret20, 0), COALESCE(index_anchor_drawdown20, 0),
+                   COALESCE(index_anchor_rel20, 0)
             FROM market_risk_state_daily
             WHERE trade_date BETWEEN ? AND ?
             ORDER BY trade_date
@@ -172,6 +244,7 @@ def build_dataset(start: str, end: str, horizon: int) -> pd.DataFrame:
             "trade_date", "state", "risk_score", "market_return", "up_ratio", "down_ratio", "breadth20",
             "limit_up_ratio", "limit_down_ratio", "limit_down_ratio5", "amount_chg20",
             "small_large_rel20", "drawdown20", "drawdown60", "drawdown120", "trend60", "volatility20",
+            "index_anchor_ret20", "index_anchor_drawdown20", "index_anchor_rel20",
         ],
     )
     data["trade_date"] = data["trade_date"].astype(str)
@@ -192,16 +265,58 @@ def build_dataset(start: str, end: str, horizon: int) -> pd.DataFrame:
     for state in ["weak", "crash", "liquidity_squeeze", "post_crash_repair"]:
         data[f"state_{state}"] = data["state"].eq(state).astype(int)
 
-    future_flags = []
+    shock_flags = []
+    market_risk_flags = []
+    smallcap_ecology_flags = []
+    style_shift_flags = []
+    liquidity_squeeze_flags = []
+    repair_flags = []
     for offset in range(1, horizon + 1):
         future_state = data["state"].shift(-offset).isin(SHOCK_STATES)
         future_hard_drop = data["market_return"].shift(-offset) <= -0.045
         future_limit_spread = data["limit_down_ratio"].shift(-offset) >= 0.025
-        future_flags.append(future_state | future_hard_drop | future_limit_spread)
-    label = future_flags[0]
-    for flag in future_flags[1:]:
+        shock_flags.append(future_state | future_hard_drop | future_limit_spread)
+        market_risk_flags.append(
+            data["state"].shift(-offset).isin({"crash", "liquidity_squeeze"})
+            | (data["market_return"].shift(-offset) <= -0.045)
+            | ((data["drawdown20"].shift(-offset) <= -0.100) & (data["breadth20"].shift(-offset) <= 0.45))
+            | ((data["volatility20"].shift(-offset) >= 0.42) & (data["market_return"].shift(-offset) <= -0.020))
+            | (data["index_anchor_drawdown20"].shift(-offset) <= -0.120)
+        )
+        smallcap_ecology_flags.append(
+            (data["breadth20"].shift(-offset) <= 0.40)
+            | (data["limit_down_ratio"].shift(-offset) >= 0.018)
+            | (data["limit_down_ratio5"].shift(-offset) >= 0.012)
+            | ((data["limit_up_ratio"].shift(-offset) <= 0.006) & (data["down_ratio"].shift(-offset) >= 0.66))
+            | ((data["index_anchor_ret20"].shift(-offset) <= -0.060) & (data["breadth20"].shift(-offset) <= 0.46))
+        )
+        style_shift_flags.append(
+            (data["small_large_rel20"].shift(-offset) <= -0.090)
+            | (data["index_anchor_rel20"].shift(-offset) <= -0.070)
+            | ((data["index_anchor_ret20"].shift(-offset) <= -0.050) & (data["market_return"].shift(-offset) >= -0.005))
+        )
+        liquidity_squeeze_flags.append(
+            data["state"].shift(-offset).eq("liquidity_squeeze")
+            | future_limit_spread
+            | ((data["amount_chg20"].shift(-offset) <= -0.25) & (data["volatility20"].shift(-offset) >= 0.26))
+            | ((data["market_return"].shift(-offset) <= -0.035) & (data["limit_down_ratio5"].shift(-offset) >= 0.012))
+        )
+        repair_flags.append(data["state"].shift(-offset).eq("post_crash_repair"))
+    label = shock_flags[0]
+    for flag in shock_flags[1:]:
         label = label | flag
     data["label"] = label.astype(int)
+    for target, flags in [
+        ("market_risk_label", market_risk_flags),
+        ("smallcap_ecology_risk_label", smallcap_ecology_flags),
+        ("style_shift_label", style_shift_flags),
+        ("liquidity_squeeze_label", liquidity_squeeze_flags),
+        ("repair_label", repair_flags),
+    ]:
+        target_label = flags[0]
+        for flag in flags[1:]:
+            target_label = target_label | flag
+        data[target] = target_label.astype(int)
     data["year"] = data["trade_date"].str.slice(0, 4).astype(int)
     data = data.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return data[data["trade_date"].between(start, end)].reset_index(drop=True)
@@ -217,56 +332,90 @@ def train_walk_forward(args: argparse.Namespace, data: pd.DataFrame) -> dict[str
     if not test_years:
         raise RuntimeError("not enough years for walk-forward training")
 
-    predictions: list[pd.DataFrame] = []
-    fold_metrics: list[dict[str, Any]] = []
+    predictions_by_target: dict[str, list[pd.DataFrame]] = {target: [] for target in TARGETS}
+    fold_metrics_by_target: dict[str, list[dict[str, Any]]] = {target: [] for target in TARGETS}
     feature_importance = pd.Series(0.0, index=FEATURES, dtype="float64")
-    models: list[Any] = []
+    latest_models: dict[str, Any] = {}
     x_all = data[FEATURES].astype(float)
-    y_all = data["label"].astype(int)
 
     for year in test_years:
         train_mask = data["year"] < year
         test_mask = data["year"] == year
         if int(train_mask.sum()) < 500 or int(test_mask.sum()) == 0:
             continue
-        y_train = y_all.loc[train_mask]
-        pos = int(y_train.sum())
-        neg = int(len(y_train) - pos)
-        if pos <= 3:
-            continue
-        scale_pos_weight = max(1.0, neg / max(pos, 1))
-        model = lgb.LGBMClassifier(
-            objective="binary",
-            n_estimators=220,
-            learning_rate=0.035,
-            num_leaves=15,
-            max_depth=4,
-            min_child_samples=20,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            reg_alpha=0.05,
-            reg_lambda=1.0,
-            scale_pos_weight=scale_pos_weight,
-            random_state=20260606,
-            n_jobs=4,
-            verbosity=-1,
-        )
-        model.fit(x_all.loc[train_mask], y_train)
-        prob = model.predict_proba(x_all.loc[test_mask])[:, 1]
-        fold = data.loc[test_mask, ["trade_date", "label", "year"]].copy()
-        fold["shock_prob"] = prob.astype(float)
-        predictions.append(fold)
-        fold_metrics.append(_classification_metrics(fold["label"].to_numpy(), prob, int(year)))
-        feature_importance += pd.Series(model.feature_importances_, index=FEATURES)
-        models.append(model)
+        for target, label_col in TARGETS.items():
+            y_all = data[label_col].astype(int)
+            y_train = y_all.loc[train_mask]
+            pos = int(y_train.sum())
+            neg = int(len(y_train) - pos)
+            if pos <= 3:
+                continue
+            scale_pos_weight = max(1.0, neg / max(pos, 1))
+            model = lgb.LGBMClassifier(
+                objective="binary",
+                n_estimators=240,
+                learning_rate=0.035,
+                num_leaves=15,
+                max_depth=4,
+                min_child_samples=20,
+                subsample=0.9,
+                colsample_bytree=0.9,
+                reg_alpha=0.05,
+                reg_lambda=1.0,
+                scale_pos_weight=scale_pos_weight,
+                random_state=20260606,
+                n_jobs=4,
+                verbosity=-1,
+            )
+            model.fit(x_all.loc[train_mask], y_train)
+            prob = model.predict_proba(x_all.loc[test_mask])[:, 1]
+            fold = data.loc[test_mask, ["trade_date", label_col, "year"]].copy()
+            fold = fold.rename(columns={label_col: "label"})
+            fold[PROB_COLUMNS[target]] = prob.astype(float)
+            predictions_by_target[target].append(fold)
+            fold_metrics_by_target[target].append(_classification_metrics(fold["label"].to_numpy(), prob, int(year)))
+            feature_importance += pd.Series(model.feature_importances_, index=FEATURES)
+            latest_models[target] = model
 
-    if not predictions:
+    if not predictions_by_target["shock"]:
         raise RuntimeError("no walk-forward prediction was generated")
 
-    pred = pd.concat(predictions, ignore_index=True).sort_values("trade_date")
-    overall = _classification_metrics(pred["label"].to_numpy(), pred["shock_prob"].to_numpy(), 0)
-    overall["folds"] = fold_metrics
-    overall["positive_rate"] = float(pred["label"].mean())
+    pred: pd.DataFrame | None = None
+    target_summaries: dict[str, Any] = {}
+    for target, frames in predictions_by_target.items():
+        if not frames:
+            continue
+        part = pd.concat(frames, ignore_index=True).sort_values("trade_date")
+        label_col = TARGETS[target]
+        prob_col = PROB_COLUMNS[target]
+        target_summary = _classification_metrics(part["label"].to_numpy(), part[prob_col].to_numpy(), 0)
+        target_summary["folds"] = fold_metrics_by_target[target]
+        target_summary["positive_rate"] = float(part["label"].mean())
+        target_summaries[target] = target_summary
+        part = part.rename(columns={"label": label_col})
+        keep = ["trade_date", "year", label_col, prob_col]
+        pred = part[keep] if pred is None else pred.merge(part[keep], on=["trade_date", "year"], how="outer")
+    if pred is None or pred.empty:
+        raise RuntimeError("no walk-forward prediction was generated")
+    for target, label_col in TARGETS.items():
+        prob_col = PROB_COLUMNS[target]
+        if label_col not in pred.columns:
+            pred[label_col] = 0
+        if prob_col not in pred.columns:
+            pred[prob_col] = 0.0
+        pred[label_col] = pd.to_numeric(pred[label_col], errors="coerce").fillna(0).astype(int)
+        pred[prob_col] = pd.to_numeric(pred[prob_col], errors="coerce").fillna(0.0).astype(float)
+    pred["risk_prob"] = pred[["shock_prob", "market_risk_prob", "smallcap_ecology_risk_prob", "style_shift_prob", "liquidity_squeeze_prob"]].max(axis=1)
+    pred["final_smallcap_risk"] = (
+        pred["market_risk_prob"].astype(float) * 0.30
+        + pred["smallcap_ecology_risk_prob"].astype(float) * 0.45
+        + pred["style_shift_prob"].astype(float) * 0.25
+    ).clip(0.0, 1.0)
+    pred["regime"] = pred["final_smallcap_risk"].map(risk_regime)
+    pred["suggested_exposure"] = pred["final_smallcap_risk"].map(suggested_exposure)
+    pred = pred.sort_values("trade_date").reset_index(drop=True)
+    overall = dict(target_summaries.get("shock") or {})
+    overall["targets"] = target_summaries
     overall["prediction_rows"] = int(len(pred))
     overall["test_start"] = str(pred["trade_date"].min())
     overall["test_end"] = str(pred["trade_date"].max())
@@ -276,10 +425,10 @@ def train_walk_forward(args: argparse.Namespace, data: pd.DataFrame) -> dict[str
     pred_path = out_dir / "predictions.parquet"
     model_path = out_dir / "latest_model.joblib"
     pred.to_parquet(pred_path, index=False, compression="zstd")
-    if models:
-        joblib.dump(models[-1], model_path)
+    if latest_models:
+        joblib.dump(latest_models, model_path)
 
-    importance = (feature_importance / max(len(models), 1)).sort_values(ascending=False)
+    importance = (feature_importance / max(len(latest_models), 1)).sort_values(ascending=False)
     now = now_text()
     with write_transaction() as conn:
         conn.execute("DELETE FROM market_crash_warning_predictions WHERE run_id = ?", (args.run_id,))
@@ -294,21 +443,61 @@ def train_walk_forward(args: argparse.Namespace, data: pd.DataFrame) -> dict[str
                 ["run_id"],
             ),
             (
-                args.run_id, "lgbm_classifier", args.start, args.end, int(args.horizon), len(FEATURES), "success",
+                args.run_id, "market_regime_lgbm", args.start, args.end, int(args.horizon), len(FEATURES), "success",
                 json.dumps(overall, ensure_ascii=False), str(model_path), now, now,
             ),
         )
         pred_sql = replace_sql(
             "market_crash_warning_predictions",
-            ["run_id", "trade_date", "shock_prob", "label", "test_year", "summary_json", "created_at", "updated_at"],
+            [
+                "run_id", "trade_date", "shock_prob", "market_risk_prob", "smallcap_ecology_risk_prob",
+                "style_shift_prob", "liquidity_squeeze_prob", "repair_prob", "risk_prob",
+                "final_smallcap_risk", "suggested_exposure", "regime", "label", "market_risk_label",
+                "smallcap_ecology_risk_label", "style_shift_label", "liquidity_squeeze_label",
+                "repair_label", "test_year", "summary_json", "created_at", "updated_at",
+            ],
             ["run_id", "trade_date"],
         )
         conn.executemany(
             pred_sql,
             [
                 (
-                    args.run_id, str(row.trade_date), float(row.shock_prob), int(row.label), int(row.year),
-                    json.dumps({"horizon": int(args.horizon)}, ensure_ascii=False), now, now,
+                    args.run_id,
+                    str(row.trade_date),
+                    float(row.shock_prob),
+                    float(row.market_risk_prob),
+                    float(row.smallcap_ecology_risk_prob),
+                    float(row.style_shift_prob),
+                    float(row.liquidity_squeeze_prob),
+                    float(row.repair_prob),
+                    float(row.risk_prob),
+                    float(row.final_smallcap_risk),
+                    float(row.suggested_exposure),
+                    str(row.regime),
+                    int(row.label),
+                    int(row.market_risk_label),
+                    int(row.smallcap_ecology_risk_label),
+                    int(row.style_shift_label),
+                    int(row.liquidity_squeeze_label),
+                    int(row.repair_label),
+                    int(row.year),
+                    json.dumps(
+                        {
+                            "horizon": int(args.horizon),
+                            "risk_prob": float(row.risk_prob),
+                            "final_smallcap_risk": float(row.final_smallcap_risk),
+                            "suggested_exposure": float(row.suggested_exposure),
+                            "regime": str(row.regime),
+                            "market_risk_prob": float(row.market_risk_prob),
+                            "smallcap_ecology_risk_prob": float(row.smallcap_ecology_risk_prob),
+                            "style_shift_prob": float(row.style_shift_prob),
+                            "liquidity_squeeze_prob": float(row.liquidity_squeeze_prob),
+                            "repair_prob": float(row.repair_prob),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    now,
+                    now,
                 )
                 for row in pred.itertuples(index=False)
             ],
@@ -333,6 +522,7 @@ def train_walk_forward(args: argparse.Namespace, data: pd.DataFrame) -> dict[str
         "prediction_path": str(pred_path),
         "feature_count": len(FEATURES),
         "top_features": [{"feature": str(k), "importance": float(v)} for k, v in importance.head(12).items()],
+        "target_summaries": target_summaries,
         **overall,
     }
 
@@ -367,6 +557,30 @@ def _classification_metrics(y_true: np.ndarray, prob: np.ndarray, year: int) -> 
     out["p90_recall"] = float(recall)
     out["p90_f1"] = float(f1)
     return out
+
+
+def risk_regime(value: float) -> str:
+    risk = float(value or 0.0)
+    if risk >= 0.70:
+        return "panic"
+    if risk >= 0.55:
+        return "weak"
+    if risk >= 0.35:
+        return "caution"
+    if risk <= 0.18:
+        return "strong"
+    return "normal"
+
+
+def suggested_exposure(value: float) -> float:
+    risk = float(value or 0.0)
+    if risk >= 0.70:
+        return 0.0
+    if risk >= 0.55:
+        return 0.30
+    if risk >= 0.35:
+        return 0.60
+    return 1.0
 
 
 def math_floor(value: float) -> int:

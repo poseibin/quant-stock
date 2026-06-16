@@ -66,6 +66,10 @@ export function GetPositionRecommendation():Promise<position.Recommendation>;
 
 export function GetPositionSummary():Promise<position.Summary>;
 
+export function GetProfitArenaMarketDate():Promise<string>;
+
+export function GetProfitArenaRunStatus():Promise<position.RunStatus>;
+
 export function GetSettings():Promise<main.SettingsResponse>;
 
 export function GetSignalPortfolioContext():Promise<main.SignalPortfolioContextDTO>;
@@ -148,6 +152,14 @@ export function ListMarketDataFiles():Promise<Array<market.DataFileDTO>>;
 
 export function ListPolicySupportCandidates(arg1:number):Promise<Array<main.PolicySupportCandidateDTO>>;
 
+export function ListProfitArenaEvaluations(arg1:string,arg2:number):Promise<Array<main.ProfitArenaEvaluation>>;
+
+export function ListProfitArenaFeatures(arg1:string,arg2:number):Promise<Array<main.ProfitArenaFeature>>;
+
+export function ListProfitArenaPredictions(arg1:string,arg2:number):Promise<Array<main.ProfitArenaPrediction>>;
+
+export function ListProfitArenaRuns(arg1:number):Promise<Array<main.ProfitArenaRunSummary>>;
+
 export function ListRecommendationHindsight():Promise<Array<main.RecommendationHindsightDTO>>;
 
 export function ListStockBasic(arg1:market.StockBasicQuery):Promise<Array<market.StockBasic>>;
@@ -199,6 +211,10 @@ export function RunLimitSignalEvaluation():Promise<void>;
 export function RunLimitUpModelTraining():Promise<void>;
 
 export function RunPolicySupportAnalysis():Promise<void>;
+
+export function RunProfitArenaLatestInference():Promise<task.DTO>;
+
+export function RunProfitArenaTraining():Promise<void>;
 
 export function RunStrategyScheduleNow():Promise<main.StrategyScheduleReport>;
 

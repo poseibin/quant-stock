@@ -170,10 +170,7 @@ export function SettingsPage() {
 }
 
 const scheduleTargets = [
-  { key: 't0', label: '做T助手' },
-  { key: 'limit_up', label: '涨停预警' },
-  { key: 'breakout', label: '横盘预警' },
-  { key: 'factor', label: '通用策略' }
+  { key: 'arena', label: '收益擂台' }
 ]
 
 const weekdays = [
@@ -189,7 +186,7 @@ function defaultSchedule(): Settings['strategy_schedule'] {
     enabled: false,
     time_of_day: '22:00',
     weekdays: [1, 2, 3, 4, 5],
-    targets: { t0: true, limit_up: true, breakout: true, factor: false },
+    targets: { arena: true },
     wechat_webhook: '',
     wechat_users: []
   }

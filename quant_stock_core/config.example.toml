@@ -8,6 +8,13 @@ data_root = "../data_store"
 [data]
 tushare_token = ""
 
+[llm]
+provider = "openai" # openai or deepseek
+
+[openai]
+token = ""
+model = "gpt-5.5"
+
 [deepseek]
 token = ""
 model = "deepseek-v4-pro"

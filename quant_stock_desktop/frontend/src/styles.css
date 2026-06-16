@@ -4536,6 +4536,14 @@ th {
   color: #26c281;
 }
 
+.profitArenaPage .modelChecklist {
+  margin-bottom: 22px;
+}
+
+.profitArenaPage .factorModelSummary {
+  margin-top: 10px;
+}
+
 .factorFormula {
   display: grid;
   gap: 8px;

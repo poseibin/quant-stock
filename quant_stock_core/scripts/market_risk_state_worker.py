@@ -1,8 +1,8 @@
 """Build daily market risk state.
 
-The first version intentionally uses only stock-level daily parquet data so it
-can run even when index_daily is unavailable. It produces a daily state table
-for later strategy exposure controls and diagnostics.
+The stock-level breadth remains the fallback. When index_daily is available we
+also anchor the regime to small-cap index behavior so strategy exposure is not
+driven by a noisy all-stock average alone.
 """
 from __future__ import annotations
 
@@ -20,8 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.infra.db import replace_sql, write_transaction
+from common.infra.db import add_column, replace_sql, table_columns, write_transaction
 from research.data.storage import duckdb_query as dq
+
+
+INDEX_ANCHOR_CODES = ("932000.CSI", "399303.SZ", "000852.SH", "000905.SH")
+INDEX_LARGE_CODES = ("000300.SH", "000905.SH")
 
 
 def main() -> None:
@@ -63,6 +67,11 @@ def ensure_table(db_path: str | None) -> None:
                 amount DOUBLE,
                 amount_chg20 DOUBLE,
                 small_large_rel20 DOUBLE,
+                index_anchor_code VARCHAR(32),
+                index_anchor_ret5 DOUBLE,
+                index_anchor_ret20 DOUBLE,
+                index_anchor_drawdown20 DOUBLE,
+                index_anchor_rel20 DOUBLE,
                 drawdown20 DOUBLE,
                 drawdown60 DOUBLE,
                 drawdown120 DOUBLE,
@@ -78,6 +87,16 @@ def ensure_table(db_path: str | None) -> None:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         )
+        existing = table_columns(conn, "market_risk_state_daily")
+        for name, ddl in [
+            ("index_anchor_code", "VARCHAR(32)"),
+            ("index_anchor_ret5", "DOUBLE"),
+            ("index_anchor_ret20", "DOUBLE"),
+            ("index_anchor_drawdown20", "DOUBLE"),
+            ("index_anchor_rel20", "DOUBLE"),
+        ]:
+            if name not in existing:
+                add_column(conn, "market_risk_state_daily", name, ddl)
 
 
 def build_market_risk_state(start: str, end: str) -> pd.DataFrame:
@@ -143,6 +162,12 @@ def build_market_risk_state(start: str, end: str) -> pd.DataFrame:
         state[f"drawdown{window}"] = state["market_equity"] / state["market_equity"].rolling(window, min_periods=5).max() - 1.0
     state["trend60"] = state["market_equity"].pct_change(60)
     state["volatility20"] = state["market_return"].rolling(20, min_periods=5).std() * np.sqrt(244.0)
+    index_metrics = load_index_anchor_metrics(warmup_start, end)
+    if not index_metrics.empty:
+        state = state.merge(index_metrics, on="trade_date", how="left")
+    for col in ["index_anchor_code", "index_anchor_ret5", "index_anchor_ret20", "index_anchor_drawdown20", "index_anchor_rel20"]:
+        if col not in state.columns:
+            state[col] = "" if col == "index_anchor_code" else np.nan
 
     classified = state.apply(classify_row, axis=1, result_type="expand")
     state["state"] = classified["state"]
@@ -155,10 +180,62 @@ def build_market_risk_state(start: str, end: str) -> pd.DataFrame:
             "trade_date", "state", "risk_score", "market_return", "market_equity",
             "up_ratio", "down_ratio", "breadth20", "limit_up_count", "limit_down_count",
             "limit_up_ratio", "limit_down_ratio", "limit_down_ratio5", "amount", "amount_chg20",
-            "small_large_rel20", "drawdown20", "drawdown60", "drawdown120", "trend60",
+            "small_large_rel20", "index_anchor_code", "index_anchor_ret5", "index_anchor_ret20",
+            "index_anchor_drawdown20", "index_anchor_rel20", "drawdown20", "drawdown60", "drawdown120", "trend60",
             "volatility20", "universe_count", "reason", "summary_json",
         ]
     ]
+
+
+def load_index_anchor_metrics(start: str, end: str) -> pd.DataFrame:
+    rows = dq.sql(
+        f"""
+        SELECT ts_code, trade_date, close
+        FROM read_parquet('{dq.RAW_DIR / "index_daily" / "*.parquet"}')
+        WHERE trade_date BETWEEN '{start}' AND '{end}'
+          AND ts_code IN ({quote_sql(INDEX_ANCHOR_CODES + INDEX_LARGE_CODES)})
+        ORDER BY trade_date, ts_code
+        """
+    )
+    if rows.empty:
+        return pd.DataFrame()
+    rows["trade_date"] = rows["trade_date"].astype(str)
+    rows["ts_code"] = rows["ts_code"].astype(str)
+    rows["close"] = pd.to_numeric(rows["close"], errors="coerce")
+    close = rows.pivot(index="trade_date", columns="ts_code", values="close").sort_index()
+    small_cols = [code for code in INDEX_ANCHOR_CODES if code in close.columns]
+    large_code = first_existing_column(close, INDEX_LARGE_CODES)
+    if not small_cols:
+        return pd.DataFrame()
+    small_matrix = close[small_cols]
+    small = small_matrix.bfill(axis=1).iloc[:, 0]
+    small_code = small_matrix.apply(first_valid_code, axis=1)
+    large = close[large_code] if large_code else pd.Series(np.nan, index=close.index)
+    out = pd.DataFrame({"trade_date": close.index.astype(str)})
+    out["index_anchor_code"] = small_code.to_numpy()
+    out["index_anchor_ret5"] = small.pct_change(5).to_numpy()
+    out["index_anchor_ret20"] = small.pct_change(20).to_numpy()
+    out["index_anchor_drawdown20"] = (small / small.rolling(20, min_periods=5).max() - 1.0).to_numpy()
+    out["index_anchor_rel20"] = (small.pct_change(20) - large.pct_change(20)).to_numpy()
+    return out.replace([np.inf, -np.inf], np.nan)
+
+
+def first_existing_column(frame: pd.DataFrame, codes: tuple[str, ...]) -> str:
+    for code in codes:
+        if code in frame.columns and frame[code].notna().any():
+            return code
+    return ""
+
+
+def first_valid_code(row: pd.Series) -> str:
+    for code, value in row.items():
+        if pd.notna(value):
+            return str(code)
+    return ""
+
+
+def quote_sql(values: tuple[str, ...]) -> str:
+    return ",".join("'" + value.replace("'", "''") + "'" for value in values)
 
 
 def classify_row(row: pd.Series) -> dict[str, Any]:
@@ -173,6 +250,10 @@ def classify_row(row: pd.Series) -> dict[str, Any]:
     dd120 = safe_float(row.get("drawdown120"))
     trend60 = safe_float(row.get("trend60"))
     vol20 = safe_float(row.get("volatility20"))
+    index_ret5 = safe_float(row.get("index_anchor_ret5"))
+    index_ret20 = safe_float(row.get("index_anchor_ret20"))
+    index_dd20 = safe_float(row.get("index_anchor_drawdown20"))
+    index_rel20 = safe_float(row.get("index_anchor_rel20"))
 
     reasons: list[str] = []
     risk = 0.0
@@ -182,10 +263,13 @@ def classify_row(row: pd.Series) -> dict[str, Any]:
     risk += score_negative(breadth20 - 0.50, -0.08, -0.22) * 18
     risk += score_positive(limit_down5, 0.003, 0.035) * 14
     risk += score_negative(rel20, -0.03, -0.12) * 8
+    risk += score_negative(index_ret20, -0.04, -0.12) * 12
+    risk += score_negative(index_dd20, -0.06, -0.15) * 12
+    risk += score_negative(index_rel20, -0.03, -0.10) * 8
     risk += score_positive(vol20, 0.22, 0.42) * 6
     risk = float(np.clip(risk, 0.0, 100.0))
 
-    if limit_down >= 0.04 or market_return <= -0.055 or (dd20 <= -0.12 and breadth20 <= 0.38):
+    if limit_down >= 0.04 or market_return <= -0.055 or index_ret5 <= -0.055 or index_dd20 <= -0.14 or (dd20 <= -0.12 and breadth20 <= 0.38):
         reasons.append("crash: 跌停扩散/单日急跌/短期回撤与宽度共振")
         state = "crash"
     elif (limit_down5 >= 0.018 and breadth20 <= 0.43) or (amount_chg20 <= -0.28 and vol20 >= 0.26 and breadth20 <= 0.45):
@@ -194,7 +278,7 @@ def classify_row(row: pd.Series) -> dict[str, Any]:
     elif dd60 <= -0.15 and trend60 > 0 and breadth20 >= 0.47:
         reasons.append("post_crash_repair: 中期深回撤后的修复")
         state = "post_crash_repair"
-    elif trend60 < 0 or dd60 <= -0.08 or breadth20 <= 0.45 or rel20 <= -0.08:
+    elif trend60 < 0 or dd60 <= -0.08 or breadth20 <= 0.45 or rel20 <= -0.08 or index_ret20 <= -0.04 or index_rel20 <= -0.06:
         reasons.append("weak: 趋势/宽度/小盘相对强弱偏弱")
         state = "weak"
     else:
@@ -209,6 +293,10 @@ def classify_row(row: pd.Series) -> dict[str, Any]:
         reasons.append(f"5日跌停占比{limit_down5:.2%}")
     if rel20 <= -0.08:
         reasons.append(f"小盘相对弱{rel20:.1%}")
+    if np.isfinite(index_ret20) and index_ret20 <= -0.04:
+        reasons.append(f"指数锚点20日{index_ret20:.1%}")
+    if np.isfinite(index_rel20) and index_rel20 <= -0.06:
+        reasons.append(f"小盘指数相对弱{index_rel20:.1%}")
     return {"state": state, "risk_score": risk, "reason": "；".join(reasons)}
 
 
@@ -220,7 +308,8 @@ def save_market_risk_state(db_path: str | None, state: pd.DataFrame) -> None:
         "trade_date", "state", "risk_score", "market_return", "market_equity",
         "up_ratio", "down_ratio", "breadth20", "limit_up_count", "limit_down_count",
         "limit_up_ratio", "limit_down_ratio", "limit_down_ratio5", "amount", "amount_chg20",
-        "small_large_rel20", "drawdown20", "drawdown60", "drawdown120", "trend60",
+        "small_large_rel20", "index_anchor_code", "index_anchor_ret5", "index_anchor_ret20",
+        "index_anchor_drawdown20", "index_anchor_rel20", "drawdown20", "drawdown60", "drawdown120", "trend60",
         "volatility20", "universe_count", "reason", "summary_json", "created_at", "updated_at",
     ]
     sql = replace_sql("market_risk_state_daily", columns, ["trade_date"])
@@ -233,6 +322,8 @@ def save_market_risk_state(db_path: str | None, state: pd.DataFrame) -> None:
                 f_or_none(row.breadth20), i_or_none(row.limit_up_count), i_or_none(row.limit_down_count),
                 f_or_none(row.limit_up_ratio), f_or_none(row.limit_down_ratio), f_or_none(row.limit_down_ratio5),
                 f_or_none(row.amount), f_or_none(row.amount_chg20), f_or_none(row.small_large_rel20),
+                str(row.index_anchor_code or ""), f_or_none(row.index_anchor_ret5), f_or_none(row.index_anchor_ret20),
+                f_or_none(row.index_anchor_drawdown20), f_or_none(row.index_anchor_rel20),
                 f_or_none(row.drawdown20), f_or_none(row.drawdown60), f_or_none(row.drawdown120),
                 f_or_none(row.trend60), f_or_none(row.volatility20), i_or_none(row.universe_count),
                 str(row.reason or ""), str(row.summary_json or "{}"), now, now,
@@ -247,6 +338,11 @@ def row_summary(row: pd.Series) -> str:
         "median_return": f_or_none(row.get("median_return")),
         "small_return": f_or_none(row.get("small_return")),
         "large_return": f_or_none(row.get("large_return")),
+        "index_anchor_code": str(row.get("index_anchor_code") or ""),
+        "index_anchor_ret5": f_or_none(row.get("index_anchor_ret5")),
+        "index_anchor_ret20": f_or_none(row.get("index_anchor_ret20")),
+        "index_anchor_drawdown20": f_or_none(row.get("index_anchor_drawdown20")),
+        "index_anchor_rel20": f_or_none(row.get("index_anchor_rel20")),
     }
     return json.dumps(payload, ensure_ascii=False)
 

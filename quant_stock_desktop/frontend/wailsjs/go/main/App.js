@@ -118,6 +118,14 @@ export function GetPositionSummary() {
   return window['go']['main']['App']['GetPositionSummary']();
 }
 
+export function GetProfitArenaMarketDate() {
+  return window['go']['main']['App']['GetProfitArenaMarketDate']();
+}
+
+export function GetProfitArenaRunStatus() {
+  return window['go']['main']['App']['GetProfitArenaRunStatus']();
+}
+
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
@@ -282,6 +290,22 @@ export function ListPolicySupportCandidates(arg1) {
   return window['go']['main']['App']['ListPolicySupportCandidates'](arg1);
 }
 
+export function ListProfitArenaEvaluations(arg1, arg2) {
+  return window['go']['main']['App']['ListProfitArenaEvaluations'](arg1, arg2);
+}
+
+export function ListProfitArenaFeatures(arg1, arg2) {
+  return window['go']['main']['App']['ListProfitArenaFeatures'](arg1, arg2);
+}
+
+export function ListProfitArenaPredictions(arg1, arg2) {
+  return window['go']['main']['App']['ListProfitArenaPredictions'](arg1, arg2);
+}
+
+export function ListProfitArenaRuns(arg1) {
+  return window['go']['main']['App']['ListProfitArenaRuns'](arg1);
+}
+
 export function ListRecommendationHindsight() {
   return window['go']['main']['App']['ListRecommendationHindsight']();
 }
@@ -384,6 +408,14 @@ export function RunLimitUpModelTraining() {
 
 export function RunPolicySupportAnalysis() {
   return window['go']['main']['App']['RunPolicySupportAnalysis']();
+}
+
+export function RunProfitArenaLatestInference() {
+  return window['go']['main']['App']['RunProfitArenaLatestInference']();
+}
+
+export function RunProfitArenaTraining() {
+  return window['go']['main']['App']['RunProfitArenaTraining']();
 }
 
 export function RunStrategyScheduleNow() {

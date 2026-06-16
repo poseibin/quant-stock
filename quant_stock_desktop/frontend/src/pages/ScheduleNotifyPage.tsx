@@ -1,17 +1,13 @@
 import { useEffect, useState } from 'react'
 import {
   getDataUpdateStatus,
-  getLimitBreakoutModelRunStatus,
-  getLimitUpModelRunStatus,
   getSettings,
-  getT0DailyResearchStatus,
   listStrategyScheduleReports,
-  listTasks,
+  getProfitArenaRunStatus,
   runStrategyScheduleNow,
   type RunStatus,
   type Settings,
-  type StrategyScheduleReport,
-  type TaskDTO
+  type StrategyScheduleReport
 } from '../services/app'
 
 type ScheduleProgressRow = {
@@ -79,7 +75,7 @@ export function ScheduleNotifyPage() {
           </div>
           <div className="settingsActions scheduleNotifyActions">
             <button className="primaryButton settingsButton" onClick={pushUpdate} disabled={running}>
-              {running ? '推送中' : '推送更新'}
+              {running ? '执行中' : '手动执行'}
             </button>
           </div>
         </div>
@@ -136,7 +132,7 @@ export function ScheduleNotifyPage() {
             ))}
           </div>
         ) : (
-          <div className="emptyState inlineEmpty">暂无执行记录，点击“推送更新”开始一次任务。</div>
+          <div className="emptyState inlineEmpty">暂无执行记录，点击“手动执行”开始一次任务。</div>
         )}
       </div>
     </div>
@@ -144,34 +140,18 @@ export function ScheduleNotifyPage() {
 }
 
 const scheduleTargets = [
-  { key: 't0', label: '做T助手' },
-  { key: 'limit_up', label: '涨停预警' },
-  { key: 'breakout', label: '横盘预警' },
-  { key: 'factor', label: '通用策略' }
+  { key: 'arena', label: '收益擂台' }
 ]
 
 async function fetchScheduleProgress(): Promise<ScheduleProgressRow[]> {
-  const [dataStatus, t0Status, limitStatus, breakoutStatus, tasks] = await Promise.all([
+  const [dataStatus, arenaStatus] = await Promise.all([
     getDataUpdateStatus().catch(() => null),
-    getT0DailyResearchStatus().catch(() => null),
-    getLimitUpModelRunStatus().catch(() => null),
-    getLimitBreakoutModelRunStatus().catch(() => null),
-    listTasks({ limit: 60 }).catch(() => [])
+    getProfitArenaRunStatus().catch(() => null)
   ])
-  const factorTask = latestFactorTask(tasks)
   return [
     statusRow('data', '股票数据', dataStatus),
-    statusRow('t0', '做T助手', t0Status),
-    statusRow('limit', '涨停预警', limitStatus),
-    statusRow('breakout', '横盘预警', breakoutStatus),
-    taskRow('factor', '通用策略', factorTask)
+    statusRow('arena', '收益擂台', arenaStatus)
   ]
-}
-
-function latestFactorTask(tasks: TaskDTO[]) {
-  return tasks
-    .filter((task) => task.task_type === 'factor_research')
-    .sort((a, b) => String(b.updated_at || b.started_at || '').localeCompare(String(a.updated_at || a.started_at || '')))[0]
 }
 
 function statusRow(key: string, label: string, status: RunStatus | null): ScheduleProgressRow {
@@ -189,18 +169,6 @@ function statusRow(key: string, label: string, status: RunStatus | null): Schedu
   }
 }
 
-function taskRow(key: string, label: string, task?: TaskDTO): ScheduleProgressRow {
-  if (!task) return { key, label, status: '等待', message: '暂无通用策略任务', tone: '' }
-  const state = String(task.status || '').toLowerCase()
-  const percent = Number.isFinite(Number(task.progress)) ? `${Math.round(Number(task.progress) * 100)}%` : ''
-  return {
-    key,
-    label,
-    status: `${stateLabel(state)}${percent ? ` · ${percent}` : ''}`,
-    message: task.name || task.id || '-',
-    tone: state === 'failed' || state === 'cancelled' || state === 'interrupted' ? 'error' : state === 'success' ? 'success' : ''
-  }
-}
 
 function ScheduleReportCard({ report, compact }: { report: StrategyScheduleReport; compact: boolean }) {
   const rows = report.rows || []

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, Play, RefreshCw, ShieldCheck } from 'lucide-react'
-import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorAutoTuneRuns, listFactorAutoTuneTrials, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorObservationEvents, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, runFactorAutoTune, runFactorLatestInference, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorAutoTuneRun, type FactorAutoTuneTrial, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorObservationEvent, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
+import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorObservationEvents, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, runFactorLatestInference, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorObservationEvent, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
 
 type FactorFamily = {
   name: string
@@ -20,7 +20,6 @@ type PipelineStep = {
 }
 
 type ResearchTab = 'recommend' | 'model' | 'evaluation'
-type AutoTunePresetKey = 'fast' | 'standard' | 'deep'
 
 type GeneralStrategyPlan = {
   buy: number
@@ -34,12 +33,6 @@ const researchTabs: Array<{ key: ResearchTab; label: string }> = [
   { key: 'model', label: '模型训练' },
   { key: 'evaluation', label: '模型评估' }
 ]
-
-const autoTunePresets: Record<AutoTunePresetKey, { label: string; rounds: number; trials: number; hint: string }> = {
-  fast: { label: '快速', rounds: 4, trials: 4, hint: '少量补探' },
-  standard: { label: '标准', rounds: 12, trials: 6, hint: '默认长搜索' },
-  deep: { label: '加深', rounds: 24, trials: 8, hint: '更大参数空间' }
-}
 
 const factorFamilies: FactorFamily[] = [
   { name: '估值', count: 13, examples: 'EP、BP、SP、PE/PB/PS、股息率、行业内估值分位', role: '提供长期均值回归和估值保护', status: 'ready' },
@@ -111,9 +104,6 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
   const [correlations, setCorrelations] = useState<FactorCorrelationResult[]>([])
   const [stressRows, setStressRows] = useState<FactorStressResult[]>([])
   const [admissionRows, setAdmissionRows] = useState<FactorAdmissionComparison[]>([])
-  const [autoTuneRuns, setAutoTuneRuns] = useState<FactorAutoTuneRun[]>([])
-  const [autoTuneTrials, setAutoTuneTrials] = useState<FactorAutoTuneTrial[]>([])
-  const [autoTunePreset, setAutoTunePreset] = useState<AutoTunePresetKey>('standard')
   const [warningRuns, setWarningRuns] = useState<CrashWarningRunSummary[]>([])
   const [warningFeatures, setWarningFeatures] = useState<CrashWarningFeature[]>([])
   const modelSummary = useMemo(() => parseModelSummary(model?.summary_json), [model])
@@ -128,7 +118,6 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
     .slice(0, 4), [stressRows])
   const parentTasks = useMemo(() => tasks.filter((task) => !task.parent_id), [tasks])
   const researchParentTasks = useMemo(() => parentTasks.filter((task) => task.task_type === 'factor_research'), [parentTasks])
-  const autoTuneTask = useMemo(() => parentTasks.find((task) => task.task_type === 'factor_autotune'), [parentTasks])
   const latestInferenceTask = useMemo(() => parentTasks.find(isLatestInferenceTask), [parentTasks])
   const latestInferenceChild = useMemo(() => latestInferenceTask
     ? tasks.find((task) => task.parent_id === latestInferenceTask.id && task.subtask_key === 'latest_inference')
@@ -172,14 +161,11 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
   const startDate = useMemo(() => '20100101', [])
 
   const refresh = useCallback(async () => {
-    const items = (await listTasks({ limit: 300 })).filter((item) => item.task_type === 'factor_research' || item.task_type === 'factor_autotune')
+    const items = (await listTasks({ limit: 300 })).filter((item) => item.task_type === 'factor_research')
     setTasks(items)
     const runItems = await listFactorResearchRuns(20)
     setRuns(runItems)
     setAdmissionRows(await listFactorAdmissionComparisons(30))
-    const autoRuns = await listFactorAutoTuneRuns(20)
-    setAutoTuneRuns(autoRuns)
-    setAutoTuneTrials(await listFactorAutoTuneTrials(autoRuns[0]?.run_id || '', 80))
     const crashRuns = await listCrashWarningRuns(10)
     setWarningRuns(crashRuns)
     setWarningFeatures(await listCrashWarningFeatures(crashRuns[0]?.run_id || '', 12))
@@ -284,22 +270,6 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
       const task = await runFactorLatestInference()
       await refresh()
       setNotice(`已启动通用策略最新截面推理：${task.name || task.id}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const startAutoTune = async () => {
-    setBusy(true)
-    setError('')
-    setNotice('')
-    try {
-      const preset = autoTunePresets[autoTunePreset]
-      const task = await runFactorAutoTune(preset.rounds, preset.trials, true)
-      await refresh()
-      setNotice(`已启动通用策略自动调参：${task.name || task.id}，计划 ${preset.rounds} 轮 x ${preset.trials} 次，已探索参数会自动跳过`)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -508,16 +478,6 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
 
       {activeTab === 'model' ? (
         <>
-      <FactorAutoTunePanel
-        runs={autoTuneRuns}
-        trials={autoTuneTrials}
-        task={autoTuneTask}
-        busy={busy}
-        preset={autoTunePreset}
-        onPresetChange={setAutoTunePreset}
-        onStart={startAutoTune}
-      />
-
       <FactorAdmissionPanel
         rows={admissionRows}
         latestPredictionDate={latestPredictionDate}
@@ -1640,174 +1600,6 @@ function variantLabel(variant: string) {
 
 function baseFactor(feature: string) {
   return feature.replace(/_neutral$/, '').replace(/_rank$/, '')
-}
-
-function FactorAutoTunePanel({
-  runs,
-  trials,
-  task,
-  busy,
-  preset,
-  onPresetChange,
-  onStart
-}: {
-  runs: FactorAutoTuneRun[]
-  trials: FactorAutoTuneTrial[]
-  task?: TaskDTO
-  busy: boolean
-  preset: AutoTunePresetKey
-  onPresetChange: (preset: AutoTunePresetKey) => void
-  onStart: () => void
-}) {
-  const latest = runs[0]
-  const summary = parseModelSummary(latest?.summary_json)
-  const presetCfg = autoTunePresets[preset]
-  const bestTrial = trials.find((trial) => trial.trial_id === latest?.best_trial_id) || trials.find((trial) => trial.passed) || trials[0]
-  const running = task?.status === 'running' || task?.status === 'queued' || task?.status === 'created'
-  const progress = Math.round((task?.progress || 0) * 100)
-  const trialCount = Number(summary.trial_count ?? trials.length)
-  const plannedTrials = Number(summary.planned_trials ?? presetCfg.rounds * presetCfg.trials)
-  const skippedExisting = Number(summary.skipped_existing_count ?? 0)
-  const historicalExplored = Number(summary.historical_explored_count ?? 0)
-  return (
-    <section className="detailCard modelVersionCompare">
-      <div className="tableHeader">
-        <div>
-          <div className="sectionLabel">AUTOTUNE LOOP</div>
-          <h3>自动训练调参</h3>
-          <p className="recommendationMeta">程序按已探索参数集合继续搜索，重复组合会跳过；DeepSeek 会读取历史 trial 复盘下一轮方向。</p>
-        </div>
-        <div className="tableHeaderRight">
-          <div className="autoTunePresetGroup" role="group" aria-label="自动调参搜索预算">
-            {(Object.keys(autoTunePresets) as AutoTunePresetKey[]).map((key) => (
-              <button
-                key={key}
-                className={preset === key ? 'active' : ''}
-                onClick={() => onPresetChange(key)}
-                disabled={busy || running}
-                title={`${autoTunePresets[key].rounds} 轮 x ${autoTunePresets[key].trials} 次，已探索参数会跳过`}
-              >
-                {autoTunePresets[key].label}
-              </button>
-            ))}
-          </div>
-          <button className="primaryButton startButton" onClick={onStart} disabled={busy || running} title={`基于最新通用模型做 ${presetCfg.rounds} 轮 x ${presetCfg.trials} 次受控调参`}>
-            <BrainCircuit size={16} />
-            自动调参
-          </button>
-        </div>
-      </div>
-      {task ? (
-        <div className="signalProgress signalProgressStandalone">
-          <div className="signalProgressHeader">
-            <span>{task.summary?.stage as string || statusLabel(task.status)} · {task.summary?.name as string || task.name}</span>
-            <span>{running ? `${progress}%` : statusLabel(task.status)}</span>
-          </div>
-          <div className="signalProgressBar">
-            <div className="signalProgressBarFill" style={{ width: `${running ? Math.max(progress, 8) : 100}%` }} />
-          </div>
-        </div>
-      ) : null}
-      <div className="metricStrip">
-        <div className={`metricCard ${latest?.status === 'success' ? 'good' : latest?.status === 'failed' ? 'bad' : ''}`}>
-          <span>最近结论</span>
-          <b>{latest ? autoTuneRunStatusText(latest) : '未运行'}</b>
-          <em>{latest ? shortRunID(latest.run_id) : '等待自动调参'}</em>
-        </div>
-        <div className={`metricCard ${bestTrial?.passed ? 'good' : ''}`}>
-          <span>最佳 Trial</span>
-          <b>{bestTrial?.trial_id || '—'}</b>
-          <em>{bestTrial ? `${bestTrial.admission || '无准入'} · ${decimalText(bestTrial.admission_score, 2)}` : '暂无结果'}</em>
-        </div>
-        <div className="metricCard">
-          <span>收益 / 回撤</span>
-          <b>{bestTrial ? signedPercentText(bestTrial.annual_return) : '—'}</b>
-          <em>最大回撤 {bestTrial ? signedPercentText(bestTrial.max_drawdown) : '—'}</em>
-        </div>
-        <div className={`metricCard ${bestTrial?.stress_bad_event_count ? 'bad' : bestTrial ? 'good' : ''}`}>
-          <span>压力校验</span>
-          <b>{bestTrial ? (bestTrial.stress_bad_event_count ? '未过' : '通过') : '—'}</b>
-          <em>{bestTrial ? autoTuneRiskText(bestTrial) : '等待 trial'}</em>
-        </div>
-        <div className="metricCard">
-          <span>搜索进度</span>
-          <b>{trialCount ? `${numberText(trialCount)} / ${numberText(plannedTrials)}` : '—'}</b>
-          <em>历史 {numberText(historicalExplored)}，跳过重复 {numberText(skippedExisting)}</em>
-        </div>
-      </div>
-      <div className="autoTuneGridWrap">
-        <div className="autoTuneGrid" role="table" aria-label="自动调参 trial 表格">
-          <div className="autoTuneGridRow autoTuneGridHead" role="row">
-            {['Trial', '状态', '分数', '年化收益', '总收益', '最大回撤', '压力', '原因', 'DeepSeek', '参数'].map((label) => (
-              <div className="autoTuneGridCell" role="columnheader" key={label}>{label}</div>
-            ))}
-          </div>
-          {trials.length === 0 ? (
-            <div className="autoTuneGridEmpty">暂无自动调参记录，点击自动调参后会逐个 trial 展示结果</div>
-          ) : trials.map((trial) => (
-            <div className="autoTuneGridRow" role="row" key={`${trial.run_id}-${trial.trial_id}`}>
-              <div className="autoTuneGridCell autoTuneTrialCell" role="cell">
-                <b>{trial.trial_id}</b>
-                <span title={trial.eval_run_id}>{shortRunID(trial.eval_run_id)}</span>
-              </div>
-              <div className="autoTuneGridCell autoTuneStatusCell" role="cell">
-                <span className={`badge ${admissionBadge(trial.admission)}`}>{trial.admission || '-'}</span>
-                <em>{trial.source === 'deepseek' ? 'DeepSeek' : '规则'}</em>
-              </div>
-              <div className="autoTuneGridCell autoTuneNumberCell" role="cell">{decimalText(trial.admission_score, 2)}</div>
-              <div className={`autoTuneGridCell autoTuneNumberCell ${trial.annual_return >= 0 ? 'positive' : 'negative'}`} role="cell">{signedPercentText(trial.annual_return)}</div>
-              <div className={`autoTuneGridCell autoTuneNumberCell ${trial.total_return >= 0 ? 'positive' : 'negative'}`} role="cell">{signedPercentText(trial.total_return)}</div>
-              <div className="autoTuneGridCell autoTuneNumberCell negative" role="cell">{signedPercentText(trial.max_drawdown)}</div>
-              <div className="autoTuneGridCell autoTuneClamp" role="cell" title={autoTuneRiskText(trial)}>{autoTuneRiskText(trial)}</div>
-              <div className="autoTuneGridCell autoTuneClamp" role="cell" title={trial.reason || ''}>{trial.reason || '—'}</div>
-              <div className="autoTuneGridCell autoTuneClamp" role="cell" title={compactLLMText(trial.llm_direction_json)}>{compactLLMText(trial.llm_direction_json)}</div>
-              <div className="autoTuneGridCell autoTuneParamsCell" role="cell"><code>{compactParamsText(trial.params_json)}</code></div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function autoTuneRiskText(trial: FactorAutoTuneTrial) {
-  const risks = []
-  if (trial.stress_bad_event_count) risks.push(`${trial.stress_bad_event_count}个压力段`)
-  if (trial.stress_crash_state_failed) risks.push('股灾失败')
-  if (trial.stress_weak_drawdown_failed) risks.push('弱市失败')
-  return risks.length ? risks.join(' / ') : '压力通过'
-}
-
-function autoTuneRunStatusText(run: FactorAutoTuneRun) {
-  const summary = parseModelSummary(run.summary_json)
-  const reason = String(summary.reason || '')
-  if (run.status === 'success') return '已找到'
-  if (reason === 'search_space_exhausted') return '参数已探完'
-  if (reason === 'no_passed_trial') return '搜索未收敛'
-  return statusLabel(run.status)
-}
-
-function compactParamsText(raw: string) {
-  try {
-    const data = JSON.parse(raw || '{}') as Record<string, unknown>
-    const selection = data.selection as Record<string, unknown> | undefined
-    const position = data.position as Record<string, unknown> | undefined
-    return `rank ${decimalText(selection?.min_pred_rank, 3)} / ${numberText(position?.n_holdings)}只 / 单票${percentText(position?.max_single_weight)}`
-  } catch {
-    return raw ? raw.slice(0, 48) : '-'
-  }
-}
-
-function compactLLMText(raw: string) {
-  try {
-    const data = JSON.parse(raw || '{}') as Record<string, unknown>
-    const next = Array.isArray(data.next_direction) ? data.next_direction.filter(Boolean).join(' / ') : ''
-    const analysis = String(data.analysis_md || '')
-    const error = String(data.error || '')
-    return next || analysis.slice(0, 80) || error || '-'
-  } catch {
-    return '-'
-  }
 }
 
 function FactorAdmissionPanel({

@@ -30,6 +30,14 @@ TASK = "data_update"
 DATA_START_DATE = "20100101"
 ENDPOINT = "https://api.tushare.pro"
 PAGE_LIMIT = 2000
+INDEX_BASIC_MARKETS = ("SSE", "SZSE", "CSI", "CNI")
+INDEX_ANCHOR_CODES = (
+    "000300.SH",  # 沪深300
+    "000905.SH",  # 中证500
+    "000852.SH",  # 中证1000
+    "932000.CSI",  # 中证2000
+    "399303.SZ",  # 国证2000
+)
 
 
 @dataclass(frozen=True)
@@ -43,7 +51,9 @@ class DatasetSpec:
 
 DATASETS: dict[str, DatasetSpec] = {
     "stock_basic": DatasetSpec("stock_basic", "basic", "single", ("ts_code",)),
+    "index_basic": DatasetSpec("index_basic", "basic", "single", ("ts_code",)),
     "trade_cal": DatasetSpec("trade_cal", "basic", "single", ("cal_date",)),
+    "index_daily": DatasetSpec("index_daily", "price", "year", ("ts_code", "trade_date"), "trade_date"),
     "daily": DatasetSpec("daily", "price", "year", ("ts_code", "trade_date"), "trade_date"),
     "daily_basic": DatasetSpec("daily_basic", "price", "year", ("ts_code", "trade_date"), "trade_date"),
     "adj_factor": DatasetSpec("adj_factor", "price", "year", ("ts_code", "trade_date"), "trade_date"),
@@ -59,14 +69,16 @@ DATASETS: dict[str, DatasetSpec] = {
 }
 
 PHASES: dict[str, list[str]] = {
-    "basic": ["stock_basic", "trade_cal"],
-    "price": ["daily", "daily_basic", "adj_factor"],
+    "basic": ["stock_basic", "index_basic", "trade_cal"],
+    "price": ["index_daily", "daily", "daily_basic", "adj_factor"],
     "finance": ["income", "balancesheet", "cashflow", "fina_indicator", "forecast"],
     "event": ["stk_holdertrade", "top_list", "top_inst", "top10_holders"],
 }
 
 API_INTERVAL = {
     "stock_basic": 1.0,
+    "index_basic": 1.0,
+    "index_daily": 1.2,
     "trade_cal": 1.0,
     "daily": 1.2,
     "daily_basic": 1.5,
@@ -506,8 +518,12 @@ class Worker:
     def run_one(self, name: str) -> int:
         if name == "stock_basic":
             return self.update_stock_basic()
+        if name == "index_basic":
+            return self.update_index_basic()
         if name == "trade_cal":
             return self.update_trade_cal()
+        if name == "index_daily":
+            return self.update_index_daily()
         if name in ("daily", "daily_basic", "adj_factor"):
             return self.update_by_trade_date(name, backfill_history=True)
         if name == "income":
@@ -537,6 +553,24 @@ class Worker:
         df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         return self.store.write_upsert("stock_basic", df, overwrite=True)
 
+    def update_index_basic(self) -> int:
+        fields = "ts_code,name,fullname,market,publisher,index_type,category,base_date,base_point,list_date,weight_rule,desc,exp_date"
+        frames: list[pd.DataFrame] = []
+        soft_errors: list[str] = []
+        for i, market in enumerate(INDEX_BASIC_MARKETS, start=1):
+            self.status.dataset_progress("index_basic", i, len(INDEX_BASIC_MARKETS), f"market={market}")
+            try:
+                df = self.client.call("index_basic", {"market": market}, fields)
+            except Exception as exc:
+                soft_errors.append(f"{market}: {exc}")
+                continue
+            if not df.empty:
+                frames.append(df)
+        if not frames:
+            raise RuntimeError("; ".join(soft_errors[:5]) or "index_basic 未返回数据")
+        df = pd.concat(frames, ignore_index=True)
+        return self.store.write_upsert("index_basic", df, overwrite=True)
+
     def update_trade_cal(self) -> int:
         self.status.dataset_progress("trade_cal", 0, 1, f"{DATA_START_DATE}..{today()}")
         df = self.client.call(
@@ -546,6 +580,39 @@ class Worker:
         )
         self.status.dataset_progress("trade_cal", 1, 1, f"rows={len(df)}")
         return self.store.write_upsert("trade_cal", df, overwrite=True)
+
+    def update_index_daily(self) -> int:
+        start = self.start_date or self.incremental_start("index_daily", "trade_date")
+        end = today()
+        if start > end:
+            return 0
+        ranges = year_ranges_between(start, end)
+        fields = "ts_code,trade_date,close,open,high,low,pre_close,change,pct_chg,vol,amount"
+        total_steps = len(INDEX_ANCHOR_CODES) * len(ranges)
+        total = 0
+        ok_codes: set[str] = set()
+        soft_errors: list[str] = []
+        step = 0
+        for ts_code in INDEX_ANCHOR_CODES:
+            for begin, finish in ranges:
+                step += 1
+                self.status.dataset_progress("index_daily", step, total_steps, f"{ts_code} {begin}..{finish} rows={total}")
+                try:
+                    df = self.client.call_paged(
+                        "index_daily",
+                        {"ts_code": ts_code, "start_date": begin, "end_date": finish},
+                        fields,
+                    )
+                except Exception as exc:
+                    soft_errors.append(f"{ts_code} {begin}..{finish}: {exc}")
+                    continue
+                if not df.empty:
+                    ok_codes.add(ts_code)
+                    total += self.store.write_upsert("index_daily", df)
+        if total == 0 and soft_errors:
+            raise RuntimeError("; ".join(soft_errors[:5]))
+        self.status.dataset_progress("index_daily", total_steps, total_steps, f"codes={','.join(sorted(ok_codes))} rows={total}")
+        return total
 
     def update_top10_holders(self) -> int:
         start = self.store.latest_date("top10_holders", "end_date")

@@ -23,6 +23,9 @@ type databaseFileConfig struct {
 	MySQLUser       string
 	MySQLPassword   string
 	TushareToken    string
+	LLMProvider     string
+	OpenAIToken     string
+	OpenAIModel     string
 	DeepSeekToken   string
 	DeepSeekModel   string
 	WechatWebhook   string
@@ -41,6 +44,15 @@ func applyPackagedDatabaseConfig(settings Settings) Settings {
 	settings.MySQLDSN = packagedDSN
 	if fileCfg.TushareToken != "" {
 		settings.TushareToken = fileCfg.TushareToken
+	}
+	if fileCfg.LLMProvider != "" {
+		settings.LLMProvider = fileCfg.LLMProvider
+	}
+	if fileCfg.OpenAIToken != "" {
+		settings.OpenAIToken = fileCfg.OpenAIToken
+	}
+	if fileCfg.OpenAIModel != "" {
+		settings.OpenAIModel = fileCfg.OpenAIModel
 	}
 	if fileCfg.DeepSeekToken != "" {
 		settings.DeepSeekToken = fileCfg.DeepSeekToken
@@ -165,6 +177,12 @@ func parseDatabaseConfigText(text string) (databaseFileConfig, bool) {
 			cfg.MySQLPassword = value
 		case "DATA_TUSHARE_TOKEN":
 			cfg.TushareToken = value
+		case "LLM_PROVIDER", "AI_PROVIDER":
+			cfg.LLMProvider = value
+		case "OPENAI_TOKEN", "OPENAI_API_KEY":
+			cfg.OpenAIToken = value
+		case "OPENAI_MODEL":
+			cfg.OpenAIModel = value
 		case "DEEPSEEK_TOKEN":
 			cfg.DeepSeekToken = value
 		case "DEEPSEEK_MODEL":
@@ -177,7 +195,8 @@ func parseDatabaseConfigText(text string) (databaseFileConfig, bool) {
 	}
 	return cfg, cfg.DatabaseBackend != "" || cfg.MySQLDSN != "" || cfg.MySQLAdminDSN != "" ||
 		cfg.MySQLDatabase != "" || cfg.MySQLUser != "" || cfg.MySQLPassword != "" ||
-		cfg.TushareToken != "" || cfg.DeepSeekToken != "" || cfg.DeepSeekModel != "" ||
+		cfg.TushareToken != "" || cfg.LLMProvider != "" || cfg.OpenAIToken != "" || cfg.OpenAIModel != "" ||
+		cfg.DeepSeekToken != "" || cfg.DeepSeekModel != "" ||
 		cfg.WechatWebhook != "" || len(cfg.WechatUsers) > 0
 }
 

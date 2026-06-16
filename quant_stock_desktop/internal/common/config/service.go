@@ -36,6 +36,8 @@ func DefaultSettings(homeDir string) Settings {
 		DefaultInitialCash:   500000,
 		DefaultRebalanceFreq: 5,
 		TaskConcurrency:      2,
+		LLMProvider:          "openai",
+		OpenAIModel:          "gpt-5.5",
 		DeepSeekModel:        "deepseek-v4-pro",
 		Strategies:           defaultStrategies(),
 		PortfolioRisk:        defaultPortfolioRisk(),
@@ -277,6 +279,19 @@ func normalize(settings Settings) Settings {
 	if settings.TaskConcurrency == 0 {
 		settings.TaskConcurrency = 2
 	}
+	settings.OpenAIToken = strings.TrimSpace(settings.OpenAIToken)
+	settings.DeepSeekToken = strings.TrimSpace(settings.DeepSeekToken)
+	if strings.TrimSpace(settings.LLMProvider) == "" {
+		if settings.OpenAIToken != "" {
+			settings.LLMProvider = "openai"
+		} else if settings.DeepSeekToken != "" {
+			settings.LLMProvider = "deepseek"
+		}
+	}
+	settings.LLMProvider = normalizeLLMProvider(settings.LLMProvider)
+	if settings.OpenAIModel == "" {
+		settings.OpenAIModel = "gpt-5.5"
+	}
 	if settings.DeepSeekModel == "" {
 		settings.DeepSeekModel = "deepseek-v4-pro"
 	}
@@ -290,6 +305,17 @@ func normalize(settings Settings) Settings {
 	settings.GovernanceRules = mergeAnyMap(defaultGovernanceRules(), settings.GovernanceRules)
 	settings.StrategySchedule = normalizeStrategySchedule(settings.StrategySchedule)
 	return settings
+}
+
+func normalizeLLMProvider(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai", "chatgpt", "gpt", "chat_gpt":
+		return "openai"
+	case "deepseek":
+		return "deepseek"
+	default:
+		return "openai"
+	}
 }
 
 func NormalizeForCompare(settings Settings) Settings {
@@ -327,19 +353,36 @@ func normalizeStrategySchedule(schedule StrategyScheduleSettings) StrategySchedu
 	}
 	if schedule.Targets == nil {
 		schedule.Targets = map[string]bool{
-			"t0":       true,
-			"limit_up": true,
-			"breakout": true,
-			"factor":   false,
+			"arena": true,
 		}
 	} else {
-		defaults := map[string]bool{"t0": true, "limit_up": true, "breakout": true, "factor": false}
-		targets := make(map[string]bool, len(defaults))
-		for key, value := range defaults {
-			targets[key] = value
-		}
+		targets := map[string]bool{}
+		hasExplicitArena := false
+		legacyTargetFound := false
+		legacyEnabled := false
 		for key, value := range schedule.Targets {
-			targets[strings.TrimSpace(key)] = value
+			key = strings.TrimSpace(key)
+			switch key {
+			case "arena":
+				hasExplicitArena = true
+				targets[key] = value
+			case "profit_arena":
+				hasExplicitArena = true
+				targets["arena"] = targets["arena"] || value
+			case "profit_arena_model":
+				hasExplicitArena = true
+				targets["arena"] = targets["arena"] || value
+			case "t0", "limit_up", "breakout", "factor":
+				legacyTargetFound = true
+				legacyEnabled = legacyEnabled || value
+			}
+		}
+		if !hasExplicitArena {
+			if legacyTargetFound {
+				targets["arena"] = legacyEnabled
+			} else {
+				targets["arena"] = true
+			}
 		}
 		schedule.Targets = targets
 	}
@@ -527,7 +570,7 @@ func defaultStrategies() map[string]StrategySettings {
 				"crash_exit": map[string]any{"enabled": true, "trigger_states": []any{"crash", "liquidity_squeeze"}, "cooldown_days": 10},
 			},
 			Selection: map[string]any{"run_id": "fr_full_105_2010_2025_20260606", "min_pred_rank": 0.97},
-			Position:  map[string]any{"n_holdings": 24, "max_single_weight": 0.035, "max_industry_weight": 0.12},
+			Position:  map[string]any{"n_holdings": 20, "max_single_weight": 0.0665, "max_industry_weight": 0.16},
 		},
 		"multi_factor_composite": {
 			Label: "多因子综合", Enabled: true, Weight: 0.18, Rebalance: "monthly",

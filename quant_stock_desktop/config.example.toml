@@ -11,6 +11,13 @@ dsn = "quant_stock:quant_stock@tcp(127.0.0.1:3306)/quant_stock?parseTime=true&ch
 [data]
 tushare_token = ""
 
+[llm]
+provider = "openai" # openai or deepseek
+
+[openai]
+token = ""
+model = "gpt-5.5"
+
 [deepseek]
 token = ""
 model = "deepseek-v4-pro"

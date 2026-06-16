@@ -23,9 +23,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.infra.db import replace_sql, write_transaction
-from common.utils.market import restricted_exclude_sql
+from common.utils.market import restricted_exclude_sql, restricted_ts_code_exclude_sql
 from research.data.storage import duckdb_query as dq
 from scripts.strategy_quality_overlay import add_quality_overlay
+
+ML_SMALL_CAP_MIN_CIRC_MV = 2_000_000_000
+ML_SMALL_CAP_MAX_CIRC_MV = 8_000_000_000
+ML_SMALL_CAP_MAX_TOTAL_MV = 50_000_000_000
 
 
 FACTOR_FAMILY_KEYS = {
@@ -33,6 +37,7 @@ FACTOR_FAMILY_KEYS = {
     "质量": "quality",
     "成长": "growth",
     "动量": "momentum",
+    "小盘生态": "smallcap_ecology",
     "反转过热": "reversal_heat",
     "风险": "risk",
     "流动性拥挤": "liquidity_crowding",
@@ -118,6 +123,14 @@ FACTOR_DEFS: dict[str, tuple[str, bool]] = {
     "ma20_over_ma60": ("动量", True),
     "trend_strength60": ("动量", True),
     "ret20_over_vol20": ("动量", True),
+    "smallcap_rel_strength5": ("小盘生态", True),
+    "smallcap_rel_strength20": ("小盘生态", True),
+    "smallcap_attack_score": ("小盘生态", True),
+    "smallcap_repair_score": ("小盘生态", True),
+    "smallcap_style_resilience": ("小盘生态", True),
+    "smallcap_crowding_heat": ("小盘生态", False),
+    "smallcap_liquidity_quality": ("小盘生态", True),
+    "smallcap_breakout_exhaustion": ("小盘生态", False),
     "dist_ma20": ("反转过热", False),
     "dist_ma60": ("动量", True),
     "dist_high20": ("反转过热", False),
@@ -165,6 +178,9 @@ FACTOR_DEFS: dict[str, tuple[str, bool]] = {
 
 MODEL_FACTOR_ORDER = [
     "small_cap_quality_score", "defensive_quality_score", "risk_penalty_score",
+    "smallcap_attack_score", "smallcap_rel_strength20", "smallcap_rel_strength5",
+    "smallcap_style_resilience", "smallcap_liquidity_quality", "smallcap_repair_score",
+    "smallcap_crowding_heat", "smallcap_breakout_exhaustion",
     "turnover_rate", "turnover_rate_f", "volume_ratio", "turnover_chg20", "amount_chg20",
     "vol20", "vol60", "downvol20", "gap_abs20", "gap_down20", "ret_min20", "ret_min60", "amihud20",
     "bp", "ep", "sp", "dv_ttm", "dv_ratio", "bp_z_ind", "ep_ttm_z_ind", "sp_ttm_z_ind",
@@ -180,6 +196,7 @@ MODEL_FACTOR_ORDER = [
 ]
 
 MODEL_FAMILY_MIN_QUOTAS = {
+    "小盘生态": 6,
     "事件预期": 3,
     "成长": 5,
     "质量": 5,
@@ -198,6 +215,10 @@ MARKET_STATE_FEATURES = [
     "mkt_limit_down_ratio5",
     "mkt_amount_chg20",
     "mkt_small_large_rel20",
+    "mkt_index_anchor_ret5",
+    "mkt_index_anchor_ret20",
+    "mkt_index_anchor_drawdown20",
+    "mkt_index_anchor_rel20",
     "mkt_drawdown20",
     "mkt_drawdown60",
     "mkt_drawdown120",
@@ -233,11 +254,13 @@ def main() -> None:
     parser.add_argument("--end", required=True)
     parser.add_argument("--freq", default="monthly")
     parser.add_argument("--label", default="fwd20_excess_industry")
+    parser.add_argument("--model-kind", choices=["auto", "regressor", "ranker"], default="auto")
     parser.add_argument("--min-train-years", type=int, default=4)
     parser.add_argument("--min-test-year", type=int, default=0)
     parser.add_argument("--stress-aware", action="store_true", help="加入市场状态特征和压力样本权重")
     args = parser.parse_args()
-    args.stress_aware = bool(args.stress_aware or "stress" in args.run_id.lower())
+    run_id_lower = args.run_id.lower()
+    args.stress_aware = bool(args.stress_aware or ("stress" in run_id_lower and "nostress" not in run_id_lower))
 
     ensure_tables()
     mark_progress(args, 0.01, "阶段启动")
@@ -661,8 +684,9 @@ def ensure_tables() -> None:
 
 
 def build_factor_panel(args: argparse.Namespace) -> dict[str, Any]:
-    mark_progress(args, 0.05, "生成月频 point-in-time 因子面板")
-    panel = build_monthly_factor_panel(args.start, args.end)
+    freq_label = "周频" if str(args.freq).lower() in {"weekly", "week", "w"} else "月频"
+    mark_progress(args, 0.05, f"生成{freq_label} point-in-time 因子面板")
+    panel = build_monthly_factor_panel(args.start, args.end, freq=args.freq)
     mark_progress(args, 0.70, "写入因子面板 parquet", {"sample_rows": int(len(panel))})
     panel_dir = data_root() / "factor_research" / args.run_id
     panel_dir.mkdir(parents=True, exist_ok=True)
@@ -912,8 +936,21 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     mark_progress(args, 0.12, "准备训练样本", {"feature_count": len(feature_cols), "stress_aware": stress_aware})
     if args.label not in panel.columns:
         raise ValueError(f"label column not found: {args.label}")
+    model_kind = resolve_model_kind(args)
+    eval_return_col = args.label
+    if args.label.endswith("_rank_label"):
+        candidate_return_col = args.label[: -len("_rank_label")]
+        if candidate_return_col in panel.columns:
+            eval_return_col = candidate_return_col
+    elif args.label.endswith("_rank"):
+        candidate_return_col = args.label[: -len("_rank")]
+        if candidate_return_col in panel.columns:
+            eval_return_col = candidate_return_col
+    elif model_kind == "ranker" and "net_fwd20" in panel.columns:
+        eval_return_col = "net_fwd20"
     meta_cols = ["mkt_state"] if "mkt_state" in panel.columns else []
-    data = panel[["trade_date", "ts_code", args.label, *meta_cols, *feature_cols]].replace([np.inf, -np.inf], np.nan).dropna(subset=[args.label]).copy()
+    extra_label_cols = [eval_return_col] if eval_return_col != args.label else []
+    data = panel[["trade_date", "ts_code", args.label, *extra_label_cols, *meta_cols, *feature_cols]].replace([np.inf, -np.inf], np.nan).dropna(subset=[args.label]).copy()
     feature_values = data[feature_cols].apply(pd.to_numeric, errors="coerce")
     date_medians = feature_values.groupby(data["trade_date"], sort=False).transform("median")
     data[feature_cols] = feature_values.fillna(date_medians)
@@ -931,7 +968,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     importances = pd.Series(0.0, index=feature_cols)
     model_dir = data_root() / "factor_research" / args.run_id / "models"
     model_dir.mkdir(parents=True, exist_ok=True)
-    last_model_path = model_dir / "lightgbm_regressor.txt"
+    last_model_path = model_dir / f"lightgbm_{model_kind}.txt"
     fold_total = len(test_years)
     for fold_no, test_year in enumerate(test_years, start=1):
         train = data[data["year"] < test_year]
@@ -939,24 +976,12 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
         if len(train) < 5000 or len(test) < 500:
             continue
         mark_progress(args, 0.20 + 0.55 * (fold_no - 1) / max(1, fold_total), f"训练 OOS {test_year}", {"fold": fold_no, "fold_total": fold_total, "train_rows": int(len(train)), "test_rows": int(len(test))})
-        model = lgb.LGBMRegressor(
-            objective="regression",
-            n_estimators=220,
-            learning_rate=0.035,
-            num_leaves=31,
-            subsample=0.85,
-            colsample_bytree=0.85,
-            min_child_samples=80,
-            reg_alpha=0.05,
-            reg_lambda=0.20,
-            random_state=20260606,
-            n_jobs=_lgbm_threads(),
-            verbose=-1,
-        )
         sample_weight = _stress_sample_weight(train) if stress_aware else None
-        fit_kwargs = {"sample_weight": sample_weight} if sample_weight is not None else {}
-        model.fit(train[feature_cols], train[args.label], **fit_kwargs)
+        model = make_lgbm_model(lgb, model_kind)
+        fit_lgbm_model(model, train, feature_cols, args.label, model_kind, sample_weight=sample_weight)
         pred_cols = ["trade_date", "ts_code", args.label]
+        if eval_return_col not in pred_cols and eval_return_col in test.columns:
+            pred_cols.append(eval_return_col)
         if "mkt_state" in test.columns:
             pred_cols.append("mkt_state")
         pred = test[pred_cols].copy()
@@ -974,20 +999,32 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     pred_df["is_top20"] = (pred_df["pred_rank"] >= 0.8).astype(int)
     prediction_path = data_root() / "factor_research" / args.run_id / "predictions.parquet"
     pred_df.to_parquet(prediction_path, index=False, compression="zstd")
-    metrics = model_oos_metrics(pred_df, args.label)
+    metrics = model_oos_metrics(pred_df, args.label, eval_return_col)
     mark_progress(args, 0.82, "计算 OOS 指标和特征重要度", {"prediction_rows": int(len(pred_df))})
-    state_metrics = model_oos_state_metrics(pred_df, args.label)
+    state_metrics = model_oos_state_metrics(pred_df, args.label, eval_return_col)
     importance_df = (
         importances.sort_values(ascending=False)
         .reset_index()
         .rename(columns={"index": "feature", 0: "importance"})
     )
+    final_model = make_lgbm_model(lgb, model_kind)
+    final_weight = _stress_sample_weight(data) if stress_aware else None
+    fit_lgbm_model(final_model, data, feature_cols, args.label, model_kind, sample_weight=final_weight)
+    final_model.booster_.save_model(str(last_model_path))
     feature_count = len(feature_cols)
     summary = {
         "stage": args.stage,
-        "model_type": "lightgbm_regressor",
+        "model_type": f"lightgbm_{model_kind}",
         "label": args.label,
+        "eval_return_col": eval_return_col,
         "feature_count": feature_count,
+        "model_params": {
+            key: final_model.get_params().get(key)
+            for key in [
+                "n_estimators", "learning_rate", "num_leaves", "subsample",
+                "colsample_bytree", "min_child_samples", "reg_alpha", "reg_lambda",
+            ]
+        },
         "stress_aware": stress_aware,
         "market_state_feature_count": len([col for col in feature_cols if col in MARKET_STATE_FEATURES]),
         "status": "success",
@@ -1011,7 +1048,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
     with write_transaction() as conn:
         conn.execute(
             replace_sql("factor_model_runs", ["run_id", "model_type", "label", "feature_count", "status", "summary_json", "model_path", "created_at", "updated_at"], ["run_id"]),
-            (args.run_id, "lightgbm_regressor", args.label, feature_count, "success", json.dumps(summary, ensure_ascii=False), model_path, now, now),
+            (args.run_id, f"lightgbm_{model_kind}", args.label, feature_count, "success", json.dumps(summary, ensure_ascii=False), model_path, now, now),
         )
         feature_sql = replace_sql("factor_model_features", ["run_id", "feature", "importance", "rank_no", "summary_json", "created_at", "updated_at"], ["run_id", "feature"])
         feature_params = []
@@ -1026,7 +1063,7 @@ def train_lgbm(args: argparse.Namespace) -> dict[str, Any]:
         prediction_rows = pred_df[pred_df["is_top20"] == 1].copy()
         prediction_sql = replace_sql("factor_model_predictions", ["run_id", "trade_date", "ts_code", "pred_score", "realized_return", "pred_rank", "test_year", "is_top20", "created_at", "updated_at"], ["run_id", "trade_date", "ts_code"])
         prediction_params = [
-            (args.run_id, str(row.trade_date), str(row.ts_code), float(row.pred_score), float(getattr(row, args.label)), float(row.pred_rank), int(row.test_year), int(row.is_top20), now, now)
+            (args.run_id, str(row.trade_date), str(row.ts_code), float(row.pred_score), float(getattr(row, eval_return_col)), float(row.pred_rank), int(row.test_year), int(row.is_top20), now, now)
             for row in prediction_rows.itertuples(index=False)
         ]
         if prediction_params:
@@ -1164,7 +1201,7 @@ def latest_inference(args: argparse.Namespace) -> dict[str, Any]:
     if not feature_cols:
         raise RuntimeError("no model features available for latest inference")
     mark_progress(args, 0.18, "生成当前最新截面")
-    panel = build_monthly_factor_panel(args.start, args.end, latest_only=True, require_label=False)
+    panel = build_monthly_factor_panel(args.start, args.end, latest_only=True, require_label=False, freq=args.freq)
     if panel.empty:
         raise RuntimeError("latest factor panel is empty")
     feature_cols = [feature for feature in feature_cols if feature in panel.columns]
@@ -1351,7 +1388,7 @@ def validate_research_run(args: argparse.Namespace) -> dict[str, Any]:
         _research_count_check(None, "factor_model_predictions", "factor_model_predictions", "run_id = ?", (args.run_id,), 100),
         _research_count_check(None, "factor_latest_predictions", "factor_latest_predictions", "run_id = ?", (args.run_id,), 100),
         _research_count_check(None, "factor_model_stress_results", "factor_model_stress_results", "run_id = ?", (args.run_id,), 4),
-        _research_count_check(None, "eval_strategy_admission", "eval_strategy_admission", "run_id = ? AND strategy = 'ml_factor_ranker'", ("eval_" + args.run_id,), 1),
+        _research_admission_check(args.run_id),
     ]
     paths = [
         ("monthly_factor_panel", panel_path_for(args.run_id)),
@@ -1403,6 +1440,38 @@ def _research_count_check(
         return {"name": name, "count": 0, "min_count": min_count, "ok": False, "error": str(exc)}
     count = int(count or 0)
     return {"name": name, "count": count, "min_count": min_count, "ok": count >= min_count}
+
+
+def _research_admission_check(run_id: str) -> dict[str, Any]:
+    name = "eval_strategy_admission"
+    try:
+        with write_transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT run_id, admission, admission_score, annual_return, max_drawdown, sharpe
+                FROM eval_strategy_admission
+                WHERE strategy = 'ml_factor_ranker'
+                  AND (run_id = ? OR payload_json LIKE ?)
+                ORDER BY created_at DESC
+                LIMIT 5
+                """,
+                ("eval_" + run_id, "%" + run_id + "%"),
+            ).fetchall()
+    except Exception as exc:
+        return {"name": name, "count": 0, "min_count": 1, "ok": False, "error": str(exc)}
+    count = len(rows)
+    sample = [
+        {
+            "run_id": str(row[0]),
+            "admission": str(row[1]),
+            "admission_score": _finite_or_none(row[2]),
+            "annual_return": _finite_or_none(row[3]),
+            "max_drawdown": _finite_or_none(row[4]),
+            "sharpe": _finite_or_none(row[5]),
+        }
+        for row in rows
+    ]
+    return {"name": name, "count": count, "min_count": 1, "ok": count >= 1, "sample": sample}
 
 
 def _stress_metric_row(
@@ -1545,6 +1614,19 @@ def _stress_sample_weight(data: pd.DataFrame) -> pd.Series:
     if "mkt_limit_down_ratio5" in data.columns:
         squeeze = pd.to_numeric(data["mkt_limit_down_ratio5"], errors="coerce").fillna(0.0)
         weights = weights + (squeeze >= 0.02).astype(float) * 0.40
+    if "mkt_index_anchor_ret5" in data.columns:
+        index_ret5 = pd.to_numeric(data["mkt_index_anchor_ret5"], errors="coerce").fillna(0.0)
+        weights = weights + (index_ret5 <= -0.05).astype(float) * 0.45
+        weights = weights + (index_ret5 >= 0.10).astype(float) * 0.30
+    if "mkt_index_anchor_rel20" in data.columns:
+        index_rel20 = pd.to_numeric(data["mkt_index_anchor_rel20"], errors="coerce").fillna(0.0)
+        weights = weights + (index_rel20 <= -0.06).astype(float) * 0.35
+    if "mkt_index_anchor_ret20" in data.columns:
+        index_ret20 = pd.to_numeric(data["mkt_index_anchor_ret20"], errors="coerce").fillna(0.0)
+        weights = weights + (index_ret20 >= 0.28).astype(float) * 0.40
+    if "mkt_breadth20" in data.columns:
+        breadth20 = pd.to_numeric(data["mkt_breadth20"], errors="coerce").fillna(0.0)
+        weights = weights + (breadth20 >= 0.60).astype(float) * 0.20
     return weights.clip(upper=3.0)
 
 
@@ -1748,8 +1830,19 @@ def mark_progress(args: argparse.Namespace, progress: float, message: str, extra
     mark_stage(args.run_id, args.stage, "running", summary=payload)
 
 
-def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, require_label: bool = True) -> pd.DataFrame:
+def build_monthly_factor_panel(
+    start: str,
+    end: str,
+    latest_only: bool = False,
+    require_label: bool = True,
+    freq: str = "monthly",
+) -> pd.DataFrame:
     raw = dq.RAW_DIR
+    freq_key = str(freq or "monthly").lower()
+    if freq_key in {"weekly", "week", "w"}:
+        period_expr = "strftime(strptime(trade_date, '%Y%m%d'), '%G%V')"
+    else:
+        period_expr = "substr(trade_date, 1, 6)"
     rebal_sql = (
         f"SELECT max(trade_date) AS trade_date FROM read_parquet('{raw / 'daily' / '*.parquet'}') WHERE trade_date BETWEEN '{start}' AND '{end}'"
         if latest_only
@@ -1757,7 +1850,7 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
       SELECT max(trade_date) AS trade_date
       FROM read_parquet('{raw / "daily" / "*.parquet"}')
       WHERE trade_date BETWEEN '{start}' AND '{end}'
-      GROUP BY substr(trade_date, 1, 6)
+      GROUP BY {period_expr}
     """
     )
     label_filter = "AND p.fwd20 IS NOT NULL" if require_label else ""
@@ -1790,7 +1883,21 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
              stddev_pop(d.pct_chg / 100.0) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) * sqrt(244.0) AS vol20,
              stddev_pop(d.pct_chg / 100.0) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) * sqrt(244.0) AS vol60,
              stddev_pop(CASE WHEN d.pct_chg < 0 THEN d.pct_chg / 100.0 ELSE NULL END) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) * sqrt(244.0) AS downvol20,
-             lead(d.close * COALESCE(a.adj_factor, 1.0), 20) OVER w / NULLIF(d.close * COALESCE(a.adj_factor, 1.0), 0) - 1 AS fwd20
+             lead(d.close * COALESCE(a.adj_factor, 1.0), 5) OVER w / NULLIF(d.close * COALESCE(a.adj_factor, 1.0), 0) - 1 AS fwd5,
+             lead(d.close * COALESCE(a.adj_factor, 1.0), 10) OVER w / NULLIF(d.close * COALESCE(a.adj_factor, 1.0), 0) - 1 AS fwd10,
+             lead(d.close * COALESCE(a.adj_factor, 1.0), 20) OVER w / NULLIF(d.close * COALESCE(a.adj_factor, 1.0), 0) - 1 AS fwd20,
+             min(d.close * COALESCE(a.adj_factor, 1.0)) OVER (
+               PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 1 FOLLOWING AND 20 FOLLOWING
+             ) / NULLIF(d.close * COALESCE(a.adj_factor, 1.0), 0) - 1 AS fwd20_worst,
+             sum(CASE WHEN d.pct_chg <= -9.2 THEN 1 ELSE 0 END) OVER (
+               PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 1 FOLLOWING AND 20 FOLLOWING
+             ) AS fwd20_limit_down_count,
+             sum(CASE WHEN (d.open - d.pre_close) / NULLIF(d.pre_close, 0) <= -0.06 THEN 1 ELSE 0 END) OVER (
+               PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 1 FOLLOWING AND 20 FOLLOWING
+             ) AS fwd20_gap_down_count,
+             min(d.pct_chg / 100.0) OVER (
+               PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 1 FOLLOWING AND 20 FOLLOWING
+             ) AS fwd20_worst_daily_ret
       FROM read_parquet('{raw / "daily" / "*.parquet"}') d
       LEFT JOIN read_parquet('{raw / "daily_basic" / "*.parquet"}') dbp
         ON d.ts_code = dbp.ts_code AND d.trade_date = dbp.trade_date
@@ -1806,14 +1913,20 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
              db.total_mv, db.circ_mv, db.float_share, db.free_share, db.turnover_rate, db.turnover_rate_f, db.volume_ratio,
              p.adj_close, p.amount, p.daily_ret, p.gap_ret, p.ma20, p.ma60, p.high20, p.high60, p.amount_ma20, p.turnover_ma20,
              p.up_days20, p.gap_abs20, p.gap_down20, p.ret_min20, p.ret_min60,
-             p.ret5, p.ret10, p.ret20, p.ret60, p.ret120, p.ret240, p.vol20, p.vol60, p.downvol20, p.fwd20
+             p.ret5, p.ret10, p.ret20, p.ret60, p.ret120, p.ret240, p.vol20, p.vol60, p.downvol20,
+             p.fwd5, p.fwd10, p.fwd20, p.fwd20_worst, p.fwd20_limit_down_count, p.fwd20_gap_down_count, p.fwd20_worst_daily_ret
       FROM rebal r
       JOIN read_parquet('{raw / "daily_basic" / "*.parquet"}') db ON db.trade_date = r.trade_date
       JOIN price p ON p.trade_date = r.trade_date AND p.ts_code = db.ts_code
       LEFT JOIN read_parquet('{raw / "stock_basic" / "data.parquet"}') sb ON sb.ts_code = db.ts_code
       WHERE db.circ_mv IS NOT NULL AND db.circ_mv > 100000
+        AND db.circ_mv >= {ML_SMALL_CAP_MIN_CIRC_MV / 10000:.0f}
+        AND db.circ_mv <= {ML_SMALL_CAP_MAX_CIRC_MV / 10000:.0f}
+        AND db.total_mv IS NOT NULL
+        AND db.total_mv <= {ML_SMALL_CAP_MAX_TOTAL_MV / 10000:.0f}
         AND p.amount IS NOT NULL AND p.amount > 1000
         {label_filter}
+        AND {restricted_ts_code_exclude_sql('db.ts_code')}
         AND COALESCE(sb.name, '') NOT LIKE '%ST%'
         AND {restricted_exclude_sql('sb')}
     ), fin AS (
@@ -1897,6 +2010,35 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
     dist_high20 = panel["adj_close"] / panel["high20"].replace(0, np.nan) - 1
     dist_high60 = panel["adj_close"] / panel["high60"].replace(0, np.nan) - 1
     amount_chg20 = panel["amount"] / panel["amount_ma20"].replace(0, np.nan) - 1
+    turnover_chg20 = panel["turnover_rate"] / panel["turnover_ma20"].replace(0, np.nan) - 1
+    mkt_anchor_ret5 = pd.to_numeric(panel.get("mkt_index_anchor_ret5", 0), errors="coerce").fillna(0.0)
+    mkt_anchor_ret20 = pd.to_numeric(panel.get("mkt_index_anchor_ret20", 0), errors="coerce").fillna(0.0)
+    mkt_anchor_rel20 = pd.to_numeric(panel.get("mkt_index_anchor_rel20", 0), errors="coerce").fillna(0.0)
+    mkt_breadth20 = pd.to_numeric(panel.get("mkt_breadth20", 0.5), errors="coerce").fillna(0.5)
+    mkt_limit_down5 = pd.to_numeric(panel.get("mkt_limit_down_ratio5", 0), errors="coerce").fillna(0.0)
+    rel_strength5 = pd.to_numeric(panel["ret5"], errors="coerce") - mkt_anchor_ret5
+    rel_strength20 = pd.to_numeric(panel["ret20"], errors="coerce") - mkt_anchor_ret20
+    vol20_safe = pd.to_numeric(panel["vol20"], errors="coerce").replace(0, np.nan)
+    ret20_over_vol = pd.to_numeric(panel["ret20"], errors="coerce") / vol20_safe
+    liquidity_quality = amount_chg20 - pd.to_numeric(panel["vol20"], errors="coerce").clip(lower=0.0) * 0.35
+    crowding_heat = (
+        pd.to_numeric(panel["ret20"], errors="coerce").clip(lower=0.0)
+        + pd.to_numeric(panel["ret5"], errors="coerce").clip(lower=0.0) * 0.70
+        + amount_chg20.clip(lower=0.0) * 0.18
+        + pd.to_numeric(turnover_chg20, errors="coerce").clip(lower=0.0) * 0.12
+        + pd.to_numeric(panel["vol20"], errors="coerce").clip(lower=0.0) * 0.20
+    )
+    breakout_exhaustion = (
+        (pd.to_numeric(panel["ret5"], errors="coerce").clip(lower=0.0) * 0.45)
+        + (pd.to_numeric(panel["ret20"], errors="coerce").clip(lower=0.0) * 0.35)
+        + (1.0 + dist_high20).clip(lower=0.0) * 0.12
+        + amount_chg20.clip(lower=0.0) * 0.08
+    )
+    ecology_pressure = (
+        mkt_limit_down5.clip(lower=0.0) * 8.0
+        + (0.45 - mkt_breadth20).clip(lower=0.0)
+        + (-mkt_anchor_rel20).clip(lower=0.0)
+    ).clip(lower=0.0)
     derived_cols = {
         "ep": np.where(panel["pe_ttm"] > 0, 1.0 / panel["pe_ttm"], np.nan),
         "bp": np.where(panel["pb"] > 0, 1.0 / panel["pb"], np.nan),
@@ -1912,7 +2054,7 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
         "drawdown20": dist_high20,
         "drawdown60": dist_high60,
         "amihud20": panel["daily_ret"].abs() / panel["amount_ma20"].replace(0, np.nan),
-        "turnover_chg20": panel["turnover_rate"] / panel["turnover_ma20"].replace(0, np.nan) - 1,
+        "turnover_chg20": turnover_chg20,
         "amount_chg20": amount_chg20,
         "amount_spike20": amount_chg20,
         "ret20_60": panel["ret20"] - panel["ret60"],
@@ -1920,6 +2062,31 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
         "ma20_over_ma60": panel["ma20"] / panel["ma60"].replace(0, np.nan) - 1,
         "trend_strength60": panel["ret60"] / panel["vol60"].replace(0, np.nan),
         "ret20_over_vol20": panel["ret20"] / panel["vol20"].replace(0, np.nan),
+        "smallcap_rel_strength5": rel_strength5,
+        "smallcap_rel_strength20": rel_strength20,
+        "smallcap_attack_score": (
+            rel_strength20 * 0.45
+            + rel_strength5 * 0.20
+            + ret20_over_vol.fillna(0.0) * 0.12
+            + liquidity_quality.fillna(0.0) * 0.10
+            + (mkt_breadth20 - 0.50) * 0.08
+            - ecology_pressure * 0.10
+        ),
+        "smallcap_repair_score": (
+            rel_strength5 * 0.35
+            + (-dist_high20).clip(lower=0.0) * 0.18
+            + liquidity_quality.fillna(0.0) * 0.12
+            - ecology_pressure * 0.12
+        ),
+        "smallcap_style_resilience": (
+            rel_strength20 * 0.55
+            + rel_strength5 * 0.20
+            + (-mkt_anchor_rel20).clip(lower=0.0) * 0.10
+            - pd.to_numeric(panel["vol20"], errors="coerce").clip(lower=0.0) * 0.08
+        ),
+        "smallcap_crowding_heat": crowding_heat,
+        "smallcap_liquidity_quality": liquidity_quality,
+        "smallcap_breakout_exhaustion": breakout_exhaustion,
         "listed_days": (
             pd.to_datetime(panel["trade_date"], errors="coerce")
             - pd.to_datetime(panel["list_date"], errors="coerce")
@@ -1957,12 +2124,188 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
         z_cols[out_col] = (panel[source] - mean) / std
     fwd20_market = panel.groupby("trade_date")["fwd20"].transform("mean")
     fwd20_industry = panel.groupby(["trade_date", "industry"])["fwd20"].transform("mean")
+    fwd20_excess_industry = panel["fwd20"] - fwd20_industry.fillna(fwd20_market)
+    quality_rank = panel.groupby("trade_date")["small_cap_quality_score"].rank(pct=True)
+    defensive_rank = panel.groupby("trade_date")["defensive_quality_score"].rank(pct=True)
+    risk_rank = panel.groupby("trade_date")["risk_penalty_score"].rank(pct=True)
+    future_downside = (-pd.to_numeric(panel.get("fwd20_worst"), errors="coerce")).clip(lower=0.0)
+    stress_state = (
+        pd.to_numeric(panel.get("mkt_state_weak", 0), errors="coerce").fillna(0.0)
+        + pd.to_numeric(panel.get("mkt_state_crash", 0), errors="coerce").fillna(0.0)
+        + pd.to_numeric(panel.get("mkt_state_liquidity_squeeze", 0), errors="coerce").fillna(0.0)
+    ).clip(0.0, 1.0)
+    downside_penalty = (future_downside - 0.04).clip(lower=0.0) * (0.35 + 0.25 * stress_state)
+    quality_bonus = (
+        (quality_rank.fillna(0.5) - 0.5) * 0.012
+        + (defensive_rank.fillna(0.5) - 0.5) * 0.010
+        - (risk_rank.fillna(0.5) - 0.5) * 0.012
+    )
+    survival_downside_penalty = (future_downside - 0.03).clip(lower=0.0) * (0.55 + 0.35 * stress_state)
+    survival_quality_bonus = (
+        (quality_rank.fillna(0.5) - 0.5) * 0.018
+        + (defensive_rank.fillna(0.5) - 0.5) * 0.014
+        - (risk_rank.fillna(0.5) - 0.5) * 0.018
+    )
+    alpha_guard_downside_penalty = (future_downside - 0.045).clip(lower=0.0) * (0.30 + 0.20 * stress_state)
+    alpha_guard_quality_bonus = (
+        (quality_rank.fillna(0.5) - 0.5) * 0.012
+        + (defensive_rank.fillna(0.5) - 0.5) * 0.008
+        - (risk_rank.fillna(0.5) - 0.5) * 0.010
+    )
+    index_overheat = (
+        (pd.to_numeric(panel.get("mkt_index_anchor_ret20", 0), errors="coerce").fillna(0.0) >= 0.28).astype(float)
+        + (pd.to_numeric(panel.get("mkt_index_anchor_ret5", 0), errors="coerce").fillna(0.0) >= 0.10).astype(float)
+        + (pd.to_numeric(panel.get("mkt_breadth20", 0), errors="coerce").fillna(0.0) >= 0.60).astype(float)
+    ).clip(0.0, 1.0)
+    anchor_risk = (
+        stress_state
+        + index_overheat * 0.80
+        + (pd.to_numeric(panel.get("mkt_index_anchor_drawdown20", 0), errors="coerce").fillna(0.0) <= -0.08).astype(float) * 0.80
+        + (pd.to_numeric(panel.get("mkt_index_anchor_rel20", 0), errors="coerce").fillna(0.0) <= -0.07).astype(float) * 0.55
+    ).clip(0.0, 1.0)
+    anchor_downside_penalty = (future_downside - 0.035).clip(lower=0.0) * (0.45 + 0.45 * anchor_risk)
+    anchor_quality_bonus = (
+        (quality_rank.fillna(0.5) - 0.5) * 0.014
+        + (defensive_rank.fillna(0.5) - 0.5) * 0.012
+        - (risk_rank.fillna(0.5) - 0.5) * 0.016
+    )
+    future_limit_down_count = pd.to_numeric(panel.get("fwd20_limit_down_count"), errors="coerce").fillna(0.0)
+    future_gap_down_count = pd.to_numeric(panel.get("fwd20_gap_down_count"), errors="coerce").fillna(0.0)
+    future_worst_daily_ret = pd.to_numeric(panel.get("fwd20_worst_daily_ret"), errors="coerce").fillna(0.0)
+    raw_amount = pd.to_numeric(panel.get("amount"), errors="coerce").fillna(0.0)
+    amount_yuan = (raw_amount * 1000.0).clip(lower=1.0)
+    round_trip_cost = 0.00025 * 2.0 + 0.0005 + 0.002 * 2.0
+    impact_cost = (20_000_000.0 / amount_yuan * 0.002).clip(lower=0.0, upper=0.020)
+
+    net_label_cols: dict[str, Any] = {"net_fwd20_impact_cost": impact_cost}
+    for horizon in (5, 10, 20):
+        raw_col = f"fwd{horizon}"
+        if raw_col not in panel.columns:
+            continue
+        net_col = f"net_fwd{horizon}"
+        rank_col = f"{net_col}_rank"
+        label_col = f"{net_col}_rank_label"
+        net_return = pd.to_numeric(panel[raw_col], errors="coerce") - round_trip_cost - impact_cost
+        net_rank = net_return.groupby(panel["trade_date"]).rank(pct=True)
+        net_label = pd.Series(2, index=panel.index, dtype="int64")
+        net_label = net_label.mask(net_rank <= 0.05, 0)
+        net_label = net_label.mask((net_rank > 0.05) & (net_rank <= 0.20), 1)
+        net_label = net_label.mask((net_rank >= 0.80) & (net_rank < 0.95), 3)
+        net_label = net_label.mask(net_rank >= 0.95, 4)
+        net_label_cols[net_col] = net_return
+        net_label_cols[rank_col] = net_rank
+        net_label_cols[label_col] = net_label
+    tradeable_risk = (
+        (future_downside - 0.025).clip(lower=0.0) * (0.62 + 0.45 * anchor_risk)
+        + future_limit_down_count.clip(lower=0.0) * (0.020 + 0.010 * anchor_risk)
+        + future_gap_down_count.clip(lower=0.0) * 0.006
+        + (-future_worst_daily_ret - 0.07).clip(lower=0.0) * 0.35
+    )
+    tradeable_quality_bonus = (
+        (quality_rank.fillna(0.5) - 0.5) * 0.018
+        + (defensive_rank.fillna(0.5) - 0.5) * 0.016
+        - (risk_rank.fillna(0.5) - 0.5) * 0.022
+    )
+    attack_alpha = (
+        fwd20_excess_industry * 0.40
+        + panel["fwd20"] * 0.60
+        + (quality_rank.fillna(0.5) - 0.5) * 0.010
+        - (risk_rank.fillna(0.5) - 0.5) * 0.010
+    )
+    defensive_alpha = (
+        fwd20_excess_industry * 0.20
+        + panel["fwd20"] * 0.20
+        - tradeable_risk
+        - anchor_risk * 0.010
+        + tradeable_quality_bonus
+    )
+    normal_state = (1.0 - stress_state).clip(0.0, 1.0)
+    normal_attack_alpha = (
+        fwd20_excess_industry * (0.35 + 0.20 * normal_state)
+        + panel["fwd20"] * (0.50 + 0.20 * normal_state)
+        + (quality_rank.fillna(0.5) - 0.5) * 0.020
+        + (defensive_rank.fillna(0.5) - 0.5) * 0.014
+        - (risk_rank.fillna(0.5) - 0.5) * 0.020
+        - tradeable_risk * (0.25 + 0.75 * stress_state)
+        - anchor_risk * 0.020
+    )
+    attack_weight = (1.0 - anchor_risk).clip(0.0, 1.0)
+    net_fwd20_for_label = net_label_cols.get("net_fwd20", pd.to_numeric(panel["fwd20"], errors="coerce") - round_trip_cost - impact_cost)
+    cost_drag = round_trip_cost + impact_cost
+    excess_net_guard = (
+        fwd20_excess_industry * 0.78
+        + pd.to_numeric(net_fwd20_for_label, errors="coerce") * 0.22
+        - (future_downside - 0.06).clip(lower=0.0) * (0.10 + 0.12 * stress_state)
+        - cost_drag * 0.35
+    )
+    excess_cost_guard = (
+        fwd20_excess_industry
+        - (future_downside - 0.08).clip(lower=0.0) * (0.08 + 0.10 * stress_state)
+        - cost_drag * 0.60
+        + (quality_rank.fillna(0.5) - 0.5) * 0.006
+        - (risk_rank.fillna(0.5) - 0.5) * 0.008
+    )
+
+    def _cross_section_rank_labels(series: pd.Series) -> tuple[pd.Series, pd.Series]:
+        rank = pd.to_numeric(series, errors="coerce").groupby(panel["trade_date"]).rank(pct=True)
+        label = pd.Series(2, index=panel.index, dtype="int64")
+        label = label.mask(rank <= 0.05, 0)
+        label = label.mask((rank > 0.05) & (rank <= 0.20), 1)
+        label = label.mask((rank >= 0.80) & (rank < 0.95), 3)
+        label = label.mask(rank >= 0.95, 4)
+        return rank, label
+
+    excess_industry_rank, excess_industry_rank_label = _cross_section_rank_labels(fwd20_excess_industry)
+    excess_net_guard_rank, excess_net_guard_rank_label = _cross_section_rank_labels(excess_net_guard)
+    excess_cost_guard_rank, excess_cost_guard_rank_label = _cross_section_rank_labels(excess_cost_guard)
     label_cols = {
         **z_cols,
         "fwd20_market": fwd20_market,
         "fwd20_industry": fwd20_industry,
         "fwd20_excess_market": panel["fwd20"] - fwd20_market,
-        "fwd20_excess_industry": panel["fwd20"] - fwd20_industry.fillna(fwd20_market),
+        "fwd20_excess_industry": fwd20_excess_industry,
+        "fwd20_excess_industry_rank": excess_industry_rank,
+        "fwd20_excess_industry_rank_label": excess_industry_rank_label,
+        **net_label_cols,
+        "fwd20_excess_net_guard": excess_net_guard,
+        "fwd20_excess_net_guard_rank": excess_net_guard_rank,
+        "fwd20_excess_net_guard_rank_label": excess_net_guard_rank_label,
+        "fwd20_excess_cost_guard": excess_cost_guard,
+        "fwd20_excess_cost_guard_rank": excess_cost_guard_rank,
+        "fwd20_excess_cost_guard_rank_label": excess_cost_guard_rank_label,
+        "fwd20_downside_penalty": downside_penalty,
+        "fwd20_quality_defensive": fwd20_excess_industry - downside_penalty + quality_bonus,
+        "fwd20_smallcap_quality_survival": (
+            fwd20_excess_industry * 0.70
+            + panel["fwd20"] * 0.30
+            - survival_downside_penalty
+            + survival_quality_bonus
+        ),
+        "fwd20_smallcap_alpha_guard": (
+            fwd20_excess_industry * 0.55
+            + panel["fwd20"] * 0.45
+            - alpha_guard_downside_penalty
+            + alpha_guard_quality_bonus
+        ),
+        "fwd20_smallcap_anchor_alpha": (
+            fwd20_excess_industry * 0.50
+            + panel["fwd20"] * 0.50
+            - anchor_downside_penalty
+            - anchor_risk * 0.010
+            + anchor_quality_bonus
+        ),
+        "fwd20_smallcap_tradeable_alpha": (
+            fwd20_excess_industry * 0.45
+            + panel["fwd20"] * 0.55
+            - tradeable_risk
+            - anchor_risk * 0.012
+            + tradeable_quality_bonus
+        ),
+        "fwd20_smallcap_regime_alpha": (
+            attack_alpha * attack_weight
+            + defensive_alpha * (1.0 - attack_weight)
+        ),
+        "fwd20_smallcap_normal_attack": normal_attack_alpha,
     }
     panel = pd.concat([panel, pd.DataFrame(label_cols, index=panel.index)], axis=1)
     rank_cols = {}
@@ -1974,7 +2317,19 @@ def build_monthly_factor_panel(start: str, end: str, latest_only: bool = False, 
         panel = pd.concat([panel, pd.DataFrame(rank_cols, index=panel.index)], axis=1)
     panel = add_neutralized_factors(panel)
     keep = [
-        "trade_date", "ts_code", "name", "industry", "fwd20", "fwd20_excess_market", "fwd20_excess_industry",
+        "trade_date", "ts_code", "name", "industry", "fwd5", "fwd10", "fwd20", "fwd20_worst",
+        "fwd20_limit_down_count", "fwd20_gap_down_count", "fwd20_worst_daily_ret",
+        "fwd20_excess_market", "fwd20_excess_industry", "fwd20_downside_penalty",
+        "fwd20_excess_industry_rank", "fwd20_excess_industry_rank_label",
+        "fwd20_excess_net_guard", "fwd20_excess_cost_guard",
+        "fwd20_excess_net_guard_rank", "fwd20_excess_net_guard_rank_label",
+        "fwd20_excess_cost_guard_rank", "fwd20_excess_cost_guard_rank_label",
+        "net_fwd5", "net_fwd5_rank", "net_fwd5_rank_label",
+        "net_fwd10", "net_fwd10_rank", "net_fwd10_rank_label",
+        "net_fwd20", "net_fwd20_rank", "net_fwd20_rank_label", "net_fwd20_impact_cost",
+        "fwd20_quality_defensive", "fwd20_smallcap_quality_survival", "fwd20_smallcap_alpha_guard",
+        "fwd20_smallcap_anchor_alpha", "fwd20_smallcap_tradeable_alpha", "fwd20_smallcap_regime_alpha",
+        "fwd20_smallcap_normal_attack",
         "mkt_state", *MARKET_STATE_FEATURES,
         *FACTOR_DEFS.keys(),
         *[f"{factor}_rank" for factor in FACTOR_DEFS],
@@ -2020,6 +2375,10 @@ def load_market_state_features() -> pd.DataFrame:
         "limit_down_ratio5": "mkt_limit_down_ratio5",
         "amount_chg20": "mkt_amount_chg20",
         "small_large_rel20": "mkt_small_large_rel20",
+        "index_anchor_ret5": "mkt_index_anchor_ret5",
+        "index_anchor_ret20": "mkt_index_anchor_ret20",
+        "index_anchor_drawdown20": "mkt_index_anchor_drawdown20",
+        "index_anchor_rel20": "mkt_index_anchor_rel20",
         "drawdown20": "mkt_drawdown20",
         "drawdown60": "mkt_drawdown60",
         "drawdown120": "mkt_drawdown120",
@@ -2160,38 +2519,61 @@ def factor_status(stats: dict[str, Any]) -> str:
     return "reject"
 
 
-def model_oos_metrics(pred_df: pd.DataFrame, label: str) -> dict[str, float]:
+def _model_oos_metrics(pred_df: pd.DataFrame, label: str, return_label: str) -> dict[str, float]:
     rank_ics = []
     top_returns = []
+    top10_returns = []
+    top50_returns = []
     bottom_returns = []
+    monotonic_scores = []
     for _, group in pred_df.groupby("trade_date", sort=True):
-        data = group[["pred_score", label]].replace([np.inf, -np.inf], np.nan).dropna()
+        cols = ["pred_score", label]
+        if return_label not in cols:
+            cols.append(return_label)
+        data = group[cols].replace([np.inf, -np.inf], np.nan).dropna()
         if len(data) < 80:
             continue
-        rank_ic = data["pred_score"].corr(data[label], method="spearman")
+        rank_ic = data["pred_score"].corr(data[return_label], method="spearman")
         if math.isfinite(rank_ic):
             rank_ics.append(float(rank_ic))
         ranks = data["pred_score"].rank(pct=True)
-        top_returns.append(float(data.loc[ranks >= 0.8, label].mean()))
-        bottom_returns.append(float(data.loc[ranks <= 0.2, label].mean()))
+        top_returns.append(float(data.loc[ranks >= 0.8, return_label].mean()))
+        top10_returns.append(float(data.loc[ranks >= 0.9, return_label].mean()))
+        top50_n = min(50, max(1, int(len(data) * 0.20)))
+        top50_returns.append(float(data.nlargest(top50_n, "pred_score")[return_label].mean()))
+        bottom_returns.append(float(data.loc[ranks <= 0.2, return_label].mean()))
+        buckets = pd.qcut(ranks, 5, labels=False, duplicates="drop")
+        bucket_ret = data.groupby(buckets, observed=True)[return_label].mean()
+        if len(bucket_ret) >= 4:
+            monotonic_scores.append(float((bucket_ret.diff().dropna() >= 0).mean()))
     rank_series = pd.Series(rank_ics, dtype="float64")
     top = pd.Series(top_returns, dtype="float64")
+    top10 = pd.Series(top10_returns, dtype="float64")
+    top50 = pd.Series(top50_returns, dtype="float64")
     bottom = pd.Series(bottom_returns, dtype="float64")
+    monotonic = pd.Series(monotonic_scores, dtype="float64")
     return {
         "oos_rank_ic_mean": float(rank_series.mean()) if not rank_series.empty else 0.0,
         "oos_ic_win_rate": float((rank_series > 0).mean()) if not rank_series.empty else 0.0,
         "top20_mean_return": float(top.mean()) if not top.empty else 0.0,
+        "top10_mean_return": float(top10.mean()) if not top10.empty else 0.0,
+        "top50_mean_return": float(top50.mean()) if not top50.empty else 0.0,
         "bottom20_mean_return": float(bottom.mean()) if not bottom.empty else 0.0,
         "top_bottom_spread": float((top - bottom).mean()) if not top.empty and not bottom.empty else 0.0,
+        "monotonic_score": float(monotonic.mean()) if not monotonic.empty else 0.0,
     }
 
 
-def model_oos_state_metrics(pred_df: pd.DataFrame, label: str) -> dict[str, dict[str, float]]:
+def model_oos_metrics(pred_df: pd.DataFrame, label: str, return_label: str | None = None) -> dict[str, float]:
+    return _model_oos_metrics(pred_df, label, return_label or label)
+
+
+def model_oos_state_metrics(pred_df: pd.DataFrame, label: str, return_label: str | None = None) -> dict[str, dict[str, float]]:
     if "mkt_state" not in pred_df.columns:
         return {}
     out: dict[str, dict[str, float]] = {}
     for state, state_df in pred_df.groupby("mkt_state", dropna=True):
-        metrics = model_oos_metrics(state_df, label)
+        metrics = model_oos_metrics(state_df, label, return_label or label)
         out[str(state)] = {
             **metrics,
             "rows": int(len(state_df)),
@@ -2262,12 +2644,77 @@ def _env_int(name: str, default: int, floor: int, cap: int) -> int:
     return max(floor, min(cap, value))
 
 
+def _env_float(name: str, default: float, floor: float, cap: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(floor, min(cap, value))
+
+
 def _factor_research_workers() -> int:
     return _env_int("FACTOR_RESEARCH_MAX_WORKERS", min(8, os.cpu_count() or 4), 1, 16)
 
 
 def _lgbm_threads() -> int:
     return _env_int("FACTOR_RESEARCH_LGBM_THREADS", 4, 1, 8)
+
+
+def resolve_model_kind(args: argparse.Namespace) -> str:
+    requested = str(getattr(args, "model_kind", "auto") or "auto").lower()
+    if requested in {"regressor", "ranker"}:
+        return requested
+    label = str(getattr(args, "label", "") or "").lower()
+    run_id = str(getattr(args, "run_id", "") or "").lower()
+    if "rank_label" in label or "ranker" in run_id:
+        return "ranker"
+    return "regressor"
+
+
+def make_lgbm_model(lgb: Any, model_kind: str) -> Any:
+    common = {
+        "n_estimators": _env_int("FACTOR_RESEARCH_LGBM_ESTIMATORS", 260 if model_kind == "ranker" else 220, 50, 1200),
+        "learning_rate": _env_float("FACTOR_RESEARCH_LGBM_LR", 0.035, 0.005, 0.20),
+        "num_leaves": _env_int("FACTOR_RESEARCH_LGBM_LEAVES", 31, 7, 127),
+        "subsample": _env_float("FACTOR_RESEARCH_LGBM_SUBSAMPLE", 0.85, 0.50, 1.00),
+        "colsample_bytree": _env_float("FACTOR_RESEARCH_LGBM_COLSAMPLE", 0.85, 0.50, 1.00),
+        "min_child_samples": _env_int("FACTOR_RESEARCH_LGBM_MIN_CHILD", 80, 20, 500),
+        "reg_alpha": _env_float("FACTOR_RESEARCH_LGBM_REG_ALPHA", 0.05, 0.0, 10.0),
+        "reg_lambda": _env_float("FACTOR_RESEARCH_LGBM_REG_LAMBDA", 0.20, 0.0, 20.0),
+        "random_state": 20260606,
+        "n_jobs": _lgbm_threads(),
+        "verbose": -1,
+    }
+    if model_kind == "ranker":
+        return lgb.LGBMRanker(
+            objective="lambdarank",
+            metric="ndcg",
+            label_gain=[0, 1, 3, 7, 12],
+            **common,
+        )
+    return lgb.LGBMRegressor(objective="regression", **common)
+
+
+def fit_lgbm_model(
+    model: Any,
+    frame: pd.DataFrame,
+    feature_cols: list[str],
+    label_col: str,
+    model_kind: str,
+    *,
+    sample_weight: pd.Series | np.ndarray | None = None,
+) -> None:
+    if model_kind != "ranker":
+        fit_kwargs = {"sample_weight": sample_weight} if sample_weight is not None else {}
+        model.fit(frame[feature_cols], frame[label_col], **fit_kwargs)
+        return
+    ordered = frame.sort_values(["trade_date", "ts_code"]).copy()
+    group = ordered.groupby("trade_date", sort=False).size().astype(int).tolist()
+    y = pd.to_numeric(ordered[label_col], errors="coerce").fillna(2).round().clip(0, 4).astype(int)
+    weight = None
+    if sample_weight is not None:
+        weight = pd.Series(sample_weight, index=frame.index).reindex(ordered.index).astype(float).to_numpy()
+    model.fit(ordered[feature_cols], y, group=group, sample_weight=weight)
 
 
 def data_root() -> Path:

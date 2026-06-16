@@ -147,6 +147,8 @@ def evaluate(
             row.update(_effective_period_metrics(result))
             row.update(_weight_exposure(result.weights))
             row.update(_return_stability(result.returns))
+            if name == "ml_factor_ranker":
+                row.update(_strategy_stress_context(result.returns, start, end))
             returns_by_name[name] = result.returns
             weights_by_name[name] = result.weights
         except Exception as exc:
@@ -382,8 +384,39 @@ def _admission_decision(row: dict[str, Any], *, is_baseline: bool) -> dict[str, 
         if bool(row.get("stress_crash_state_failed")):
             caution_reasons.append("急跌状态收益显著失效")
 
+    regime_sleeve_pass = False
+    if str(row.get("strategy") or "") == "ml_factor_ranker" and row.get("stress_report_available"):
+        states = row.get("stress_state_metrics") if isinstance(row.get("stress_state_metrics"), dict) else {}
+        normal = states.get("normal") if isinstance(states.get("normal"), dict) else {}
+        normal_annual = float(normal.get("annual_return") or 0.0)
+        normal_drawdown = float(normal.get("max_drawdown") or 0.0)
+        no_stress_fail = (
+            int(row.get("stress_bad_event_count") or 0) == 0
+            and not bool(row.get("stress_crash_state_failed"))
+            and not bool(row.get("stress_weak_drawdown_failed"))
+        )
+        regime_sleeve_pass = (
+            no_stress_fail
+            and normal_annual >= 0.075
+            and normal_drawdown >= -0.08
+            and annual_return >= 0.020
+            and max_drawdown >= -0.12
+            and sharpe >= 0.60
+        )
+        if regime_sleeve_pass:
+            sleeve_bonus = (
+                _linear_score(annual_return, 0.020, 0.060) * 0.05
+                + _linear_score(sharpe, 0.60, 1.20) * 0.05
+                + _inverse_linear_score(abs(max_drawdown), 0.05, 0.12) * 0.04
+                + _linear_score(normal_annual, 0.075, 0.16) * 0.06
+            )
+            score = max(score, min(74.0, 60.0 + sleeve_bonus))
+            caution_reasons.append("常态小盘alpha通过，按市场状态限制启用")
+
     if annual_return <= 0 and sharpe < 0:
         admission = "暂不启用"
+    elif regime_sleeve_pass:
+        admission = "限制启用"
     elif caution_reasons and score >= 55 and annual_return >= 0.06 and sharpe >= 0.25:
         admission = "限制启用"
     elif caution_reasons and score >= 38 and annual_return > 0:
@@ -435,6 +468,122 @@ def _score_label(key: str) -> str:
         "stress_score": "压力分段",
     }
     return labels.get(key, key)
+
+
+def _strategy_stress_context(returns: pd.Series, start: str = "", end: str = "") -> dict[str, Any]:
+    if returns.empty:
+        return {}
+    series = returns.copy().dropna().astype(float)
+    series.index = series.index.astype(str)
+    if start:
+        series = series.loc[series.index >= str(start)]
+    if end:
+        series = series.loc[series.index <= str(end)]
+    if series.empty:
+        return {}
+
+    bad_events: list[str] = []
+    for _, label, event_start, event_end in _event_periods():
+        segment = series.loc[(series.index >= event_start) & (series.index <= event_end)]
+        if segment.empty:
+            continue
+        metrics = _stress_return_metrics(segment)
+        if float(metrics["annual_return"]) <= -0.10 or float(metrics["max_drawdown"]) <= -0.15:
+            bad_events.append(label)
+
+    state_metrics = _state_return_metrics(series)
+    crash = state_metrics.get("crash", {})
+    weak = state_metrics.get("weak", {})
+    crash_failed = bool(crash) and (
+        float(crash.get("total_return") or 0.0) <= -0.10
+        or float(crash.get("max_drawdown") or 0.0) <= -0.12
+        or float(crash.get("annual_return") or 0.0) <= -0.35
+    )
+    weak_drawdown_failed = bool(weak) and float(weak.get("max_drawdown") or 0.0) <= -0.25
+    penalty = min(20.0, len(bad_events) * 4.0 + (5.0 if crash_failed else 0.0) + (3.0 if weak_drawdown_failed else 0.0))
+    reason = ""
+    if bad_events:
+        reason = "压力段失效：" + "、".join(bad_events[:4])
+        if len(bad_events) > 4:
+            reason += f"等{len(bad_events)}段"
+    return {
+        "stress_report_available": True,
+        "stress_source": "strategy_backtest",
+        "stress_bad_event_count": len(bad_events),
+        "stress_crash_state_failed": crash_failed,
+        "stress_weak_drawdown_failed": weak_drawdown_failed,
+        "stress_penalty": penalty,
+        "stress_reason": reason,
+        "stress_state_metrics": state_metrics,
+    }
+
+
+def _stress_return_metrics(returns: pd.Series) -> dict[str, float | int]:
+    returns = returns.dropna().astype(float)
+    if returns.empty:
+        return {"annual_return": 0.0, "total_return": 0.0, "max_drawdown": 0.0, "sharpe": 0.0, "win_rate": 0.0, "n_days": 0}
+    equity = (1.0 + returns).cumprod()
+    total = float(equity.iloc[-1] - 1.0)
+    n_days = int(len(returns))
+    annual = float((1.0 + total) ** (244.0 / max(1, n_days)) - 1.0) if total > -0.999 else -1.0
+    drawdown = equity / equity.cummax() - 1.0
+    vol = float(returns.std(ddof=0) * (244.0 ** 0.5))
+    daily = float(returns.mean())
+    sharpe = float(daily * 244.0 / vol) if vol > 0 else 0.0
+    return {
+        "annual_return": annual,
+        "total_return": total,
+        "max_drawdown": float(drawdown.min()),
+        "sharpe": sharpe,
+        "win_rate": float((returns > 0).mean()),
+        "n_days": n_days,
+    }
+
+
+def _state_return_metrics(returns: pd.Series) -> dict[str, dict[str, float | int]]:
+    if returns.empty:
+        return {}
+    dates = sorted(returns.index.astype(str).tolist())
+    try:
+        with write_transaction(_resolve_db_path(None)) as conn:
+            if not table_exists(conn, "market_risk_state_daily"):
+                return {}
+            rows = conn.execute(
+                """
+                SELECT trade_date, state
+                FROM market_risk_state_daily
+                WHERE trade_date BETWEEN ? AND ?
+                ORDER BY trade_date
+                """,
+                (min(dates), max(dates)),
+            ).fetchall()
+    except Exception:
+        return {}
+    if not rows:
+        return {}
+    states = pd.Series({str(date): str(state) for date, state in rows}, dtype="object").reindex(dates, method="ffill")
+    out: dict[str, dict[str, float | int]] = {}
+    aligned = returns.reindex(dates).fillna(0.0).astype(float)
+    for state, idx in states.groupby(states).groups.items():
+        segment = aligned.loc[list(idx)]
+        if segment.empty:
+            continue
+        out[str(state)] = _stress_return_metrics(segment)
+    return out
+
+
+def _event_periods() -> list[tuple[str, str, str, str]]:
+    return [
+        ("bull_2014_2015", "股灾前/牛市末段", "20140207", "20150612"),
+        ("crash_2015", "2015股灾", "20150615", "20151231"),
+        ("circuit_repair_2016_2017", "熔断与修复", "20160101", "20171231"),
+        ("deleveraging_2018_2019", "2018-2019去杠杆/贸易冲击", "20180101", "20191231"),
+        ("covid_2020", "2020疫情冲击", "20200101", "20201231"),
+        ("slowdown_2022", "2022经济下行/疫情反复", "20220101", "20221231"),
+        ("liquidity_2024_q1", "2024年初流动性冲击", "20240101", "20240208"),
+        ("repair_2024", "2024修复后", "20240219", "20241231"),
+        ("year_2025", "2025年度", "20250101", "20251231"),
+    ]
 
 
 def _factor_model_stress_context(model_run_id: str, start: str = "", end: str = "") -> dict[str, Any]:

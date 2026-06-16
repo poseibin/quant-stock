@@ -24,6 +24,7 @@ class MLFactorRankerStrategy(BaseStrategy):
         preds = _apply_universe(preds, self.cfg)
         preds = _apply_stress_controls(preds, self.cfg)
         preds = _apply_crash_warning_candidate_controls(preds, self.cfg)
+        preds = _apply_smallcap_ecology_controls(preds, self.cfg)
         if preds.empty:
             return pd.DataFrame()
 
@@ -42,6 +43,7 @@ class MLFactorRankerStrategy(BaseStrategy):
         base = pd.concat(frames).sort_index().fillna(0.0)
         base = _apply_crash_rebalance_gate(base, self.cfg)
         base = _apply_crash_warning_overlay(base, start, end, self.cfg)
+        base = _apply_index_anchor_warning_overlay(base, start, end, self.cfg)
         base = _apply_crash_warning_model_overlay(base, start, end, self.cfg)
         base = _apply_intramonth_crash_exit(base, start, end, self.cfg)
         if daily_overlay:
@@ -181,6 +183,10 @@ def _apply_universe(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
         out = out[pd.to_numeric(out["total_mv"], errors="coerce").fillna(0) >= float(u["min_total_mv"])]
     if u.get("max_total_mv") is not None:
         out = out[pd.to_numeric(out["total_mv"], errors="coerce").fillna(0) <= float(u["max_total_mv"])]
+    if u.get("min_circ_mv") is not None:
+        out = out[pd.to_numeric(out["circ_mv"], errors="coerce").fillna(0) >= float(u["min_circ_mv"])]
+    if u.get("max_circ_mv") is not None:
+        out = out[pd.to_numeric(out["circ_mv"], errors="coerce").fillna(0) <= float(u["max_circ_mv"])]
     if u.get("min_amount") is not None:
         out = out[pd.to_numeric(out["amount"], errors="coerce").fillna(0) >= float(u["min_amount"])]
     if f.get("max_day_return") is not None:
@@ -264,10 +270,16 @@ def _apply_crash_warning_candidate_controls(df: pd.DataFrame, cfg: StrategyConfi
     threshold = float(controls.get("threshold", 0.45))
     severe_threshold = float(controls.get("severe_threshold", 0.65))
     warning_mask = out["crash_warning_prob"] >= threshold
+    if controls.get("states"):
+        states = {str(item) for item in controls.get("states", [])}
+        state = out["market_state"].fillna("normal").astype(str) if "market_state" in out.columns else pd.Series("normal", index=out.index)
+        warning_mask &= state.isin(states)
     if not warning_mask.any():
         return out
 
     severe_mask = out["crash_warning_prob"] >= severe_threshold
+    if controls.get("states"):
+        severe_mask &= state.isin(states)
     min_amount_mult = float(controls.get("min_amount_mult", 1.0))
     severe_min_amount_mult = float(controls.get("severe_min_amount_mult", min_amount_mult))
     base_min_amount = float((cfg.universe or {}).get("min_amount") or 0.0)
@@ -282,6 +294,10 @@ def _apply_crash_warning_candidate_controls(df: pd.DataFrame, cfg: StrategyConfi
             return out
         warning_mask = out["crash_warning_prob"] >= threshold
         severe_mask = out["crash_warning_prob"] >= severe_threshold
+        if controls.get("states"):
+            state = out["market_state"].fillna("normal").astype(str) if "market_state" in out.columns else pd.Series("normal", index=out.index)
+            warning_mask &= state.isin(states)
+            severe_mask &= state.isin(states)
 
     for col, cfg_key, severe_key in [
         ("ret20", "max_ret20", "severe_max_ret20"),
@@ -301,6 +317,10 @@ def _apply_crash_warning_candidate_controls(df: pd.DataFrame, cfg: StrategyConfi
             return out
         warning_mask = out["crash_warning_prob"] >= threshold
         severe_mask = out["crash_warning_prob"] >= severe_threshold
+        if controls.get("states"):
+            state = out["market_state"].fillna("normal").astype(str) if "market_state" in out.columns else pd.Series("normal", index=out.index)
+            warning_mask &= state.isin(states)
+            severe_mask &= state.isin(states)
 
     penalty = pd.Series(0.0, index=out.index, dtype="float64")
     ret20 = pd.to_numeric(out.get("ret20", 0.0), errors="coerce").fillna(0.0)
@@ -317,6 +337,64 @@ def _apply_crash_warning_candidate_controls(df: pd.DataFrame, cfg: StrategyConfi
     out["crash_warning_adjusted_score"] = pd.to_numeric(out["pred_score"], errors="coerce") - penalty
     if bool(controls.get("use_adjusted_score", True)):
         out["pred_score"] = out["crash_warning_adjusted_score"]
+    return out
+
+
+def _apply_smallcap_ecology_controls(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
+    controls = (cfg.filters or {}).get("smallcap_ecology") or {}
+    if df.empty or not bool(controls.get("enabled", False)):
+        return df
+    out = df.copy()
+    state = out["market_state"].fillna("normal").astype(str) if "market_state" in out.columns else pd.Series("normal", index=out.index)
+    if controls.get("states"):
+        active_mask = state.isin({str(item) for item in controls.get("states", [])})
+    else:
+        active_mask = pd.Series(True, index=out.index)
+
+    ret20 = pd.to_numeric(out.get("ret20", 0.0), errors="coerce").fillna(0.0)
+    vol20 = pd.to_numeric(out.get("vol20", 0.0), errors="coerce").fillna(0.0)
+    amount_chg20 = pd.to_numeric(out.get("amount_chg20", 0.0), errors="coerce").fillna(0.0)
+    turnover = pd.to_numeric(out.get("turnover_rate", 0.0), errors="coerce").fillna(0.0) / 100.0
+    risk_score = pd.to_numeric(out.get("market_risk_score", 0.0), errors="coerce").fillna(0.0)
+    limit_down5 = pd.to_numeric(out.get("market_limit_down_ratio5", 0.0), errors="coerce").fillna(0.0)
+    small_large_rel20 = pd.to_numeric(out.get("market_small_large_rel20", 0.0), errors="coerce").fillna(0.0)
+
+    crowding = (
+        ret20.clip(lower=0.0) * float(controls.get("ret20_weight", 0.55))
+        + amount_chg20.clip(lower=0.0) * float(controls.get("amount_chg20_weight", 0.12))
+        + turnover.clip(lower=0.0) * float(controls.get("turnover_weight", 0.08))
+        + vol20.clip(lower=0.0) * float(controls.get("vol20_weight", 0.18))
+    )
+    pressure = (
+        limit_down5.clip(lower=0.0) * float(controls.get("limit_down5_weight", 8.0))
+        + (-small_large_rel20).clip(lower=0.0) * float(controls.get("small_large_rel20_weight", 0.80))
+        + (risk_score / 100.0).clip(lower=0.0) * float(controls.get("risk_score_weight", 0.25))
+    )
+    out["smallcap_ecology_crowding"] = crowding
+    out["smallcap_ecology_pressure"] = pressure
+
+    min_pressure = float(controls.get("min_pressure", 0.0))
+    crowding_rank = crowding.groupby(out["trade_date"].astype(str)).rank(pct=True)
+    drop_rank = controls.get("drop_crowding_rank")
+    if drop_rank is not None:
+        drop_mask = active_mask & (pressure >= min_pressure) & (crowding_rank >= float(drop_rank))
+        out = out[~drop_mask]
+        if out.empty:
+            return out
+        active_mask = active_mask.reindex(out.index).fillna(False).astype(bool)
+        crowding = out["smallcap_ecology_crowding"]
+        pressure = out["smallcap_ecology_pressure"]
+        crowding_rank = crowding.groupby(out["trade_date"].astype(str)).rank(pct=True)
+
+    penalty = pd.Series(0.0, index=out.index, dtype="float64")
+    crowding_floor = float(controls.get("crowding_floor", 0.0))
+    pressure_floor = float(controls.get("pressure_floor", min_pressure))
+    penalty += active_mask.astype(float) * (crowding - crowding_floor).clip(lower=0.0) * float(controls.get("crowding_penalty", 0.0))
+    penalty += active_mask.astype(float) * (pressure - pressure_floor).clip(lower=0.0) * float(controls.get("pressure_penalty", 0.0))
+    penalty += active_mask.astype(float) * crowding_rank.fillna(0.0) * float(controls.get("rank_penalty", 0.0))
+    out["smallcap_ecology_adjusted_score"] = pd.to_numeric(out["pred_score"], errors="coerce") - penalty
+    if bool(controls.get("use_adjusted_score", True)):
+        out["pred_score"] = out["smallcap_ecology_adjusted_score"]
     return out
 
 
@@ -415,7 +493,9 @@ def _market_risk_frame(dates: list[str], lookback_days: int) -> pd.DataFrame:
                        COALESCE(limit_down_ratio, 0), COALESCE(limit_down_ratio5, 0),
                        COALESCE(amount_chg20, 0), COALESCE(small_large_rel20, 0),
                        COALESCE(drawdown20, 0), COALESCE(drawdown60, 0),
-                       COALESCE(volatility20, 0)
+                       COALESCE(volatility20, 0),
+                       COALESCE(index_anchor_ret5, 0), COALESCE(index_anchor_ret20, 0),
+                       COALESCE(index_anchor_drawdown20, 0), COALESCE(index_anchor_rel20, 0)
                 FROM market_risk_state_daily
                 WHERE trade_date BETWEEN ? AND ?
                 ORDER BY trade_date
@@ -432,6 +512,7 @@ def _market_risk_frame(dates: list[str], lookback_days: int) -> pd.DataFrame:
             "trade_date", "state", "risk_score", "market_return", "up_ratio", "breadth20",
             "limit_down_ratio", "limit_down_ratio5", "amount_chg20", "small_large_rel20",
             "drawdown20", "drawdown60", "volatility20",
+            "index_anchor_ret5", "index_anchor_ret20", "index_anchor_drawdown20", "index_anchor_rel20",
         ],
     )
     frame["trade_date"] = frame["trade_date"].astype(str)
@@ -518,6 +599,123 @@ def _apply_crash_warning_overlay(weights: pd.DataFrame, start: str, end: str, cf
     return daily.mul(exposure, axis=0).fillna(0.0)
 
 
+def _apply_index_anchor_warning_overlay(weights: pd.DataFrame, start: str, end: str, cfg: StrategyConfig) -> pd.DataFrame:
+    warning = (cfg.filters or {}).get("index_anchor_warning") or {}
+    if weights.empty or not bool(warning.get("enabled", False)):
+        return weights
+
+    dates = dq.get_trade_dates(start, end)
+    if not dates:
+        return weights
+    dates = [date for date in dates if date >= str(weights.index.min()) and date <= end]
+    if not dates:
+        return weights
+
+    risk = _market_risk_frame(dates, int(warning.get("lookback_days", 8)))
+    if risk.empty:
+        return weights
+    risk = risk.reindex(dates, method="ffill").fillna(0.0)
+
+    normal_exposure = float(warning.get("normal_exposure", 1.0))
+    warning_exposure = float(warning.get("warning_exposure", 0.45))
+    severe_exposure = float(warning.get("severe_exposure", 0.0))
+    repair_exposure = float(warning.get("repair_exposure", 0.35))
+    ret5_warning = float(warning.get("ret5_warning", -0.035))
+    ret5_severe = float(warning.get("ret5_severe", -0.055))
+    ret20_warning = float(warning.get("ret20_warning", -0.060))
+    ret20_severe = float(warning.get("ret20_severe", -0.100))
+    drawdown_warning = float(warning.get("drawdown20_warning", -0.080))
+    drawdown_severe = float(warning.get("drawdown20_severe", -0.140))
+    rel20_warning = float(warning.get("rel20_warning", -0.050))
+    rel20_severe = float(warning.get("rel20_severe", -0.085))
+    ret5_overheat = float(warning.get("ret5_overheat", 0.12))
+    ret20_overheat = float(warning.get("ret20_overheat", 0.28))
+    overheat_exposure = float(warning.get("overheat_exposure", warning_exposure))
+    cooldown_days = max(0, int(warning.get("cooldown_days", 5)))
+    overheat_cooldown_days = max(0, int(warning.get("overheat_cooldown_days", cooldown_days)))
+    overheat_break_ret20 = warning.get("overheat_break_ret20")
+    overheat_break_ret5 = warning.get("overheat_break_ret5")
+    overheat_break_exposure = float(warning.get("overheat_break_exposure", severe_exposure))
+    overheat_break_cooldown_days = max(0, int(warning.get("overheat_break_cooldown_days", overheat_cooldown_days)))
+    risk_score_warning = float(warning.get("risk_score_warning", 22.0))
+    risk_score_severe = float(warning.get("risk_score_severe", 45.0))
+    severe_cooldown_days = max(cooldown_days, int(warning.get("severe_cooldown_days", cooldown_days + 5)))
+    recovery_days = max(0, int(warning.get("recovery_days", 3)))
+
+    daily = weights.reindex(dates).ffill().fillna(0.0)
+    exposure = pd.Series(normal_exposure, index=dates, dtype="float64")
+    cooldown_left = 0
+    cooldown_exposure = normal_exposure
+    recovery_left = 0
+
+    for date in dates:
+        row = risk.loc[date]
+        state = str(row.get("state") or "normal")
+        score = float(row.get("risk_score") or 0.0)
+        ret5 = float(row.get("index_anchor_ret5") or 0.0)
+        ret20 = float(row.get("index_anchor_ret20") or 0.0)
+        drawdown20 = float(row.get("index_anchor_drawdown20") or 0.0)
+        rel20 = float(row.get("index_anchor_rel20") or 0.0)
+        limit_down5 = float(row.get("limit_down_ratio5") or 0.0)
+        breadth20 = float(row.get("breadth20") or 0.0)
+
+        severe_hit = (
+            state in {"crash", "liquidity_squeeze"}
+            or score >= risk_score_severe
+            or ret5 <= ret5_severe
+            or ret20 <= ret20_severe
+            or drawdown20 <= drawdown_severe
+            or rel20 <= rel20_severe
+        )
+        overheat_hit = (
+            (ret5 >= ret5_overheat and breadth20 >= 0.52)
+            or (ret20 >= ret20_overheat and breadth20 >= 0.52)
+        )
+        overheat_break_hit = False
+        if overheat_break_ret20 is not None and overheat_break_ret5 is not None:
+            overheat_break_hit = ret20 >= float(overheat_break_ret20) and ret5 <= float(overheat_break_ret5)
+        warning_hit = (
+            severe_hit
+            or overheat_break_hit
+            or overheat_hit
+            or score >= risk_score_warning
+            or ret5 <= ret5_warning
+            or ret20 <= ret20_warning
+            or drawdown20 <= drawdown_warning
+            or rel20 <= rel20_warning
+            or (ret5 <= ret5_warning * 0.70 and rel20 <= rel20_warning * 0.70 and breadth20 <= 0.45)
+            or (limit_down5 >= 0.012 and breadth20 <= 0.42)
+        )
+
+        if severe_hit:
+            cooldown_left = severe_cooldown_days
+            cooldown_exposure = severe_exposure
+            recovery_left = 0
+        elif overheat_break_hit:
+            cooldown_left = overheat_break_cooldown_days
+            cooldown_exposure = overheat_break_exposure
+            recovery_left = 0
+        elif overheat_hit and cooldown_left <= 0:
+            cooldown_left = overheat_cooldown_days
+            cooldown_exposure = overheat_exposure
+            recovery_left = 0
+        elif warning_hit and cooldown_left <= 0:
+            cooldown_left = cooldown_days
+            cooldown_exposure = warning_exposure
+            recovery_left = 0
+
+        if cooldown_left > 0:
+            exposure.loc[date] = min(exposure.loc[date], cooldown_exposure)
+            cooldown_left -= 1
+            if cooldown_left == 0 and recovery_days > 0:
+                recovery_left = recovery_days
+        elif recovery_left > 0:
+            exposure.loc[date] = min(exposure.loc[date], repair_exposure)
+            recovery_left -= 1
+
+    return daily.mul(exposure, axis=0).fillna(0.0)
+
+
 def _apply_crash_warning_model_overlay(weights: pd.DataFrame, start: str, end: str, cfg: StrategyConfig) -> pd.DataFrame:
     model_cfg = (cfg.filters or {}).get("crash_warning_model") or {}
     if weights.empty or not bool(model_cfg.get("enabled", False)):
@@ -531,11 +729,16 @@ def _apply_crash_warning_model_overlay(weights: pd.DataFrame, start: str, end: s
         return weights
 
     run_id = str(model_cfg.get("run_id") or "").strip()
-    prob = _crash_warning_probability_series(dates, run_id)
+    prob_column = str(model_cfg.get("prob_column") or "shock_prob").strip()
+    prob = _crash_warning_probability_series(dates, run_id, prob_column)
     if prob.empty:
         return weights
     prob = prob.reindex(dates, method="ffill").fillna(0.0).astype(float)
     condition = _crash_warning_condition_mask(dates, weights, start, end, model_cfg)
+    risk = _market_risk_frame(dates, int(model_cfg.get("lookback_days", 8)))
+    if risk.empty:
+        risk = pd.DataFrame(index=dates)
+    risk = risk.reindex(dates, method="ffill").fillna(0.0)
 
     warning_threshold = float(model_cfg.get("warning_threshold", 0.45))
     severe_threshold = float(model_cfg.get("severe_threshold", 0.65))
@@ -543,17 +746,74 @@ def _apply_crash_warning_model_overlay(weights: pd.DataFrame, start: str, end: s
     severe_exposure = float(model_cfg.get("severe_exposure", 0.55))
     cooldown_days = max(0, int(model_cfg.get("cooldown_days", 1)))
     severe_cooldown_days = max(cooldown_days, int(model_cfg.get("severe_cooldown_days", cooldown_days + 1)))
+    pre_warning_threshold = model_cfg.get("pre_warning_threshold")
+    pre_warning_threshold = float(pre_warning_threshold) if pre_warning_threshold is not None else None
+    pre_warning_min_days = max(1, int(model_cfg.get("pre_warning_min_days", 2)))
+    pre_warning_exposure = float(model_cfg.get("pre_warning_exposure", warning_exposure))
+    pre_warning_cooldown_days = max(cooldown_days, int(model_cfg.get("pre_warning_cooldown_days", cooldown_days)))
+    overheat_prob_threshold = model_cfg.get("overheat_prob_threshold")
+    overheat_prob_threshold = float(overheat_prob_threshold) if overheat_prob_threshold is not None else None
+    overheat_ret20 = float(model_cfg.get("overheat_ret20", 0.24))
+    overheat_breadth20 = float(model_cfg.get("overheat_breadth20", 0.55))
+    overheat_exposure = float(model_cfg.get("overheat_exposure", pre_warning_exposure))
+    overheat_cooldown_days = max(cooldown_days, int(model_cfg.get("overheat_cooldown_days", pre_warning_cooldown_days)))
+    weak_prob_threshold = model_cfg.get("weak_prob_threshold")
+    weak_prob_threshold = float(weak_prob_threshold) if weak_prob_threshold is not None else None
+    weak_ret5 = float(model_cfg.get("weak_ret5", -0.015))
+    weak_breadth20 = float(model_cfg.get("weak_breadth20", 0.48))
+    weak_exposure = float(model_cfg.get("weak_exposure", pre_warning_exposure))
+    weak_cooldown_days = max(cooldown_days, int(model_cfg.get("weak_cooldown_days", pre_warning_cooldown_days)))
 
     daily = weights.reindex(dates).ffill().fillna(0.0)
     exposure = pd.Series(1.0, index=dates, dtype="float64")
     cooldown_left = 0
     cooldown_exposure = 1.0
+    prob_streak = 0
     for date in dates:
         value = float(prob.get(date) or 0.0)
         allowed = bool(condition.get(date, True))
+        row = risk.loc[date] if date in risk.index else pd.Series(dtype="object")
+        state = str(row.get("state") or "normal")
+        ret5 = float(row.get("index_anchor_ret5") or 0.0)
+        ret20 = float(row.get("index_anchor_ret20") or 0.0)
+        breadth20 = float(row.get("breadth20") or 0.0)
+
+        if pre_warning_threshold is not None and allowed and value >= pre_warning_threshold:
+            prob_streak += 1
+        else:
+            prob_streak = 0
+
+        pre_warning_hit = pre_warning_threshold is not None and prob_streak >= pre_warning_min_days
+        overheat_hit = (
+            overheat_prob_threshold is not None
+            and allowed
+            and value >= overheat_prob_threshold
+            and ret20 >= overheat_ret20
+            and breadth20 >= overheat_breadth20
+        )
+        weak_hit = (
+            weak_prob_threshold is not None
+            and allowed
+            and value >= weak_prob_threshold
+            and (
+                state in {"weak", "crash", "liquidity_squeeze"}
+                or ret5 <= weak_ret5
+                or breadth20 <= weak_breadth20
+            )
+        )
+
         if allowed and value >= severe_threshold:
             cooldown_left = severe_cooldown_days
             cooldown_exposure = severe_exposure
+        elif overheat_hit:
+            cooldown_left = overheat_cooldown_days
+            cooldown_exposure = overheat_exposure
+        elif weak_hit:
+            cooldown_left = weak_cooldown_days
+            cooldown_exposure = weak_exposure
+        elif pre_warning_hit:
+            cooldown_left = pre_warning_cooldown_days
+            cooldown_exposure = pre_warning_exposure
         elif allowed and value >= warning_threshold and cooldown_left <= 0:
             cooldown_left = cooldown_days
             cooldown_exposure = warning_exposure
@@ -563,9 +823,21 @@ def _apply_crash_warning_model_overlay(weights: pd.DataFrame, start: str, end: s
     return daily.mul(exposure, axis=0).fillna(0.0)
 
 
-def _crash_warning_probability_series(dates: list[str], run_id: str) -> pd.Series:
+def _crash_warning_probability_series(dates: list[str], run_id: str, prob_column: str = "shock_prob") -> pd.Series:
     if not dates:
         return pd.Series(dtype="float64")
+    allowed_columns = {
+        "shock_prob",
+        "market_risk_prob",
+        "smallcap_ecology_risk_prob",
+        "style_shift_prob",
+        "liquidity_squeeze_prob",
+        "repair_prob",
+        "risk_prob",
+        "final_smallcap_risk",
+    }
+    if prob_column not in allowed_columns:
+        prob_column = "shock_prob"
     try:
         with connect_db() as conn:
             if not run_id:
@@ -577,8 +849,8 @@ def _crash_warning_probability_series(dates: list[str], run_id: str) -> pd.Serie
             if not run_id:
                 return pd.Series(dtype="float64")
             rows = conn.execute(
-                """
-                SELECT trade_date, COALESCE(shock_prob, 0)
+                f"""
+                SELECT trade_date, COALESCE({prob_column}, shock_prob, 0)
                 FROM market_crash_warning_predictions
                 WHERE run_id = ? AND trade_date BETWEEN ? AND ?
                 ORDER BY trade_date
@@ -744,7 +1016,7 @@ def _weights_from_predictions(df: pd.DataFrame, date: str, cfg: StrategyConfig) 
     max_weight = float(p.get("max_single_weight", 0.05))
     max_industry_weight = float(p.get("max_industry_weight", 0.25))
     max_per_industry = max(1, int(n_hold * max_industry_weight)) if max_industry_weight > 0 else n_hold
-    ranked = df.dropna(subset=["pred_score"]).sort_values("pred_score", ascending=False)
+    ranked = _rank_predictions_for_selection(df.dropna(subset=["pred_score"]), cfg)
     picked = []
     counts: dict[str, int] = {}
     for _, row in ranked.iterrows():
@@ -758,14 +1030,56 @@ def _weights_from_predictions(df: pd.DataFrame, date: str, cfg: StrategyConfig) 
     if not picked:
         return pd.DataFrame()
     selected = pd.DataFrame(picked)
-    raw = pd.to_numeric(selected["pred_score"], errors="coerce")
-    raw = raw - raw.min() + 0.01
+    weighting = str(p.get("weighting", "score") or "score").lower()
+    if weighting == "equal":
+        raw = pd.Series(1.0, index=selected.index, dtype="float64")
+    else:
+        raw = pd.to_numeric(selected["pred_score"], errors="coerce")
+        raw = raw - raw.min() + 0.01
     raw = raw / raw.sum()
     raw = raw.clip(upper=max_weight)
     if raw.sum() > 0:
         raw = raw / raw.sum()
         raw = raw.clip(upper=max_weight)
     return pd.DataFrame([dict(zip(selected["ts_code"].astype(str), raw.astype(float)))], index=[date]).fillna(0.0)
+
+
+def _rank_predictions_for_selection(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
+    if df.empty:
+        return df
+    p = cfg.position or {}
+    secondary = p.get("secondary_sort") or []
+    if isinstance(secondary, dict):
+        secondary = [secondary]
+    if not secondary:
+        return df.sort_values("pred_score", ascending=False)
+
+    out = df.copy()
+    primary = pd.to_numeric(out["pred_score"], errors="coerce")
+    score = primary.rank(pct=True, method="average").fillna(0.0)
+    total_weight = 0.0
+    secondary_score = pd.Series(0.0, index=out.index, dtype="float64")
+    for item in secondary:
+        if not isinstance(item, dict):
+            continue
+        col = str(item.get("column") or "").strip()
+        if not col or col not in out.columns:
+            continue
+        values = pd.to_numeric(out[col], errors="coerce")
+        if values.notna().sum() <= 1:
+            continue
+        ascending = bool(item.get("ascending", False))
+        weight = float(item.get("weight", 1.0))
+        if weight == 0:
+            continue
+        pct = values.rank(pct=True, method="average", ascending=not ascending).fillna(0.5)
+        secondary_score += pct * weight
+        total_weight += abs(weight)
+    if total_weight <= 0:
+        return out.sort_values("pred_score", ascending=False)
+    strength = float(p.get("secondary_sort_strength", 0.02))
+    out["_selection_score"] = score + (secondary_score / total_weight) * strength
+    return out.sort_values(["_selection_score", "pred_score"], ascending=[False, False])
 
 
 def _market_exposure_map(dates: list[str], cfg: StrategyConfig) -> dict[str, float]:
@@ -806,12 +1120,18 @@ def _market_exposure_map(dates: list[str], cfg: StrategyConfig) -> dict[str, flo
         return {date: 1.0 for date in dates}
     close = data.pivot(index="trade_date", columns="ts_code", values="close").sort_index()
     pct = data.pivot(index="trade_date", columns="ts_code", values="pct_chg").sort_index() / 100
-    trend = close.mean(axis=1).pct_change(trend_window)
     breadth = pct.gt(0).mean(axis=1).rolling(breadth_window).mean()
     market_close = close.mean(axis=1)
+    index_anchor = _index_anchor_market_frame(start, end, regime)
+    if not index_anchor.empty:
+        market_close = index_anchor["close"]
+        market_ret = index_anchor["ret"]
+    else:
+        market_ret = pct.mean(axis=1)
+    trend = market_close.pct_change(trend_window)
     drawdown = market_close / market_close.rolling(drawdown_window).max() - 1.0
     short_return = market_close.pct_change(5)
-    market_vol = pct.mean(axis=1).rolling(volatility_window).std() * np.sqrt(244.0)
+    market_vol = market_ret.rolling(volatility_window).std() * np.sqrt(244.0)
     trend = trend.reindex(dates, method="ffill")
     breadth = breadth.reindex(dates, method="ffill")
     drawdown = drawdown.reindex(dates, method="ffill")
@@ -857,6 +1177,35 @@ def _market_exposure_map(dates: list[str], cfg: StrategyConfig) -> dict[str, flo
         if risk_state_exposures:
             out[date] = min(out[date], risk_state_exposures.get(date, 1.0))
     return out
+
+
+def _index_anchor_market_frame(start: str, end: str, regime: dict) -> pd.DataFrame:
+    codes = [str(x) for x in regime.get("index_anchor_codes", []) if str(x).strip()]
+    if not codes:
+        codes = ["932000.CSI", "399303.SZ", "000852.SH", "000905.SH"]
+    quoted = _quote(codes)
+    data = dq.sql(
+        f"""
+        SELECT ts_code, trade_date, close
+        FROM read_parquet('{dq.RAW_DIR / "index_daily" / "*.parquet"}')
+        WHERE trade_date >= '{start}' AND trade_date <= '{end}'
+          AND ts_code IN ({quoted})
+        ORDER BY trade_date, ts_code
+        """
+    )
+    if data.empty:
+        return pd.DataFrame()
+    data["trade_date"] = data["trade_date"].astype(str)
+    data["ts_code"] = data["ts_code"].astype(str)
+    data["close"] = pd.to_numeric(data["close"], errors="coerce")
+    wide = data.pivot(index="trade_date", columns="ts_code", values="close").sort_index()
+    cols = [code for code in codes if code in wide.columns]
+    if not cols:
+        return pd.DataFrame()
+    close = wide[cols].bfill(axis=1).iloc[:, 0].dropna()
+    if close.empty:
+        return pd.DataFrame()
+    return pd.DataFrame({"close": close, "ret": close.pct_change().fillna(0.0)})
 
 
 def _apply_daily_exposure_overlay(weights: pd.DataFrame, start: str, end: str, cfg: StrategyConfig) -> pd.DataFrame:

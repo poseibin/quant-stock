@@ -557,6 +557,83 @@ type LimitUpModelTimeMachineSlice struct {
 	UpdatedAt      string  `json:"updated_at"`
 }
 
+type ProfitArenaRunSummary struct {
+	RunID              string  `json:"run_id"`
+	StartDate          string  `json:"start_date"`
+	EndDate            string  `json:"end_date"`
+	TrainMode          string  `json:"train_mode"`
+	ModelType          string  `json:"model_type"`
+	FeatureCount       int     `json:"feature_count"`
+	Status             string  `json:"status"`
+	BestScope          string  `json:"best_scope"`
+	BestHorizon        int     `json:"best_horizon"`
+	BestTopN           int     `json:"best_top_n"`
+	BestCompoundReturn float64 `json:"best_compound_return"`
+	SummaryJSON        string  `json:"summary_json"`
+	ModelPath          string  `json:"model_path"`
+	UpdatedAt          string  `json:"updated_at"`
+}
+
+type ProfitArenaEvaluation struct {
+	RunID                 string  `json:"run_id"`
+	Scope                 string  `json:"scope"`
+	Horizon               int     `json:"horizon"`
+	TopN                  int     `json:"top_n"`
+	MinPredReturn         float64 `json:"min_pred_return"`
+	MinMarketUpRatio      float64 `json:"min_market_up_ratio"`
+	MinMarketRet5         float64 `json:"min_market_ret5"`
+	MinMarketAmountChg5   float64 `json:"min_market_amount_chg5"`
+	MinIndustryUpRatio    float64 `json:"min_industry_up_ratio"`
+	Segment               string  `json:"segment"`
+	TradeCount            int     `json:"trade_count"`
+	TradeDays             int     `json:"trade_days"`
+	AvgReturn             float64 `json:"avg_return"`
+	WinRate               float64 `json:"win_rate"`
+	CompoundReturn        float64 `json:"compound_return"`
+	AnnualReturn          float64 `json:"annual_return"`
+	MaxDrawdown           float64 `json:"max_drawdown"`
+	Sharpe                float64 `json:"sharpe"`
+	CapitalCompoundReturn float64 `json:"capital_compound_return"`
+	CapitalAnnualReturn   float64 `json:"capital_annual_return"`
+	CapitalMaxDrawdown    float64 `json:"capital_max_drawdown"`
+	CapitalSharpe         float64 `json:"capital_sharpe"`
+	CapitalFinalEquity    float64 `json:"capital_final_equity"`
+	SummaryJSON           string  `json:"summary_json"`
+	UpdatedAt             string  `json:"updated_at"`
+}
+
+type ProfitArenaPrediction struct {
+	RunID           string  `json:"run_id"`
+	Scope           string  `json:"scope"`
+	Horizon         int     `json:"horizon"`
+	TradeDate       string  `json:"trade_date"`
+	TSCode          string  `json:"ts_code"`
+	Name            string  `json:"name"`
+	Industry        string  `json:"industry"`
+	SizeBucket      string  `json:"size_bucket"`
+	Price           float64 `json:"price"`
+	PredReturn      float64 `json:"pred_return"`
+	ModelScore      float64 `json:"model_score"`
+	RealizedReturn  float64 `json:"realized_return"`
+	FutureReturn    float64 `json:"future_return"`
+	FutureMaxReturn float64 `json:"future_max_return"`
+	FutureDrawdown  float64 `json:"future_drawdown"`
+	CrashProb       float64 `json:"crash_prob"`
+	ExitDate        string  `json:"exit_date"`
+	IsLatest        bool    `json:"is_latest"`
+	SummaryJSON     string  `json:"summary_json"`
+	UpdatedAt       string  `json:"updated_at"`
+}
+
+type ProfitArenaFeature struct {
+	RunID      string  `json:"run_id"`
+	Scope      string  `json:"scope"`
+	Horizon    int     `json:"horizon"`
+	Feature    string  `json:"feature"`
+	Importance float64 `json:"importance"`
+	RankNo     int     `json:"rank_no"`
+}
+
 type SettingsResponse struct {
 	Settings config.Settings          `json:"settings"`
 	Issues   []config.ValidationIssue `json:"issues"`
@@ -1116,35 +1193,15 @@ func (app *App) runScheduledStrategyRefresh(schedule config.StrategyScheduleSett
 		return report, err
 	}
 	add("data_update", "股票数据", nil, "已拉取最新股票数据")
-	if targets["t0"] {
-		err := app.RunT0DailyResearch()
-		if err == nil {
-			err = app.waitPositionRunStatus(app.GetT0DailyResearchStatus, 30*time.Minute)
-		}
-		add("t0", "做T助手", err, "已完成日线研究与推荐更新")
-	}
-	if targets["limit_up"] {
-		err := app.RunLimitUpModelTraining()
-		if err == nil {
-			err = app.waitPositionRunStatus(app.GetLimitUpModelRunStatus, 45*time.Minute)
-		}
-		add("limit_up", "涨停预警", err, "已完成涨停模型与推荐快照更新")
-	}
-	if targets["breakout"] {
-		err := app.RunLimitBreakoutModelTraining()
-		if err == nil {
-			err = app.waitPositionRunStatus(app.GetLimitBreakoutModelRunStatus, 45*time.Minute)
-		}
-		add("breakout", "横盘预警", err, "已完成横盘模型与推荐快照更新")
-	}
-	if targets["factor"] {
-		taskDTO, err := app.RunFactorLatestInference()
-		message := "已完成通用策略最新截面推理"
+	arenaEnabled := targets["arena"]
+	if arenaEnabled {
+		taskDTO, err := app.RunProfitArenaLatestInference()
+		message := "已完成收益擂台最新截面推理"
 		if err == nil && taskDTO.ID != "" {
-			err = app.waitTaskSuccess(taskDTO.ID, 30*time.Minute)
-			message = "已完成通用策略最新截面推理，任务 " + taskDTO.ID
+			err = app.waitTaskSuccess(taskDTO.ID, 45*time.Minute)
+			message = "已完成收益擂台最新截面推理，任务 " + taskDTO.ID
 		}
-		add("factor", "通用策略", err, message)
+		add("arena", "收益擂台", err, message)
 	}
 	rec, recErr := app.GetPositionRecommendation()
 	if recErr != nil {
@@ -1875,6 +1932,19 @@ func (app *App) activateBestStrategyModelRun(strategy string) {
 				COALESCE(a.annual_return, 0) DESC,
 				COALESCE(a.generated_at, '') DESC
 			LIMIT 1`
+	case "profit_arena_model":
+		query = `SELECT run_id
+			FROM profit_arena_runs
+			WHERE status = 'success'
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.best.capital_annual_return') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.best.capital_max_drawdown') + 0, -1) >= -0.22
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.best.rank_ic') + 0, -1) >= 0.08
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.best.trade_count') + 0, 0) >= 120
+			ORDER BY
+			  COALESCE(JSON_EXTRACT(summary_json, '$.best_challenger_score_components.score') + 0, 0) DESC,
+			  COALESCE(JSON_EXTRACT(summary_json, '$.best.capital_annual_return') + 0, 0) DESC,
+			  updated_at DESC
+			LIMIT 1`
 	default:
 		return
 	}
@@ -1924,6 +1994,8 @@ func (app *App) strategyModelRunExists(strategy string, runID string) bool {
 		table = "t0_daily_runs"
 	case "ml_factor_ranker":
 		table = "factor_model_runs"
+	case "profit_arena_model":
+		table = "profit_arena_runs"
 	default:
 		return false
 	}
@@ -1981,6 +2053,14 @@ func (app *App) strategyModelRunAdmissible(strategy string, runID string) bool {
 			  AND COALESCE(a.max_drawdown, -1) >= -0.22
 			  AND COALESCE(a.effective_end, '') >= COALESCE((SELECT MAX(trade_date) FROM factor_latest_predictions), '')
 			  AND COALESCE(a.reason, '') NOT LIKE '%压力段失效%'`
+	case "profit_arena_model":
+		query = `SELECT COUNT(*)
+			FROM profit_arena_runs
+			WHERE run_id = ? AND status = 'success'
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.best.capital_annual_return') + 0, 0) > 0
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.best.capital_max_drawdown') + 0, -1) >= -0.22
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.best.rank_ic') + 0, -1) >= 0.08
+			  AND COALESCE(JSON_EXTRACT(summary_json, '$.best.trade_count') + 0, 0) >= 120`
 	default:
 		return false
 	}
@@ -2474,6 +2554,8 @@ func runStatusTaskType(taskName string) string {
 	case "limit_up_model":
 		return "model_training"
 	case "limit_breakout_model":
+		return "model_training"
+	case "profit_arena_model":
 		return "model_training"
 	case "factor_autotune":
 		return "model_training"
@@ -3537,8 +3619,60 @@ func numberFromAny(value any) float64 {
 	}
 }
 
+func numberFromAnyDefault(value any, fallback float64) float64 {
+	switch v := value.(type) {
+	case nil:
+		return fallback
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		n, err := v.Float64()
+		if err != nil {
+			return fallback
+		}
+		return n
+	case string:
+		text := strings.TrimSpace(v)
+		if text == "" {
+			return fallback
+		}
+		n, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return fallback
+		}
+		return n
+	}
+	return fallback
+}
+
+func asString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
 func minInt(a int, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
 		return a
 	}
 	return b
@@ -3776,6 +3910,534 @@ func (app *App) GetLimitBreakoutModelRunStatus() (position.RunStatus, error) {
 		return position.RunStatus{}, err
 	}
 	return app.positionService.GetRunStatus("limit_breakout_model")
+}
+
+func (app *App) RunProfitArenaTraining() error {
+	dto, err := app.CreateTask(task.CreateRequest{
+		Name:     "收益最大化擂台训练",
+		TaskType: task.TypeModelTraining,
+		Params: map[string]any{
+			"strategy":                  "profit_arena_model",
+			"start_date":                "20100101",
+			"end_date":                  time.Now().Format("20060102"),
+			"min_train_years":           4,
+			"train_window_years":        4,
+			"min_test_year":             2014,
+			"min_train_rows":            3000,
+			"feature_set":               "v6all",
+			"model_kind":                "hybrid",
+			"target_mode":               "net_return",
+			"score_mode":                "raw",
+			"horizons":                  "20",
+			"top_n":                     "1,2,3,5",
+			"min_pred_return":           "-999,0.02,0.04,0.06,0.08,0.1",
+			"min_market_up_ratio":       "-999",
+			"min_market_ret5":           "-999",
+			"min_market_ret20":          "-999",
+			"min_market_amount_chg5":    "-999",
+			"min_market_volatility20":   "-999",
+			"max_market_drawdown20":     "999",
+			"max_market_volatility20":   "999",
+			"min_industry_up_ratio":     "-999",
+			"max_crash_prob":            "0.08,0.10,0.12,0.15,999",
+			"min_daily_top_score":       "-999",
+			"min_daily_top_pred_return": "-999,0.08,0.10",
+			"max_daily_top_crash_prob":  "0.08,0.10,0.12,999",
+			"scopes":                    "small",
+			"selection_metric":          "capital_annual_return",
+			"min_rank_ic":               0.08,
+			"min_rank_ic_days":          80,
+			"min_capital_annual_return": 0.0,
+			"max_capital_drawdown":      -0.30,
+			"selection_min_trades":      120,
+			"selection_min_trade_years": 8,
+			"n_estimators":              520,
+			"learning_rate":             0.03,
+			"num_leaves":                63,
+			"max_depth":                 7,
+			"min_child_samples":         80,
+			"subsample":                 0.86,
+			"colsample_bytree":          0.86,
+			"reg_alpha":                 0.10,
+			"reg_lambda":                1.2,
+			"crash_filter":              "classifier",
+			"crash_return_threshold":    -0.08,
+			"crash_drawdown_threshold":  -0.12,
+			"crash_n_estimators":        160,
+			"breakout_filter":           "classifier",
+			"breakout_quantile":         0.95,
+			"breakout_n_estimators":     160,
+			"execution_stop_loss":       "0",
+			"execution_take_profit":     "0.20,0.25,0.30",
+			"position_weighting":        "score,score_cap50,equal",
+			"capital_scale_mode":        "none,light_tail_guard",
+			"capital_tranche_fractions": "0.8,0.9,1.0",
+			"progress_every_evals":      250,
+			"threads":                   4,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = app.StartTask(dto.ID)
+	return err
+}
+
+func (app *App) RunProfitArenaLatestInference() (task.DTO, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return task.DTO{}, err
+	}
+	run, err := app.bestProfitArenaRunByCurrentScore()
+	if err != nil {
+		return task.DTO{}, err
+	}
+	if strings.TrimSpace(run.RunID) == "" {
+		return task.DTO{}, errors.New("暂无收益擂台擂主，请先完成擂台训练")
+	}
+	summary := map[string]any{}
+	_ = json.Unmarshal([]byte(run.SummaryJSON), &summary)
+	sourceRunID := strings.TrimSpace(asString(summary["source_run_id"]))
+	if sourceRunID == "" {
+		sourceRunID = run.RunID
+	}
+	modelPath := strings.TrimSpace(run.ModelPath)
+	if !strings.HasSuffix(strings.ToLower(modelPath), ".joblib") && sourceRunID != run.RunID {
+		var sourceModelPath string
+		_ = app.database.Conn().QueryRow(`SELECT COALESCE(model_path, '') FROM profit_arena_runs WHERE run_id = ?`, sourceRunID).Scan(&sourceModelPath)
+		if strings.TrimSpace(sourceModelPath) != "" {
+			modelPath = strings.TrimSpace(sourceModelPath)
+		}
+	}
+	if !strings.HasSuffix(strings.ToLower(modelPath), ".joblib") {
+		return task.DTO{}, fmt.Errorf("当前擂主缺少可推理模型文件: %s", modelPath)
+	}
+	best := mapParam(summary, "best")
+	scope := strings.TrimSpace(asString(best["scope"]))
+	if scope == "" {
+		scope = strings.TrimSpace(run.BestScope)
+	}
+	if scope == "" {
+		scope = "small"
+	}
+	horizon := int(numberFromAny(best["horizon"]))
+	if horizon <= 0 {
+		horizon = int(run.BestHorizon)
+	}
+	if horizon <= 0 {
+		horizon = 20
+	}
+	featureSet := strings.TrimSpace(asString(summary["feature_set"]))
+	if featureSet == "" {
+		featureSet = "v6all"
+	}
+	modelKind := "hybrid"
+	if value := strings.TrimSpace(asString(summary["model_kind"])); value != "" {
+		modelKind = value
+	}
+	targetMode := "net_return"
+	if value := strings.TrimSpace(asString(summary["target_mode"])); value != "" {
+		targetMode = value
+	}
+	scoreMode := "raw"
+	riskFilter := mapParam(summary, "risk_filter")
+	if value := strings.TrimSpace(asString(riskFilter["score_mode"])); value != "" {
+		scoreMode = value
+	}
+	crashFilter := "none"
+	if value := strings.TrimSpace(asString(riskFilter["crash_filter"])); value != "" {
+		crashFilter = value
+	}
+	breakoutFilter := "none"
+	if value := strings.TrimSpace(asString(riskFilter["breakout_filter"])); value != "" {
+		breakoutFilter = value
+	}
+	var latestDaily string
+	_ = app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date), '') FROM data_daily_bars`).Scan(&latestDaily)
+	endDate := strings.TrimSpace(latestDaily)
+	if endDate == "" {
+		endDate = time.Now().Format("20060102")
+	}
+	dto, err := app.CreateTask(task.CreateRequest{
+		Name:     fmt.Sprintf("收益擂台重新推理-%s", endDate),
+		TaskType: task.TypeModelTraining,
+		Params: map[string]any{
+			"strategy":                       "profit_arena_model",
+			"profile":                        "inference",
+			"source_run_id":                  sourceRunID,
+			"model_path":                     modelPath,
+			"start_date":                     "20100101",
+			"end_date":                       endDate,
+			"horizons":                       strconv.Itoa(horizon),
+			"top_n":                          strconv.Itoa(maxInt(20, int(run.BestTopN)*8)),
+			"scopes":                         scope,
+			"feature_set":                    featureSet,
+			"model_kind":                     modelKind,
+			"target_mode":                    targetMode,
+			"score_mode":                     scoreMode,
+			"crash_filter":                   crashFilter,
+			"breakout_filter":                breakoutFilter,
+			"rank_score_weight":              numberFromAnyDefault(riskFilter["rank_score_weight"], 1.0),
+			"pred_score_weight":              numberFromAnyDefault(riskFilter["pred_score_weight"], 0.25),
+			"breakout_score_weight":          numberFromAnyDefault(riskFilter["breakout_score_weight"], 1.0),
+			"crash_score_weight":             numberFromAnyDefault(riskFilter["crash_score_weight"], 0.25),
+			"latest_inference_source_run_id": sourceRunID,
+			"latest_inference_model_path":    modelPath,
+			"latest_inference_scope":         scope,
+			"latest_inference_horizon":       horizon,
+			"threads":                        4,
+		},
+	})
+	if err != nil {
+		return task.DTO{}, err
+	}
+	return app.StartTask(dto.ID)
+}
+
+func (app *App) GetProfitArenaRunStatus() (position.RunStatus, error) {
+	if err := app.ensurePositionService(); err != nil {
+		return position.RunStatus{}, err
+	}
+	return app.positionService.GetRunStatus("profit_arena_model")
+}
+
+func (app *App) GetProfitArenaMarketDate() (string, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return "", err
+	}
+	var latest string
+	_ = app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date), '') FROM data_daily_bars`).Scan(&latest)
+	return strings.TrimSpace(latest), nil
+}
+
+func (app *App) ListProfitArenaRuns(limit int) ([]ProfitArenaRunSummary, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []ProfitArenaRunSummary{}, err
+	}
+	if !app.database.TableExists("profit_arena_runs") {
+		return []ProfitArenaRunSummary{}, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, start_date, end_date, train_mode, model_type,
+		       COALESCE(feature_count, 0), status, COALESCE(best_scope, ''),
+		       COALESCE(best_horizon, 0), COALESCE(best_top_n, 0),
+		       COALESCE(best_compound_return, 0), COALESCE(summary_json, ''),
+		       COALESCE(model_path, ''), updated_at
+		FROM profit_arena_runs
+		ORDER BY updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return []ProfitArenaRunSummary{}, err
+	}
+	defer rows.Close()
+	out := []ProfitArenaRunSummary{}
+	for rows.Next() {
+		var item ProfitArenaRunSummary
+		if err := rows.Scan(&item.RunID, &item.StartDate, &item.EndDate, &item.TrainMode, &item.ModelType, &item.FeatureCount, &item.Status, &item.BestScope, &item.BestHorizon, &item.BestTopN, &item.BestCompoundReturn, &item.SummaryJSON, &item.ModelPath, &item.UpdatedAt); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) bestProfitArenaRunByCurrentScore() (ProfitArenaRunSummary, error) {
+	runs, err := app.ListProfitArenaRuns(100)
+	if err != nil {
+		return ProfitArenaRunSummary{}, err
+	}
+	var best ProfitArenaRunSummary
+	bestScore := math.Inf(-1)
+	for _, run := range runs {
+		if strings.ToLower(strings.TrimSpace(run.Status)) != "success" {
+			continue
+		}
+		score := profitArenaCurrentScore(run)
+		if best.RunID == "" || score > bestScore || (score == bestScore && profitArenaTieBreak(run, best)) {
+			best = run
+			bestScore = score
+		}
+	}
+	return best, nil
+}
+
+func profitArenaCurrentScore(run ProfitArenaRunSummary) float64 {
+	payload := map[string]any{}
+	_ = json.Unmarshal([]byte(run.SummaryJSON), &payload)
+	raw := mapParam(mapParam(payload, "best_challenger_score_components"), "raw")
+	best := mapParam(payload, "best")
+	annual := numberFromAny(raw["capital_annual_return"])
+	if annual == 0 {
+		annual = numberFromAny(best["capital_annual_return"])
+	}
+	drawdown := numberFromAny(raw["capital_max_drawdown"])
+	if drawdown == 0 {
+		drawdown = numberFromAny(best["capital_max_drawdown"])
+	}
+	rankIC := numberFromAny(raw["rank_ic"])
+	if rankIC == 0 {
+		rankIC = numberFromAny(best["rank_ic"])
+	}
+	sharpe := numberFromAny(raw["capital_sharpe"])
+	if sharpe == 0 {
+		sharpe = numberFromAny(best["capital_sharpe"])
+	}
+	calmar := numberFromAny(raw["calmar"])
+	if calmar == 0 && drawdown < 0 {
+		calmar = annual / math.Abs(drawdown)
+	}
+	return 0.4*profitArenaAnnualBucket(annual) + 0.3*profitArenaCalmarBucket(calmar) + 0.2*profitArenaRankICBucket(rankIC) + 0.1*profitArenaSharpeBucket(sharpe)
+}
+
+func profitArenaTieBreak(a ProfitArenaRunSummary, b ProfitArenaRunSummary) bool {
+	ap := map[string]any{}
+	bp := map[string]any{}
+	_ = json.Unmarshal([]byte(a.SummaryJSON), &ap)
+	_ = json.Unmarshal([]byte(b.SummaryJSON), &bp)
+	ab := mapParam(ap, "best")
+	bb := mapParam(bp, "best")
+	aAnnual := numberFromAny(ab["capital_annual_return"])
+	bAnnual := numberFromAny(bb["capital_annual_return"])
+	if aAnnual != bAnnual {
+		return aAnnual > bAnnual
+	}
+	aIC := numberFromAny(ab["rank_ic"])
+	bIC := numberFromAny(bb["rank_ic"])
+	if aIC != bIC {
+		return aIC > bIC
+	}
+	return a.UpdatedAt > b.UpdatedAt
+}
+
+func profitArenaAnnualBucket(value float64) float64 {
+	switch {
+	case value < 0.05:
+		return 0
+	case value < 0.10:
+		return 20
+	case value < 0.15:
+		return 40
+	case value < 0.20:
+		return 60
+	case value < 0.30:
+		return 80
+	case value < 0.40:
+		return 90
+	case value < 0.60:
+		return 95
+	default:
+		return 100
+	}
+}
+
+func profitArenaCalmarBucket(value float64) float64 {
+	switch {
+	case value < 0.5:
+		return 0
+	case value < 1.0:
+		return 30
+	case value < 1.5:
+		return 60
+	case value < 2.0:
+		return 80
+	case value < 2.5:
+		return 90
+	case value < 3.0:
+		return 95
+	default:
+		return 100
+	}
+}
+
+func profitArenaRankICBucket(value float64) float64 {
+	switch {
+	case value < 0.01:
+		return 0
+	case value < 0.03:
+		return 30
+	case value < 0.05:
+		return 50
+	case value < 0.08:
+		return 70
+	case value < 0.10:
+		return 85
+	case value < 0.12:
+		return 95
+	default:
+		return 100
+	}
+}
+
+func profitArenaSharpeBucket(value float64) float64 {
+	switch {
+	case value < 0.5:
+		return 0
+	case value < 1.0:
+		return 40
+	case value < 1.2:
+		return 60
+	case value < 1.5:
+		return 75
+	case value < 2.0:
+		return 90
+	default:
+		return 100
+	}
+}
+
+func (app *App) ListProfitArenaEvaluations(runID string, limit int) ([]ProfitArenaEvaluation, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []ProfitArenaEvaluation{}, err
+	}
+	if !app.database.TableExists("profit_arena_evaluations") {
+		return []ProfitArenaEvaluation{}, nil
+	}
+	runID = app.resolveLatestProfitArenaRunID(runID)
+	if runID == "" {
+		return []ProfitArenaEvaluation{}, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, scope, horizon, top_n, min_pred_return,
+		       min_market_up_ratio, min_market_ret5, min_market_amount_chg5, min_industry_up_ratio, segment,
+		       trade_count, trade_days, avg_return, win_rate, compound_return,
+		       annual_return, max_drawdown, sharpe,
+		       COALESCE(capital_compound_return, 0), COALESCE(capital_annual_return, 0),
+		       COALESCE(capital_max_drawdown, 0), COALESCE(capital_sharpe, 0), COALESCE(capital_final_equity, 1),
+		       COALESCE(summary_json, ''), updated_at
+		FROM profit_arena_evaluations
+		WHERE run_id = ?
+		ORDER BY compound_return DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []ProfitArenaEvaluation{}, err
+	}
+	defer rows.Close()
+	out := []ProfitArenaEvaluation{}
+	for rows.Next() {
+		var item ProfitArenaEvaluation
+		if err := rows.Scan(
+			&item.RunID, &item.Scope, &item.Horizon, &item.TopN, &item.MinPredReturn,
+			&item.MinMarketUpRatio, &item.MinMarketRet5, &item.MinMarketAmountChg5, &item.MinIndustryUpRatio,
+			&item.Segment, &item.TradeCount, &item.TradeDays, &item.AvgReturn, &item.WinRate,
+			&item.CompoundReturn, &item.AnnualReturn, &item.MaxDrawdown, &item.Sharpe,
+			&item.CapitalCompoundReturn, &item.CapitalAnnualReturn, &item.CapitalMaxDrawdown, &item.CapitalSharpe, &item.CapitalFinalEquity,
+			&item.SummaryJSON, &item.UpdatedAt,
+		); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListProfitArenaPredictions(runID string, limit int) ([]ProfitArenaPrediction, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []ProfitArenaPrediction{}, err
+	}
+	if !app.database.TableExists("profit_arena_predictions") {
+		return []ProfitArenaPrediction{}, nil
+	}
+	runID = app.resolveLatestProfitArenaRunID(runID)
+	if runID == "" {
+		return []ProfitArenaPrediction{}, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	priceExpr := "COALESCE(d.close, 0)"
+	if app.mysqlColumnExists("profit_arena_predictions", "price") {
+		priceExpr = "COALESCE(NULLIF(p.price, 0), d.close, 0)"
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT p.run_id, p.scope, p.horizon, p.trade_date, p.ts_code, p.name, p.industry, p.size_bucket,
+		       `+priceExpr+`, p.pred_return, p.model_score, p.realized_return, p.future_return, p.future_max_return,
+		       p.future_drawdown, COALESCE(p.crash_prob, 0), COALESCE(p.exit_date, ''), p.is_latest, COALESCE(p.summary_json, ''), p.updated_at
+		FROM profit_arena_predictions p
+		LEFT JOIN data_daily_bars d ON d.ts_code = p.ts_code AND d.trade_date = p.trade_date
+		WHERE p.run_id = ?
+		ORDER BY p.is_latest DESC, p.model_score DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []ProfitArenaPrediction{}, err
+	}
+	defer rows.Close()
+	out := []ProfitArenaPrediction{}
+	for rows.Next() {
+		var item ProfitArenaPrediction
+		var isLatest int
+		if err := rows.Scan(&item.RunID, &item.Scope, &item.Horizon, &item.TradeDate, &item.TSCode, &item.Name, &item.Industry, &item.SizeBucket, &item.Price, &item.PredReturn, &item.ModelScore, &item.RealizedReturn, &item.FutureReturn, &item.FutureMaxReturn, &item.FutureDrawdown, &item.CrashProb, &item.ExitDate, &isLatest, &item.SummaryJSON, &item.UpdatedAt); err != nil {
+			return out, err
+		}
+		item.IsLatest = isLatest != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) ListProfitArenaFeatures(runID string, limit int) ([]ProfitArenaFeature, error) {
+	if err := app.ensureDatabase(); err != nil {
+		return []ProfitArenaFeature{}, err
+	}
+	if !app.database.TableExists("profit_arena_features") {
+		return []ProfitArenaFeature{}, nil
+	}
+	runID = app.resolveLatestProfitArenaRunID(runID)
+	if runID == "" {
+		return []ProfitArenaFeature{}, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := app.database.Conn().Query(`
+		SELECT run_id, scope, horizon, feature, importance, rank_no
+		FROM profit_arena_features
+		WHERE run_id = ?
+		ORDER BY importance DESC
+		LIMIT ?`, runID, limit)
+	if err != nil {
+		return []ProfitArenaFeature{}, err
+	}
+	defer rows.Close()
+	out := []ProfitArenaFeature{}
+	for rows.Next() {
+		var item ProfitArenaFeature
+		if err := rows.Scan(&item.RunID, &item.Scope, &item.Horizon, &item.Feature, &item.Importance, &item.RankNo); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (app *App) mysqlColumnExists(tableName string, columnName string) bool {
+	if app.database == nil || app.database.Conn() == nil {
+		return false
+	}
+	var count int
+	err := app.database.Conn().QueryRow(`
+		SELECT COUNT(*)
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = ?
+		  AND COLUMN_NAME = ?`, tableName, columnName).Scan(&count)
+	return err == nil && count > 0
+}
+
+func (app *App) resolveLatestProfitArenaRunID(runID string) string {
+	runID = strings.TrimSpace(runID)
+	if runID != "" {
+		return runID
+	}
+	if app.database == nil || app.database.Conn() == nil || !app.database.TableExists("profit_arena_runs") {
+		return ""
+	}
+	_ = app.database.Conn().QueryRow(`SELECT run_id FROM profit_arena_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	return runID
 }
 
 func (app *App) ListLimitUpModelRuns(limit int) ([]LimitUpModelRunSummary, error) {
@@ -4810,7 +5472,7 @@ func (app *App) ConfirmPositionTrades(trades []position.TradeRequest) (position.
 	if err := app.ensurePositionService(); err != nil {
 		return position.Summary{}, err
 	}
-	app.applyLatestExecutionPrices(trades)
+	app.applyLatestCloseExecutionPrices(trades)
 	trades = filterTriggeredTrades(trades)
 	if len(trades) == 0 {
 		return position.Summary{}, errors.New("没有达到条件价的调仓单，已跳过执行")
@@ -4899,22 +5561,13 @@ func (app *App) ClearPositionPool() (position.Summary, error) {
 	return app.positionService.ClearPool(app.settings.DataPath, app.settings.DefaultInitialCash)
 }
 
-func (app *App) applyLatestExecutionPrices(trades []position.TradeRequest) {
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 6)
+func (app *App) applyLatestCloseExecutionPrices(trades []position.TradeRequest) {
 	for i := range trades {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(index int) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			price := app.latestMarketPrice(trades[index].TSCode)
-			if price > 0 {
-				trades[index].Price = price
-			}
-		}(i)
+		price := app.latestClosePrice(trades[i].TSCode)
+		if price > 0 {
+			trades[i].Price = price
+		}
 	}
-	wg.Wait()
 }
 
 func (app *App) latestMarketPrice(tsCode string) float64 {
@@ -5206,6 +5859,8 @@ type accountTarget struct {
 	Sources         []position.Source
 }
 
+const profitArenaRebalanceCapital = 30000.0
+
 func (app *App) buildAccountRebalanceRecommendation() (position.Recommendation, error) {
 	if app.database == nil {
 		return position.Recommendation{}, errors.New("database is not initialized")
@@ -5215,13 +5870,17 @@ func (app *App) buildAccountRebalanceRecommendation() (position.Recommendation, 
 		return position.Recommendation{}, err
 	}
 	targets := map[string]*accountTarget{}
-	date := app.latestRecommendationDate()
+	date, ok := app.mergeProfitArenaTargets(targets, summary)
 	activeVersions := app.accountRebalanceStrategyVersions()
-	app.mergeFactorTargets(targets)
-	app.mergeLimitUpModelTargets(targets)
-	app.mergeBreakoutModelTargets(targets)
-	app.mergeT0Targets(targets, summary)
-	rows := app.buildAccountRebalanceRows(targets, summary, date)
+	if !ok {
+		return position.Recommendation{
+			Date:                   date,
+			GeneratedAt:            time.Now().Format(time.RFC3339),
+			Rows:                   []position.RecommendationItem{},
+			ActiveStrategyVersions: activeVersions,
+		}, nil
+	}
+	rows := app.buildAccountRebalanceRows(targets, summary, date, true)
 	totalWeight := targetWeightSum(targets)
 	nBuy := 0
 	nSell := 0
@@ -5266,12 +5925,17 @@ func (app *App) enrichPositionSources(summary *position.Summary) {
 		return
 	}
 	targets := map[string]*accountTarget{}
-	app.mergeFactorTargets(targets)
-	app.mergeLimitUpModelTargets(targets)
-	app.mergeBreakoutModelTargets(targets)
-	app.mergeT0Targets(targets, *summary)
+	_, ok := app.mergeProfitArenaTargets(targets, *summary)
 	for i := range summary.Positions {
 		item := &summary.Positions[i]
+		if ok {
+			if target := targets[item.TSCode]; target != nil && len(target.Sources) > 0 {
+				item.Sources = compactSources(target.Sources)
+				continue
+			}
+			item.Sources = []position.Source{{Strategy: "profit_arena_model", Weight: 0}}
+			continue
+		}
 		if target := targets[item.TSCode]; target != nil && len(target.Sources) > 0 {
 			item.Sources = compactSources(target.Sources)
 			continue
@@ -5309,6 +5973,19 @@ func actionRank(action string) int {
 func (app *App) latestRecommendationDate() string {
 	dates := []string{}
 	var date string
+	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date),'') FROM profit_arena_predictions WHERE is_latest = 1`).Scan(&date); err == nil && date != "" {
+		dates = append(dates, date)
+	}
+	sort.Strings(dates)
+	if len(dates) > 0 {
+		return dates[len(dates)-1]
+	}
+	return time.Now().Format("20060102")
+}
+
+func (app *App) legacyLatestRecommendationDate() string {
+	dates := []string{}
+	var date string
 	if err := app.database.Conn().QueryRow(`SELECT COALESCE(MAX(trade_date),'') FROM market_limit_momentum_cache`).Scan(&date); err == nil && date != "" {
 		dates = append(dates, date)
 	}
@@ -5340,10 +6017,7 @@ func (app *App) latestRecommendationDate() string {
 func (app *App) accountRebalanceStrategyVersions() []position.RecommendationStrategyVersion {
 	out := []position.RecommendationStrategyVersion{
 		{Strategy: "account_rebalance", Label: "账户调仓决策器", Version: 1, Mode: "active", Weight: 1},
-		{Strategy: "ml_factor_ranker", Label: "通用因子截面", Version: 1, Mode: "source", Weight: 0.25},
-		{Strategy: "limit_up_model", Label: "涨停预警模型", Version: 1, Mode: "source", Weight: 0.25},
-		{Strategy: "limit_breakout_model", Label: "横盘预警模型", Version: 1, Mode: "source", Weight: 0.25},
-		{Strategy: "t0_daily", Label: "做T助手", Version: 1, Mode: "source", Weight: 0.2},
+		{Strategy: "profit_arena_model", Label: "收益擂台擂主", Version: 1, Mode: "source", Weight: 1},
 	}
 	return out
 }
@@ -5400,6 +6074,145 @@ func (app *App) addTargetPlan(targets map[string]*accountTarget, tsCode, name, i
 	if stopPrice > 0 && stopPrice > item.StopPrice {
 		item.StopPrice = stopPrice
 	}
+}
+
+func (app *App) mergeProfitArenaTargets(targets map[string]*accountTarget, summary position.Summary) (string, bool) {
+	run, err := app.bestProfitArenaRunByCurrentScore()
+	if err != nil || strings.TrimSpace(run.RunID) == "" {
+		return app.latestRecommendationDate(), false
+	}
+	summaryPayload := map[string]any{}
+	_ = json.Unmarshal([]byte(run.SummaryJSON), &summaryPayload)
+	best := mapParam(summaryPayload, "best")
+	topN := int(numberFromAny(best["top_n"]))
+	if topN <= 0 {
+		topN = int(run.BestTopN)
+	}
+	if topN <= 0 {
+		topN = 3
+	}
+	maxCrashProb := numberFromAnyDefault(best["max_crash_prob"], 999)
+	takeProfit := math.Max(0, numberFromAnyDefault(best["execution_take_profit"], 0))
+	stopLoss := math.Max(0, numberFromAnyDefault(best["execution_stop_loss"], 0))
+	capitalFraction := numberFromAnyDefault(best["capital_tranche_fraction"], 1)
+	if capitalFraction <= 0 {
+		capitalFraction = 1
+	}
+	if capitalFraction > 1 {
+		capitalFraction = 1
+	}
+	positionWeighting := strings.TrimSpace(asString(best["position_weighting"]))
+	if positionWeighting == "" {
+		positionWeighting = "equal"
+	}
+	rows, err := app.ListProfitArenaPredictions(run.RunID, 300)
+	if err != nil || len(rows) == 0 {
+		return app.latestRecommendationDate(), false
+	}
+	latestDate := ""
+	for _, row := range rows {
+		if row.IsLatest && normalizeDateText(row.TradeDate) > latestDate {
+			latestDate = normalizeDateText(row.TradeDate)
+		}
+	}
+	if latestDate == "" {
+		for _, row := range rows {
+			if normalizeDateText(row.TradeDate) > latestDate {
+				latestDate = normalizeDateText(row.TradeDate)
+			}
+		}
+	}
+	selected := make([]ProfitArenaPrediction, 0, topN)
+	for _, row := range rows {
+		if normalizeDateText(row.TradeDate) != latestDate {
+			continue
+		}
+		if maxCrashProb < 900 && row.CrashProb > maxCrashProb {
+			continue
+		}
+		price := row.Price
+		if price <= 0 {
+			price = app.latestClosePrice(row.TSCode)
+		}
+		if price <= 0 {
+			continue
+		}
+		row.Price = price
+		selected = append(selected, row)
+		if len(selected) >= topN {
+			break
+		}
+	}
+	if len(selected) == 0 {
+		return latestDate, false
+	}
+	assets := summary.TotalAssets
+	if assets <= 0 {
+		assets = app.settings.DefaultInitialCash
+	}
+	if assets <= 0 {
+		assets = profitArenaRebalanceCapital
+	}
+	capital := profitArenaRebalanceCapital * capitalFraction
+	weights := profitArenaTargetWeights(selected, positionWeighting)
+	for i, row := range selected {
+		targetAmount := capital * weights[i]
+		targetWeight := targetAmount / assets
+		buyTrigger := roundPrice(row.Price)
+		sellTarget := 0.0
+		if takeProfit > 0 {
+			sellTarget = roundPrice(row.Price * (1 + takeProfit))
+		}
+		stopPrice := 0.0
+		if stopLoss > 0 {
+			stopPrice = roundPrice(row.Price * (1 - stopLoss))
+		}
+		app.addTargetPlan(targets, row.TSCode, row.Name, row.Industry, row.Price, 0, targetWeight, "profit_arena_model", buyTrigger, sellTarget, stopPrice)
+	}
+	return latestDate, true
+}
+
+func profitArenaTargetWeights(rows []ProfitArenaPrediction, mode string) []float64 {
+	out := make([]float64, len(rows))
+	if len(rows) == 0 {
+		return out
+	}
+	if mode == "equal" {
+		for i := range out {
+			out[i] = 1 / float64(len(out))
+		}
+		return out
+	}
+	total := 0.0
+	for _, row := range rows {
+		total += math.Max(0, row.ModelScore)
+	}
+	if total <= 0 {
+		for i := range out {
+			out[i] = 1 / float64(len(out))
+		}
+		return out
+	}
+	for i, row := range rows {
+		out[i] = math.Max(0, row.ModelScore) / total
+		if mode == "score_cap50" && out[i] > 0.5 {
+			out[i] = 0.5
+		}
+	}
+	total = 0
+	for _, weight := range out {
+		total += weight
+	}
+	if total <= 0 {
+		for i := range out {
+			out[i] = 1 / float64(len(out))
+		}
+		return out
+	}
+	for i := range out {
+		out[i] /= total
+	}
+	return out
 }
 
 func (app *App) mergeBaseRecommendationTargets(targets map[string]*accountTarget) {
@@ -5723,11 +6536,22 @@ func isT0TrialCandidate(action string, score float64, expectedEdge float64, tRat
 	return score >= 76 && expectedEdge > 0 && tRatio > 0
 }
 
-func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, summary position.Summary, decisionDate string) []position.RecommendationItem {
+func (app *App) buildAccountRebalanceRows(targets map[string]*accountTarget, summary position.Summary, decisionDate string, clearUnmatched bool) []position.RecommendationItem {
 	current := map[string]position.Position{}
 	for _, item := range summary.Positions {
 		current[item.TSCode] = item
 		if _, ok := targets[item.TSCode]; !ok {
+			if clearUnmatched {
+				targets[item.TSCode] = &accountTarget{
+					TSCode:       item.TSCode,
+					Name:         item.Name,
+					Industry:     item.Industry,
+					Price:        item.Price,
+					TargetWeight: 0,
+					Sources:      []position.Source{{Strategy: "profit_arena_model", Weight: 0}},
+				}
+				continue
+			}
 			targets[item.TSCode] = &accountTarget{
 				TSCode:       item.TSCode,
 				Name:         item.Name,
@@ -6934,7 +7758,7 @@ func (app *App) CheckExternalDependencies() ([]ExternalDependencyStatus, error) 
 	return []ExternalDependencyStatus{
 		app.checkMySQLDependency(),
 		app.checkTushareDependency(),
-		app.checkDeepSeekDependency(),
+		app.checkLLMDependency(),
 		app.checkRealtimeQuoteDependency(),
 		app.checkWechatDependency(),
 	}, nil
@@ -6999,22 +7823,33 @@ func (app *App) checkTushareDependency() ExternalDependencyStatus {
 }
 
 func (app *App) checkDeepSeekDependency() ExternalDependencyStatus {
-	token := strings.TrimSpace(app.settings.DeepSeekToken)
+	return app.checkLLMDependency()
+}
+
+func (app *App) checkLLMDependency() ExternalDependencyStatus {
+	provider := app.llmProvider()
+	token := strings.TrimSpace(app.llmToken())
+	name := app.llmDisplayName()
 	if token == "" {
-		return dependencyStatus("deepseek", "DeepSeek 模型接口", "AI 调参/复盘", "missing", 0, "config.toml 未配置 [deepseek].token")
+		return dependencyStatus("llm", name, "AI 调参/复盘", "missing", 0, app.llmMissingTokenMessage())
 	}
-	return app.measureDependency("deepseek", "DeepSeek 模型接口", "AI 调参/复盘", func() error {
-		payload, _ := json.Marshal(map[string]any{
-			"model": app.deepSeekModel(),
+	return app.measureDependency("llm", name, "AI 调参/复盘", func() error {
+		body := map[string]any{
+			"model": app.llmModel(),
 			"messages": []map[string]string{
 				{"role": "system", "content": "你是接口健康检查助手。"},
 				{"role": "user", "content": "请只输出 ok 两个字母。"},
 			},
 			"stream": false,
-		})
+		}
+		if provider == "deepseek" {
+			body["thinking"] = map[string]string{"type": "enabled"}
+			body["reasoning_effort"] = "high"
+		}
+		payload, _ := json.Marshal(body)
 		ctx, cancel := context.WithTimeout(app.contextOrBackground(), 12*time.Second)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.deepseek.com/chat/completions", bytes.NewReader(payload))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, app.llmEndpoint(), bytes.NewReader(payload))
 		if err != nil {
 			return err
 		}
@@ -7041,7 +7876,7 @@ func (app *App) checkDeepSeekDependency() ExternalDependencyStatus {
 			return err
 		}
 		if len(parsed.Choices) == 0 {
-			return errors.New("DeepSeek 未返回 choices")
+			return fmt.Errorf("%s 未返回 choices", name)
 		}
 		content := strings.TrimSpace(parsed.Choices[0].Message.Content)
 		reasoning := strings.TrimSpace(parsed.Choices[0].Message.ReasoningContent)
@@ -7050,7 +7885,7 @@ func (app *App) checkDeepSeekDependency() ExternalDependencyStatus {
 			if len(excerpt) > 280 {
 				excerpt = excerpt[:280] + "..."
 			}
-			return fmt.Errorf("DeepSeek 返回为空：%s", excerpt)
+			return fmt.Errorf("%s 返回为空：%s", name, excerpt)
 		}
 		return nil
 	})
@@ -7317,6 +8152,9 @@ func (app *App) RunFactorAutoTune(maxRounds int, trialsPerRound int, useDeepSeek
 			"max_rounds":        maxRounds,
 			"trials_per_round":  trialsPerRound,
 			"use_deepseek":      useDeepSeek,
+			"llm_provider":      app.llmProvider(),
+			"llm_model":         app.llmModel(),
+			"llm_token":         strings.TrimSpace(app.llmToken()),
 			"deepseek_model":    strings.TrimSpace(app.settings.DeepSeekModel),
 			"deepseek_token":    strings.TrimSpace(app.settings.DeepSeekToken),
 			"activate_best":     true,
@@ -7811,12 +8649,19 @@ func modelTrainingStrategy(params map[string]any) string {
 		return "limit_breakout_model"
 	case "t0_daily", "t0_daily_research":
 		return "t0_daily"
+	case "profit_arena_model", "profit_arena":
+		return "profit_arena_model"
 	default:
 		return ""
 	}
 }
 
 func modelTrainingStages(strategy string) []map[string]string {
+	if strategy == "profit_arena_model" {
+		return []map[string]string{
+			{"key": "train_model", "name": modelTrainingStrategyName(strategy) + "训练"},
+		}
+	}
 	return []map[string]string{
 		{"key": "train_model", "name": modelTrainingStrategyName(strategy) + "训练"},
 		{"key": "validate_model_run", "name": "产物完整性检查"},
@@ -7831,6 +8676,8 @@ func modelTrainingStrategyName(strategy string) string {
 		return "横盘预警模型"
 	case "t0_daily":
 		return "做T模型"
+	case "profit_arena_model":
+		return "收益擂台模型"
 	default:
 		return "策略模型"
 	}
@@ -7845,6 +8692,8 @@ func modelTrainingRunID(strategy string) string {
 		prefix = "lbm"
 	case "t0_daily":
 		prefix = "t0_daily"
+	case "profit_arena_model":
+		prefix = "profit_arena"
 	}
 	return prefix + "_" + time.Now().Format("20060102_150405")
 }
@@ -7857,6 +8706,8 @@ func modelTrainingStatusTask(strategy string) string {
 		return "limit_breakout_model"
 	case "t0_daily":
 		return "t0_daily_research"
+	case "profit_arena_model":
+		return "profit_arena_model"
 	default:
 		return strategy
 	}
@@ -7901,6 +8752,96 @@ func modelTrainingStageCommandArgs(strategy string, runID string, stage string, 
 				"--model-history-days", strconv.Itoa(int(numberParam(params, "model_history_days", 2200))),
 				"--limit", strconv.Itoa(int(numberParam(params, "limit", 120))),
 				"--backtest-limit", strconv.Itoa(int(numberParam(params, "backtest_limit", 120))),
+			}, nil
+		case "profit_arena_model":
+			if stringParam(params, "profile", "") == "inference" {
+				return []string{
+					"scripts/profit_arena_worker.py",
+					"--run-id", runID,
+					"--data-path", dataPath,
+					"--start", stringParam(params, "start_date", "20100101"),
+					"--end", endDate,
+					"--horizons", stringParam(params, "horizons", "20"),
+					"--top-n", stringParam(params, "top_n", "20"),
+					"--scopes", stringParam(params, "scopes", "small"),
+					"--feature-set", stringParam(params, "feature_set", "v6all"),
+					"--model-kind", stringParam(params, "model_kind", "hybrid"),
+					"--target-mode", stringParam(params, "target_mode", "net_return"),
+					"--score-mode", stringParam(params, "score_mode", "raw"),
+					"--crash-filter", stringParam(params, "crash_filter", "none"),
+					"--breakout-filter", stringParam(params, "breakout_filter", "none"),
+					"--rank-score-weight", fmt.Sprintf("%g", numberParam(params, "rank_score_weight", 1.0)),
+					"--pred-score-weight", fmt.Sprintf("%g", numberParam(params, "pred_score_weight", 0.25)),
+					"--breakout-score-weight", fmt.Sprintf("%g", numberParam(params, "breakout_score_weight", 1.0)),
+					"--crash-score-weight", fmt.Sprintf("%g", numberParam(params, "crash_score_weight", 0.25)),
+					"--latest-inference-source-run-id", stringParam(params, "latest_inference_source_run_id", stringParam(params, "source_run_id", "")),
+					"--latest-inference-model-path", stringParam(params, "latest_inference_model_path", stringParam(params, "model_path", "")),
+					"--latest-inference-scope", stringParam(params, "latest_inference_scope", stringParam(params, "scopes", "small")),
+					"--latest-inference-horizon", strconv.Itoa(int(numberParam(params, "latest_inference_horizon", numberParam(params, "horizon", 20)))),
+					"--threads", strconv.Itoa(int(numberParam(params, "threads", 4))),
+				}, nil
+			}
+			return []string{
+				"scripts/profit_arena_worker.py",
+				"--run-id", runID,
+				"--data-path", dataPath,
+				"--start", stringParam(params, "start_date", "20100101"),
+				"--end", endDate,
+				"--min-train-years", strconv.Itoa(int(numberParam(params, "min_train_years", 4))),
+				"--train-window-years", strconv.Itoa(int(numberParam(params, "train_window_years", 4))),
+				"--min-test-year", strconv.Itoa(int(numberParam(params, "min_test_year", 2014))),
+				"--min-train-rows", strconv.Itoa(int(numberParam(params, "min_train_rows", 3000))),
+				"--arena-name", stringParam(params, "arena_name", "profit_nolev_rankic_sharpe_dd20_ann45"),
+				"--horizons", stringParam(params, "horizons", "10"),
+				"--top-n", stringParam(params, "top_n", "1,2,3,5,10"),
+				"--min-pred-return=" + stringParam(params, "min_pred_return", "-999,0,0.005,0.01,0.02,0.03,0.05,0.08,0.1"),
+				"--min-market-up-ratio=" + stringParam(params, "min_market_up_ratio", "-999"),
+				"--min-market-ret5=" + stringParam(params, "min_market_ret5", "-999"),
+				"--min-market-ret20=" + stringParam(params, "min_market_ret20", "-999"),
+				"--min-market-amount-chg5=" + stringParam(params, "min_market_amount_chg5", "-999,0"),
+				"--min-market-volatility20=" + stringParam(params, "min_market_volatility20", "-999"),
+				"--max-market-drawdown20=" + stringParam(params, "max_market_drawdown20", "999"),
+				"--max-market-volatility20=" + stringParam(params, "max_market_volatility20", "999"),
+				"--min-industry-up-ratio=" + stringParam(params, "min_industry_up_ratio", "-999"),
+				"--max-crash-prob=" + stringParam(params, "max_crash_prob", "999"),
+				"--min-daily-top-score=" + stringParam(params, "min_daily_top_score", "-999"),
+				"--min-daily-top-pred-return=" + stringParam(params, "min_daily_top_pred_return", "-999"),
+				"--max-daily-top-crash-prob=" + stringParam(params, "max_daily_top_crash_prob", "999"),
+				"--scopes", stringParam(params, "scopes", "all"),
+				"--feature-set", stringParam(params, "feature_set", "all"),
+				"--model-kind", stringParam(params, "model_kind", "regressor"),
+				"--target-mode", stringParam(params, "target_mode", "net_return"),
+				"--score-mode", stringParam(params, "score_mode", "blended"),
+				"--crash-filter", stringParam(params, "crash_filter", "none"),
+				"--crash-return-threshold", fmt.Sprintf("%g", numberParam(params, "crash_return_threshold", -0.08)),
+				"--crash-drawdown-threshold", fmt.Sprintf("%g", numberParam(params, "crash_drawdown_threshold", -0.12)),
+				"--crash-n-estimators", strconv.Itoa(int(numberParam(params, "crash_n_estimators", 160))),
+				"--breakout-filter", stringParam(params, "breakout_filter", "none"),
+				"--breakout-quantile", fmt.Sprintf("%g", numberParam(params, "breakout_quantile", 0.95)),
+				"--breakout-n-estimators", strconv.Itoa(int(numberParam(params, "breakout_n_estimators", 160))),
+				"--selection-metric", stringParam(params, "selection_metric", "capital_annual_return"),
+				"--min-rank-ic", fmt.Sprintf("%g", numberParam(params, "min_rank_ic", 0)),
+				"--min-rank-ic-days", strconv.Itoa(int(numberParam(params, "min_rank_ic_days", 0))),
+				"--min-capital-annual-return", fmt.Sprintf("%g", numberParam(params, "min_capital_annual_return", 0)),
+				"--max-capital-drawdown", fmt.Sprintf("%g", numberParam(params, "max_capital_drawdown", -0.25)),
+				"--selection-min-trades", strconv.Itoa(int(numberParam(params, "selection_min_trades", 20))),
+				"--selection-min-trade-years", strconv.Itoa(int(numberParam(params, "selection_min_trade_years", 0))),
+				"--n-estimators", strconv.Itoa(int(numberParam(params, "n_estimators", 80))),
+				"--learning-rate", fmt.Sprintf("%g", numberParam(params, "learning_rate", 0.05)),
+				"--num-leaves", strconv.Itoa(int(numberParam(params, "num_leaves", 31))),
+				"--max-depth", strconv.Itoa(int(numberParam(params, "max_depth", -1))),
+				"--min-child-samples", strconv.Itoa(int(numberParam(params, "min_child_samples", 40))),
+				"--subsample", fmt.Sprintf("%g", numberParam(params, "subsample", 0.9)),
+				"--colsample-bytree", fmt.Sprintf("%g", numberParam(params, "colsample_bytree", 0.9)),
+				"--reg-alpha", fmt.Sprintf("%g", numberParam(params, "reg_alpha", 0)),
+				"--reg-lambda", fmt.Sprintf("%g", numberParam(params, "reg_lambda", 0)),
+				"--execution-stop-loss=" + stringParam(params, "execution_stop_loss", "0"),
+				"--execution-take-profit=" + stringParam(params, "execution_take_profit", "0"),
+				"--position-weighting", stringParam(params, "position_weighting", "equal"),
+				"--capital-scale-mode", stringParam(params, "capital_scale_mode", "none"),
+				"--capital-tranche-fractions", stringParam(params, "capital_tranche_fractions", "1.0"),
+				"--progress-every-evals", strconv.Itoa(int(numberParam(params, "progress_every_evals", 250))),
+				"--threads", strconv.Itoa(int(numberParam(params, "threads", 4))),
 			}, nil
 		default:
 			return nil, errors.New("unsupported model training strategy")
@@ -10930,26 +11871,32 @@ func (app *App) callDeepSeekForPortfolioAnalysis(contextPayload map[string]any) 
 
 JSON:
 ` + string(data)
+	provider := app.llmProvider()
+	if strings.TrimSpace(app.llmToken()) == "" {
+		return "", nil, errors.New(app.llmMissingTokenMessage())
+	}
 	body := map[string]any{
-		"model": app.deepSeekModel(),
+		"model": app.llmModel(),
 		"messages": []map[string]string{
 			{"role": "system", "content": "你是量化策略研究员，擅长根据回测指标和策略规则做归因、风险诊断和下一轮实验设计。输出要简洁、具体、可验证。"},
 			{"role": "user", "content": userPrompt},
 		},
-		"thinking":         map[string]string{"type": "enabled"},
-		"reasoning_effort": "high",
-		"stream":           false,
+		"stream": false,
+	}
+	if provider == "deepseek" {
+		body["thinking"] = map[string]string{"type": "enabled"}
+		body["reasoning_effort"] = "high"
 	}
 	requestBody, err := json.Marshal(body)
 	if err != nil {
 		return "", nil, err
 	}
-	req, err := http.NewRequestWithContext(app.ctx, http.MethodPost, "https://api.deepseek.com/chat/completions", bytes.NewReader(requestBody))
+	req, err := http.NewRequestWithContext(app.ctx, http.MethodPost, app.llmEndpoint(), bytes.NewReader(requestBody))
 	if err != nil {
 		return "", nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(app.settings.DeepSeekToken))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(app.llmToken()))
 	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -10958,7 +11905,7 @@ JSON:
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", nil, fmt.Errorf("DeepSeek 请求失败：HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return "", nil, fmt.Errorf("%s 请求失败：HTTP %d %s", app.llmDisplayName(), resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	var parsed struct {
 		Choices []struct {
@@ -10971,7 +11918,7 @@ JSON:
 		return "", nil, err
 	}
 	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
-		return "", nil, errors.New("DeepSeek 返回为空")
+		return "", nil, fmt.Errorf("%s 返回为空", app.llmDisplayName())
 	}
 	raw := strings.TrimSpace(parsed.Choices[0].Message.Content)
 	recommendation, err := parseDeepSeekJSON(raw)
@@ -11233,11 +12180,71 @@ func safeAvgAny(sum float64, count int) any {
 }
 
 func (app *App) deepSeekModel() string {
-	model := strings.TrimSpace(app.settings.DeepSeekModel)
+	return app.providerModel("deepseek")
+}
+
+func (app *App) llmProvider() string {
+	switch strings.ToLower(strings.TrimSpace(app.settings.LLMProvider)) {
+	case "deepseek":
+		return "deepseek"
+	case "openai", "chatgpt", "chat_gpt", "gpt":
+		return "openai"
+	default:
+		if strings.TrimSpace(app.settings.OpenAIToken) != "" {
+			return "openai"
+		}
+		if strings.TrimSpace(app.settings.DeepSeekToken) != "" {
+			return "deepseek"
+		}
+		return "openai"
+	}
+}
+
+func (app *App) llmToken() string {
+	if app.llmProvider() == "deepseek" {
+		return strings.TrimSpace(app.settings.DeepSeekToken)
+	}
+	return strings.TrimSpace(app.settings.OpenAIToken)
+}
+
+func (app *App) llmModel() string {
+	return app.providerModel(app.llmProvider())
+}
+
+func (app *App) providerModel(provider string) string {
+	if provider == "deepseek" {
+		model := strings.TrimSpace(app.settings.DeepSeekModel)
+		if model == "" {
+			return "deepseek-v4-pro"
+		}
+		return model
+	}
+	model := strings.TrimSpace(app.settings.OpenAIModel)
 	if model == "" {
-		return "deepseek-v4-pro"
+		return "gpt-5.5"
 	}
 	return model
+}
+
+func (app *App) llmEndpoint() string {
+	if app.llmProvider() == "deepseek" {
+		return "https://api.deepseek.com/chat/completions"
+	}
+	return "https://api.openai.com/v1/chat/completions"
+}
+
+func (app *App) llmDisplayName() string {
+	if app.llmProvider() == "deepseek" {
+		return "DeepSeek 模型接口"
+	}
+	return "ChatGPT/OpenAI 模型接口"
+}
+
+func (app *App) llmMissingTokenMessage() string {
+	if app.llmProvider() == "deepseek" {
+		return "config.toml 未配置 [deepseek].token"
+	}
+	return "config.toml 未配置 [openai].token"
 }
 
 func nullableFloat(value sql.NullFloat64) any {
@@ -11457,6 +12464,15 @@ func marketEvaluationTaskCommand(taskType task.Type, dataPath string, params map
 		}
 		if params["use_deepseek"] == true || strings.EqualFold(strings.TrimSpace(fmt.Sprint(params["use_deepseek"])), "true") {
 			args = append(args, "--use-deepseek")
+			if provider := strings.TrimSpace(fmt.Sprint(params["llm_provider"])); provider != "" && provider != "<nil>" {
+				args = append(args, "--llm-provider", provider)
+			}
+			if model := strings.TrimSpace(fmt.Sprint(params["llm_model"])); model != "" && model != "<nil>" {
+				args = append(args, "--llm-model", model)
+			}
+			if token := strings.TrimSpace(fmt.Sprint(params["llm_token"])); token != "" && token != "<nil>" {
+				args = append(args, "--llm-token", token)
+			}
 			if model := strings.TrimSpace(fmt.Sprint(params["deepseek_model"])); model != "" && model != "<nil>" {
 				args = append(args, "--deepseek-model", model)
 			}
@@ -12379,6 +13395,8 @@ func (app *App) modelTrainingStageSummary(strategy string, runID string, stage s
 		return readSummaryJSON(app.database.Conn(), `SELECT summary_json FROM limit_breakout_model_runs WHERE run_id = ?`, runID)
 	case "t0_daily":
 		return readSummaryJSON(app.database.Conn(), `SELECT summary_json FROM t0_daily_runs WHERE run_id = ?`, runID)
+	case "profit_arena_model":
+		return readSummaryJSON(app.database.Conn(), `SELECT summary_json FROM profit_arena_runs WHERE run_id = ?`, runID)
 	default:
 		return ""
 	}

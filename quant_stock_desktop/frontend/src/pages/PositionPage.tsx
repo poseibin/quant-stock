@@ -42,6 +42,7 @@ export const strategyNames: Record<string, string> = {
   limit_breakout: '横盘预警',
   t0_daily: '做T助手',
   ml_factor_ranker: '通用因子',
+  profit_arena_model: '收益擂台',
   limit_up_model: '涨停预警',
   limit_breakout_model: '横盘预警'
 }

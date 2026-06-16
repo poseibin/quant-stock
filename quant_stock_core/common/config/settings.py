@@ -40,17 +40,28 @@ def _config_list(section: str, key: str) -> list[str]:
     return []
 
 
+def _config_path(section: str, key: str, default: Path) -> Path:
+    raw = _config_str(section, key, "")
+    path = Path(raw) if raw else default
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path.resolve()
+
+
 # ---------------------------------------------------------------------------
 # 数据源
 # ---------------------------------------------------------------------------
 TUSHARE_TOKEN: Final[str] = _config_str("data", "tushare_token")
+LLM_PROVIDER: Final[str] = _config_str("llm", "provider", "openai")
+OPENAI_TOKEN: Final[str] = _config_str("openai", "token")
+OPENAI_MODEL: Final[str] = _config_str("openai", "model", "gpt-5.5")
 DEEPSEEK_TOKEN: Final[str] = _config_str("deepseek", "token")
 DEEPSEEK_MODEL: Final[str] = _config_str("deepseek", "model", "deepseek-v4-pro")
 
 # ---------------------------------------------------------------------------
 # 存储路径
 # ---------------------------------------------------------------------------
-DATA_ROOT: Final[Path] = Path(_config_str("storage", "data_root", str(PROJECT_ROOT.parent / "data_store"))).resolve()
+DATA_ROOT: Final[Path] = _config_path("storage", "data_root", PROJECT_ROOT.parent / "data_store")
 RAW_DIR: Final[Path] = DATA_ROOT / "raw"
 FACTOR_CACHE_DIR: Final[Path] = DATA_ROOT / "factor_cache"
 BACKTEST_DIR: Final[Path] = DATA_ROOT / "backtest_results"

@@ -56,6 +56,9 @@ export namespace config {
 	    default_rebalance_freq: number;
 	    task_concurrency: number;
 	    tushare_token: string;
+	    llm_provider: string;
+	    openai_token: string;
+	    openai_model: string;
 	    deepseek_token: string;
 	    deepseek_model: string;
 	    strategies: Record<string, StrategySettings>;
@@ -77,6 +80,9 @@ export namespace config {
 	        this.default_rebalance_freq = source["default_rebalance_freq"];
 	        this.task_concurrency = source["task_concurrency"];
 	        this.tushare_token = source["tushare_token"];
+	        this.llm_provider = source["llm_provider"];
+	        this.openai_token = source["openai_token"];
+	        this.openai_model = source["openai_model"];
 	        this.deepseek_token = source["deepseek_token"];
 	        this.deepseek_model = source["deepseek_model"];
 	        this.strategies = this.convertValues(source["strategies"], StrategySettings, true);
@@ -1339,6 +1345,176 @@ export namespace main {
 	        this.direction = source["direction"];
 	        this.reason = source["reason"];
 	        this.evidence_json = source["evidence_json"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class ProfitArenaEvaluation {
+	    run_id: string;
+	    scope: string;
+	    horizon: number;
+	    top_n: number;
+	    min_pred_return: number;
+	    min_market_up_ratio: number;
+	    min_market_ret5: number;
+	    min_market_amount_chg5: number;
+	    min_industry_up_ratio: number;
+	    segment: string;
+	    trade_count: number;
+	    trade_days: number;
+	    avg_return: number;
+	    win_rate: number;
+	    compound_return: number;
+	    annual_return: number;
+	    max_drawdown: number;
+	    sharpe: number;
+	    capital_compound_return: number;
+	    capital_annual_return: number;
+	    capital_max_drawdown: number;
+	    capital_sharpe: number;
+	    capital_final_equity: number;
+	    summary_json: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProfitArenaEvaluation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.scope = source["scope"];
+	        this.horizon = source["horizon"];
+	        this.top_n = source["top_n"];
+	        this.min_pred_return = source["min_pred_return"];
+	        this.min_market_up_ratio = source["min_market_up_ratio"];
+	        this.min_market_ret5 = source["min_market_ret5"];
+	        this.min_market_amount_chg5 = source["min_market_amount_chg5"];
+	        this.min_industry_up_ratio = source["min_industry_up_ratio"];
+	        this.segment = source["segment"];
+	        this.trade_count = source["trade_count"];
+	        this.trade_days = source["trade_days"];
+	        this.avg_return = source["avg_return"];
+	        this.win_rate = source["win_rate"];
+	        this.compound_return = source["compound_return"];
+	        this.annual_return = source["annual_return"];
+	        this.max_drawdown = source["max_drawdown"];
+	        this.sharpe = source["sharpe"];
+	        this.capital_compound_return = source["capital_compound_return"];
+	        this.capital_annual_return = source["capital_annual_return"];
+	        this.capital_max_drawdown = source["capital_max_drawdown"];
+	        this.capital_sharpe = source["capital_sharpe"];
+	        this.capital_final_equity = source["capital_final_equity"];
+	        this.summary_json = source["summary_json"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class ProfitArenaFeature {
+	    run_id: string;
+	    scope: string;
+	    horizon: number;
+	    feature: string;
+	    importance: number;
+	    rank_no: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProfitArenaFeature(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.scope = source["scope"];
+	        this.horizon = source["horizon"];
+	        this.feature = source["feature"];
+	        this.importance = source["importance"];
+	        this.rank_no = source["rank_no"];
+	    }
+	}
+	export class ProfitArenaPrediction {
+	    run_id: string;
+	    scope: string;
+	    horizon: number;
+	    trade_date: string;
+	    ts_code: string;
+	    name: string;
+	    industry: string;
+	    size_bucket: string;
+	    price: number;
+	    pred_return: number;
+	    model_score: number;
+	    realized_return: number;
+	    future_return: number;
+	    future_max_return: number;
+	    future_drawdown: number;
+	    crash_prob: number;
+	    exit_date: string;
+	    is_latest: boolean;
+	    summary_json: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProfitArenaPrediction(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.scope = source["scope"];
+	        this.horizon = source["horizon"];
+	        this.trade_date = source["trade_date"];
+	        this.ts_code = source["ts_code"];
+	        this.name = source["name"];
+	        this.industry = source["industry"];
+	        this.size_bucket = source["size_bucket"];
+	        this.price = source["price"];
+	        this.pred_return = source["pred_return"];
+	        this.model_score = source["model_score"];
+	        this.realized_return = source["realized_return"];
+	        this.future_return = source["future_return"];
+	        this.future_max_return = source["future_max_return"];
+	        this.future_drawdown = source["future_drawdown"];
+	        this.crash_prob = source["crash_prob"];
+	        this.exit_date = source["exit_date"];
+	        this.is_latest = source["is_latest"];
+	        this.summary_json = source["summary_json"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class ProfitArenaRunSummary {
+	    run_id: string;
+	    start_date: string;
+	    end_date: string;
+	    train_mode: string;
+	    model_type: string;
+	    feature_count: number;
+	    status: string;
+	    best_scope: string;
+	    best_horizon: number;
+	    best_top_n: number;
+	    best_compound_return: number;
+	    summary_json: string;
+	    model_path: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProfitArenaRunSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.start_date = source["start_date"];
+	        this.end_date = source["end_date"];
+	        this.train_mode = source["train_mode"];
+	        this.model_type = source["model_type"];
+	        this.feature_count = source["feature_count"];
+	        this.status = source["status"];
+	        this.best_scope = source["best_scope"];
+	        this.best_horizon = source["best_horizon"];
+	        this.best_top_n = source["best_top_n"];
+	        this.best_compound_return = source["best_compound_return"];
+	        this.summary_json = source["summary_json"];
+	        this.model_path = source["model_path"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}

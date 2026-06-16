@@ -110,6 +110,17 @@ def restricted_exclude_sql(alias: str = "") -> str:
     )
 
 
+def restricted_ts_code_exclude_sql(column: str = "ts_code") -> str:
+    return (
+        f"COALESCE({column}, '') NOT LIKE '688%' "
+        f"AND COALESCE({column}, '') NOT LIKE '300%' "
+        f"AND COALESCE({column}, '') NOT LIKE '301%' "
+        f"AND COALESCE({column}, '') NOT LIKE '4%' "
+        f"AND COALESCE({column}, '') NOT LIKE '8%' "
+        f"AND COALESCE({column}, '') NOT LIKE '%.BJ'"
+    )
+
+
 def price_limit_rate(ts_code: object, name: object = "", exchange: object = "", market: object = "") -> float:
     code = normalize_ts_code(ts_code)
     upper_name = str(name or "").upper()
