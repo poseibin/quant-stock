@@ -4011,6 +4011,13 @@ func (app *App) RunProfitArenaLatestInference() (task.DTO, error) {
 	if !strings.HasSuffix(strings.ToLower(modelPath), ".joblib") {
 		return task.DTO{}, fmt.Errorf("当前擂主缺少可推理模型文件: %s", modelPath)
 	}
+	resolvedModelPath := modelPath
+	if !filepath.IsAbs(resolvedModelPath) {
+		resolvedModelPath = filepath.Join(app.quantStockCorePath(), resolvedModelPath)
+	}
+	if !pathExists(resolvedModelPath) {
+		return task.DTO{}, fmt.Errorf("当前擂主模型文件不存在，请重新训练擂台: %s", modelPath)
+	}
 	best := mapParam(summary, "best")
 	scope := strings.TrimSpace(asString(best["scope"]))
 	if scope == "" {

@@ -4394,13 +4394,13 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
                 joblib.dump(model, current_model_path)
                 progress_log("model_write_done", run_id=args.run_id, path=str(current_model_path))
             else:
-                current_model_path = out_dir / f"model_{scope}_{horizon}d.joblib"
+                current_model_path = None
             current_best = {**result["best_eval"], "scope": scope, "horizon": int(horizon)}
             rank_key = arena_score(current_best, args)
             if best_rank_key is None or rank_key > best_rank_key:
                 best_payload = current_best
                 best_rank_key = rank_key
-                best_model_path = str(current_model_path)
+                best_model_path = str(current_model_path) if current_model_path is not None else ""
 
     if str(getattr(args, "fusion_mode", "none") or "none").lower() == "horizon_blend":
         for scope in args.scope_values:
