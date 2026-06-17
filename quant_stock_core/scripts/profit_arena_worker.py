@@ -4214,6 +4214,48 @@ def prepare_arena_args(args: argparse.Namespace) -> None:
     args.scope_values = parse_str_list(args.scopes)
 
 
+def _model_feature_names(model: Any) -> list[str] | None:
+    """Return the feature names a fitted model was trained on, if available.
+
+    The arena feature list has grown over time, so a champion model file may
+    have been trained on fewer columns than the current panel produces. Aligning
+    inference inputs to the model's own training features avoids LightGBM's
+    "number of features in data ... not the same as ... training data" error.
+    """
+    candidates: list[Any] = []
+    if isinstance(model, dict):
+        for key in ("regressor", "ranker", "main"):
+            if key in model:
+                candidates.append(model[key])
+        if not candidates:
+            candidates.extend(model.values())
+    else:
+        candidates.append(model)
+    for candidate in candidates:
+        names = getattr(candidate, "feature_name_", None)
+        if names is None:
+            names = getattr(candidate, "feature_names_in_", None)
+        if names is None:
+            booster = getattr(candidate, "booster_", None)
+            if booster is not None:
+                try:
+                    names = booster.feature_name()
+                except Exception:
+                    names = None
+        if names is not None and len(names) > 0:
+            return [str(name) for name in names]
+    return None
+
+
+def _aligned_features(latest_pool: "pd.DataFrame", model: Any, default_columns: list[str], role: str) -> "pd.DataFrame":
+    """Build the model input matrix using the model's own training features."""
+    columns = _model_feature_names(model) or list(default_columns)
+    missing = [col for col in columns if col not in latest_pool.columns]
+    if missing:
+        raise RuntimeError(f"最新截面缺少 {role} 模型所需特征: {', '.join(missing[:10])}")
+    return latest_pool[columns].astype(float)
+
+
 def latest_inference_model(args: argparse.Namespace) -> dict[str, Any]:
     prepare_arena_args(args)
     out_dir = Path(args.data_path) / "profit_arena" / args.run_id
@@ -4243,7 +4285,6 @@ def latest_inference_model(args: argparse.Namespace) -> dict[str, Any]:
     latest_pool = sample[sample["trade_date"].astype(str).eq(latest_date)].copy()
     if latest_pool.empty:
         raise RuntimeError("最新截面没有可推理股票")
-    x = latest_pool[args.feature_columns].astype(float)
     if isinstance(saved_model, dict) and "main" in saved_model:
         model = saved_model.get("main")
         crash_model = saved_model.get("crash")
@@ -4261,23 +4302,33 @@ def latest_inference_model(args: argparse.Namespace) -> dict[str, Any]:
     if isinstance(model, dict):
         if "regressor" not in model or "ranker" not in model:
             raise RuntimeError("hybrid 擂主模型缺少 regressor/ranker，拒绝生成最新推荐")
-        latest_pool["pred_return"] = model["regressor"].predict(x).astype(float)
-        latest_pool["rank_score_raw"] = model["ranker"].predict(x).astype(float)
+        latest_pool["pred_return"] = model["regressor"].predict(
+            _aligned_features(latest_pool, model["regressor"], args.feature_columns, "regressor")
+        ).astype(float)
+        latest_pool["rank_score_raw"] = model["ranker"].predict(
+            _aligned_features(latest_pool, model["ranker"], args.feature_columns, "ranker")
+        ).astype(float)
     else:
         if not hasattr(model, "predict"):
             raise RuntimeError("擂主模型不支持 predict，拒绝生成最新推荐")
-        latest_pool["pred_return"] = model.predict(x).astype(float)
+        latest_pool["pred_return"] = model.predict(
+            _aligned_features(latest_pool, model, args.feature_columns, "main")
+        ).astype(float)
         latest_pool["rank_score_raw"] = latest_pool["pred_return"] if args.model_kind == "ranker" else latest_pool["pred_return"] * 100.0
     if crash_model is not None:
         if not hasattr(crash_model, "predict_proba"):
             raise RuntimeError("crash 模型不支持 predict_proba，拒绝生成最新推荐")
-        latest_pool["crash_prob"] = crash_model.predict_proba(x)[:, 1].astype(float)
+        latest_pool["crash_prob"] = crash_model.predict_proba(
+            _aligned_features(latest_pool, crash_model, args.feature_columns, "crash")
+        )[:, 1].astype(float)
     else:
         latest_pool["crash_prob"] = 0.0
     if breakout_model is not None:
         if not hasattr(breakout_model, "predict_proba"):
             raise RuntimeError("breakout 模型不支持 predict_proba，拒绝生成最新推荐")
-        latest_pool["breakout_prob"] = breakout_model.predict_proba(x)[:, 1].astype(float)
+        latest_pool["breakout_prob"] = breakout_model.predict_proba(
+            _aligned_features(latest_pool, breakout_model, args.feature_columns, "breakout")
+        )[:, 1].astype(float)
     else:
         latest_pool["breakout_prob"] = 0.0
     latest_pool["model_score"] = latest_pool["rank_score_raw"]
