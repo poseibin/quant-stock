@@ -6113,7 +6113,6 @@ func (app *App) mergeProfitArenaTargets(targets map[string]*accountTarget, summa
 	if topN <= 0 {
 		topN = 3
 	}
-	maxCrashProb := numberFromAnyDefault(best["max_crash_prob"], 999)
 	takeProfit := math.Max(0, numberFromAnyDefault(best["execution_take_profit"], 0))
 	stopLoss := math.Max(0, numberFromAnyDefault(best["execution_stop_loss"], 0))
 	capitalFraction := numberFromAnyDefault(best["capital_tranche_fraction"], 1)
@@ -6127,7 +6126,7 @@ func (app *App) mergeProfitArenaTargets(targets map[string]*accountTarget, summa
 	if positionWeighting == "" {
 		positionWeighting = "equal"
 	}
-	rows, err := app.ListProfitArenaPredictions(run.RunID, 300)
+	rows, err := app.ListProfitArenaPredictions("", 300)
 	if err != nil || len(rows) == 0 {
 		return app.latestRecommendationDate(), false
 	}
@@ -6147,9 +6146,6 @@ func (app *App) mergeProfitArenaTargets(targets map[string]*accountTarget, summa
 	selected := make([]ProfitArenaPrediction, 0, topN)
 	for _, row := range rows {
 		if normalizeDateText(row.TradeDate) != latestDate {
-			continue
-		}
-		if maxCrashProb < 900 && row.CrashProb > maxCrashProb {
 			continue
 		}
 		price := row.Price
