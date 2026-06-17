@@ -4013,11 +4013,12 @@ func (app *App) RunProfitArenaLatestInference() (task.DTO, error) {
 	}
 	resolvedModelPath := modelPath
 	if !filepath.IsAbs(resolvedModelPath) {
-		resolvedModelPath = filepath.Join(app.quantStockCorePath(), resolvedModelPath)
+		resolvedModelPath = filepath.Join(filepath.Dir(app.settings.DataPath), resolvedModelPath)
 	}
 	if !pathExists(resolvedModelPath) {
 		return task.DTO{}, fmt.Errorf("当前擂主模型文件不存在，请重新训练擂台: %s", modelPath)
 	}
+	modelPath = resolvedModelPath
 	best := mapParam(summary, "best")
 	scope := strings.TrimSpace(asString(best["scope"]))
 	if scope == "" {
