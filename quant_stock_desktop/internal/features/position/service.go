@@ -91,9 +91,44 @@ func (service *Service) GetSummary(dataPath string) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	trades, err := service.GetTrades(80)
+	if err != nil {
+		return Summary{}, err
+	}
 	s.Positions = positions
+	s.Trades = trades
 	s.NHoldings = len(positions)
 	return s, nil
+}
+
+func (service *Service) GetTrades(limit int) ([]TradeRecord, error) {
+	if service.db == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 80
+	}
+	rows, err := service.db.Conn().Query(`SELECT t.id, t.ts_code, COALESCE(h.name, s.name, ''), t.side, t.shares, t.price, t.amount,
+	    t.trade_date, COALESCE(t.pnl,0), COALESCE(t.fee,0), COALESCE(t.net_amount,0),
+	    COALESCE(t.cash_after,0), COALESCE(t.position_pnl,0)
+	    FROM portfolio_pool_trades t
+	    LEFT JOIN portfolio_pool_holdings h ON h.ts_code = t.ts_code
+	    LEFT JOIN data_stock_basic s ON s.ts_code = t.ts_code
+	    ORDER BY t.id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]TradeRecord, 0)
+	for rows.Next() {
+		var item TradeRecord
+		if err := rows.Scan(&item.ID, &item.TSCode, &item.Name, &item.Action, &item.Shares, &item.Price, &item.Amount,
+			&item.Date, &item.RealizedPnL, &item.Fee, &item.NetAmount, &item.CashAfter, &item.PositionPnL); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (service *Service) GetHoldings() ([]Position, error) {

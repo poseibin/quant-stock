@@ -40,6 +40,10 @@ def _ensure_fee_columns(conn) -> None:
         add_column(conn, "portfolio_pool_trades", "fee", "REAL NOT NULL DEFAULT 0")
     if "net_amount" not in cols:
         add_column(conn, "portfolio_pool_trades", "net_amount", "REAL NOT NULL DEFAULT 0")
+    if "cash_after" not in cols:
+        add_column(conn, "portfolio_pool_trades", "cash_after", "REAL NOT NULL DEFAULT 0")
+    if "position_pnl" not in cols:
+        add_column(conn, "portfolio_pool_trades", "position_pnl", "REAL NOT NULL DEFAULT 0")
     summary_cols = table_columns(conn, "portfolio_pool_summary")
     if "total_fee" not in summary_cols:
         add_column(conn, "portfolio_pool_summary", "total_fee", "REAL NOT NULL DEFAULT 0")
@@ -124,7 +128,7 @@ def list_trades(limit: int = 200) -> list[dict[str, Any]]:
         _ensure_fee_columns(conn)
         rows = conn.execute(
             """SELECT id, ts_code, side, shares, price, amount, trade_date, pnl, created_at,
-                      COALESCE(fee,0), COALESCE(net_amount,0)
+                      COALESCE(fee,0), COALESCE(net_amount,0), COALESCE(cash_after,0), COALESCE(position_pnl,0)
                FROM portfolio_pool_trades ORDER BY id DESC LIMIT ?""",
             (int(limit),),
         ).fetchall()
@@ -141,6 +145,8 @@ def list_trades(limit: int = 200) -> list[dict[str, Any]]:
             "created_at": r[8] or "",
             "fee": float(r[9] or 0),
             "net_amount": float(r[10] or 0),
+            "cash_after": float(r[11] or 0),
+            "position_pnl": float(r[12] or 0),
         }
         for r in rows
     ]
@@ -195,6 +201,7 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                 cur_cost = float(row[1]) if row else 0.0
 
                 realized_pnl = 0.0
+                position_pnl = 0.0
                 if side == "buy":
                     if net_amount > current_cash + 1e-6:
                         raise ValueError(f"现金不足: 需要 {net_amount:.2f}, 仅有 {current_cash:.2f}")
@@ -218,6 +225,7 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                     if shares > cur_shares:
                         raise ValueError(f"卖出 {shares} 超过持仓 {cur_shares}: {ts_code}")
                     realized_pnl = (price - cur_cost) * shares - fee
+                    position_pnl = realized_pnl
                     new_shares = cur_shares - shares
                     current_cash += net_amount
                     realized_pnl_total += realized_pnl
@@ -230,9 +238,9 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                         conn.execute("DELETE FROM portfolio_pool_holdings WHERE ts_code=?", (ts_code,))
 
                 conn.execute(
-                    """INSERT INTO portfolio_pool_trades(ts_code, side, shares, price, amount, trade_date, pnl, created_at, fee, net_amount)
-                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (ts_code, side, shares, price, amount, trade_date, realized_pnl, now, fee, net_amount),
+                    """INSERT INTO portfolio_pool_trades(ts_code, side, shares, price, amount, trade_date, pnl, created_at, fee, net_amount, cash_after, position_pnl)
+                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (ts_code, side, shares, price, amount, trade_date, realized_pnl, now, fee, net_amount, current_cash, position_pnl),
                 )
 
             conn.execute(

@@ -53,11 +53,18 @@ type Source struct {
 }
 
 type TradeRecord struct {
+	ID          int64   `json:"id"`
 	Date        string  `json:"date"`
 	Action      string  `json:"action"`
+	TSCode      string  `json:"ts_code"`
+	Name        string  `json:"name"`
 	Shares      int     `json:"shares"`
 	Price       float64 `json:"price"`
 	Amount      float64 `json:"amount"`
+	Fee         float64 `json:"fee"`
+	NetAmount   float64 `json:"net_amount"`
+	CashAfter   float64 `json:"cash_after"`
+	PositionPnL float64 `json:"position_pnl"`
 	RealizedPnL float64 `json:"realized_pnl"`
 	ExitReason  string  `json:"exit_reason"`
 	ExitPct     float64 `json:"exit_pct"`
@@ -178,23 +185,24 @@ type RecommendationItem struct {
 }
 
 type Summary struct {
-	InitialCash   float64    `json:"initial_cash"`
-	Cash          float64    `json:"cash"`
-	MarketValue   float64    `json:"market_value"`
-	TotalAssets   float64    `json:"total_assets"`
-	TotalCost     float64    `json:"total_cost"`
-	TotalFee      float64    `json:"total_fee"`
-	TotalPnL      float64    `json:"total_pnl"`
-	TodayPnL      float64    `json:"today_pnl"`
-	TodayPct      float64    `json:"today_pct"`
-	UnrealizedPnL float64    `json:"unrealized_pnl"`
-	UnrealizedPct float64    `json:"unrealized_pct"`
-	RealizedPnL   float64    `json:"realized_pnl"`
-	CumReturn     float64    `json:"cum_return"`
-	NHoldings     int        `json:"n_holdings"`
-	NClosed       int        `json:"n_closed"`
-	UpdatedAt     string     `json:"updated_at"`
-	Positions     []Position `json:"positions"`
+	InitialCash   float64       `json:"initial_cash"`
+	Cash          float64       `json:"cash"`
+	MarketValue   float64       `json:"market_value"`
+	TotalAssets   float64       `json:"total_assets"`
+	TotalCost     float64       `json:"total_cost"`
+	TotalFee      float64       `json:"total_fee"`
+	TotalPnL      float64       `json:"total_pnl"`
+	TodayPnL      float64       `json:"today_pnl"`
+	TodayPct      float64       `json:"today_pct"`
+	UnrealizedPnL float64       `json:"unrealized_pnl"`
+	UnrealizedPct float64       `json:"unrealized_pct"`
+	RealizedPnL   float64       `json:"realized_pnl"`
+	CumReturn     float64       `json:"cum_return"`
+	NHoldings     int           `json:"n_holdings"`
+	NClosed       int           `json:"n_closed"`
+	UpdatedAt     string        `json:"updated_at"`
+	Positions     []Position    `json:"positions"`
+	Trades        []TradeRecord `json:"trades"`
 }
 
 type HistoryPoint struct {

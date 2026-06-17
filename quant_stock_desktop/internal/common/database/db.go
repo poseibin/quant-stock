@@ -1098,6 +1098,8 @@ func (db *DB) isMigrationAlreadyApplied(version int) bool {
 	switch version {
 	case 1:
 		return db.columnsExist("portfolio_pool_summary", "total_cost", "today_pct", "unrealized_pnl", "unrealized_pct", "realized_pnl", "cum_return", "n_closed", "total_fee") && db.columnsExist("portfolio_pool_trades", "fee", "net_amount")
+	case 13:
+		return db.columnsExist("portfolio_pool_trades", "cash_after", "position_pnl")
 	case 2:
 		return db.columnsExist("portfolio_tm_trades", "is_new")
 	case 3:
@@ -1259,6 +1261,12 @@ func (db *DB) schemaMigrations() []migration {
 				{table: "t0_daily_candidates", name: "stop_price", ddl: "REAL NOT NULL DEFAULT 0"},
 				{table: "t0_daily_candidates", name: "t_ratio", ddl: "REAL NOT NULL DEFAULT 0"},
 				{table: "t0_daily_candidates", name: "plan_json", ddl: "LONGTEXT NOT NULL"},
+			})
+		}},
+		{version: 13, name: "pool_trade_accounting_columns", up: func(db *DB) error {
+			return db.addColumnsIfMissing([]columnMigration{
+				{table: "portfolio_pool_trades", name: "cash_after", ddl: "REAL NOT NULL DEFAULT 0"},
+				{table: "portfolio_pool_trades", name: "position_pnl", ddl: "REAL NOT NULL DEFAULT 0"},
 			})
 		}},
 	}

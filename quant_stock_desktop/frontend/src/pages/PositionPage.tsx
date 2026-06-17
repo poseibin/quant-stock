@@ -389,6 +389,50 @@ function HoldingsPanel({ summary, loading, clearing, refreshingQuotes, confirmRe
           </tbody>
         </table>
       </div>
+      <div className="tableHeader accountLedgerHeader">
+        <div>
+          <div className="sectionLabel">ACCOUNT LEDGER</div>
+          <p className="recommendationMeta">最近买卖流水、成交后现金和已实现盈亏</p>
+        </div>
+      </div>
+      <div className="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>方向</th>
+              <th>代码</th>
+              <th>名称</th>
+              <th>股数</th>
+              <th>成交价</th>
+              <th>成交额</th>
+              <th>费用</th>
+              <th>净现金流</th>
+              <th>成交后现金</th>
+              <th>已实现盈亏</th>
+            </tr>
+          </thead>
+          <tbody>
+            {summary?.trades?.map((trade) => (
+              <tr key={trade.id || `${trade.date}-${trade.ts_code}-${trade.action}-${trade.shares}`}>
+                <td>{trade.date || '—'}</td>
+                <td>{trade.action === 'buy' ? '买入' : trade.action === 'sell' ? '卖出' : trade.action}</td>
+                <td className="mono">{trade.ts_code}</td>
+                <td><StockLink tsCode={trade.ts_code} onOpenResearch={onOpenResearch}>{trade.name || '—'}</StockLink></td>
+                <td>{trade.shares.toLocaleString('zh-CN')}</td>
+                <td>{money(trade.price)}</td>
+                <td>¥{money(trade.amount)}</td>
+                <td>¥{money(trade.fee || 0)}</td>
+                <td>{trade.action === 'buy' ? '-' : '+'}¥{money(trade.net_amount || 0)}</td>
+                <td>¥{money(trade.cash_after || 0)}</td>
+                <td className={signedClass(trade.realized_pnl || 0)}>{money(trade.realized_pnl || 0)}</td>
+              </tr>
+            ))}
+            {!loading && (summary?.trades?.length ?? 0) === 0 ? <tr><td colSpan={11} className="emptyCell">暂无交易流水</td></tr> : null}
+            {loading ? <tr><td colSpan={11} className="emptyCell">加载中...</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

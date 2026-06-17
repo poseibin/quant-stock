@@ -2015,6 +2015,24 @@ export async function refreshLimitUpMomentumCandidates(query: LimitUpMomentumQue
   return listLimitUpMomentumCandidates(query)
 }
 
+export interface PositionTradeRecord {
+  id: number
+  date: string
+  action: string
+  ts_code: string
+  name: string
+  shares: number
+  price: number
+  amount: number
+  fee: number
+  net_amount: number
+  cash_after: number
+  position_pnl: number
+  realized_pnl: number
+  exit_reason: string
+  exit_pct: number
+}
+
 export interface PositionItem {
   ts_code: string
   name: string
@@ -2071,6 +2089,7 @@ export interface PositionSummary {
   n_closed: number
   updated_at: string
   positions: PositionItem[]
+  trades: PositionTradeRecord[]
 }
 
 export interface PositionHistoryPoint {
@@ -2179,7 +2198,8 @@ export async function getPositionSummary(): Promise<PositionSummary> {
     n_holdings: 0,
     n_closed: 0,
     updated_at: '',
-    positions: []
+    positions: [],
+    trades: []
   }
 }
 
