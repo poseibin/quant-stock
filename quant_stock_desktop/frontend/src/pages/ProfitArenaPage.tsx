@@ -117,7 +117,7 @@ export function ProfitArenaPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
     if (runID) {
       const [evalRows, predRows, featureRows] = await Promise.all([
         listProfitArenaEvaluations(runID, 160),
-        listProfitArenaPredictions(runID, 160),
+        listProfitArenaPredictions('', 160),
         listProfitArenaFeatures(runID, 60)
       ])
       setEvaluations(evalRows)
