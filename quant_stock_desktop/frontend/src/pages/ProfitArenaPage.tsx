@@ -89,9 +89,7 @@ export function ProfitArenaPage({ onOpenResearch }: { onOpenResearch?: (tsCode: 
       .sort((a, b) => b.model_score - a.model_score)
       .slice(0, 20)
   }, [latestDate, predictions])
-  const topRecommendations = latestPredictions
-    .filter((row) => Number(row.crash_prob || 0) <= executionConfig.maxCrashProb)
-    .slice(0, executionConfig.topN)
+  const topRecommendations = latestPredictions.slice(0, executionConfig.topN)
   const arenaTasks = useMemo(() => tasks.filter((task) => {
     const strategy = String(task.params?.strategy || '')
     return task.task_type === 'model_training' && (strategy === 'profit_arena_model' || strategy === 'profit_arena')
