@@ -4441,10 +4441,24 @@ func (app *App) resolveLatestProfitArenaRunID(runID string) string {
 	if runID != "" {
 		return runID
 	}
-	if app.database == nil || app.database.Conn() == nil || !app.database.TableExists("profit_arena_runs") {
+	if app.database == nil || app.database.Conn() == nil {
 		return ""
 	}
-	_ = app.database.Conn().QueryRow(`SELECT run_id FROM profit_arena_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	if app.database.TableExists("profit_arena_predictions") {
+		_ = app.database.Conn().QueryRow(`
+			SELECT run_id
+			FROM profit_arena_predictions
+			WHERE is_latest = 1
+			GROUP BY run_id
+			ORDER BY MAX(trade_date) DESC, MAX(updated_at) DESC
+			LIMIT 1`).Scan(&runID)
+		if strings.TrimSpace(runID) != "" {
+			return runID
+		}
+	}
+	if app.database.TableExists("profit_arena_runs") {
+		_ = app.database.Conn().QueryRow(`SELECT run_id FROM profit_arena_runs WHERE status='success' ORDER BY updated_at DESC LIMIT 1`).Scan(&runID)
+	}
 	return runID
 }
 
