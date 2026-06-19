@@ -1,7 +1,8 @@
-"""Compare two factor model training runs.
+"""Compare two historical factor model training runs.
 
-The goal is to verify whether a retrained ml_factor_ranker run is materially
-consistent with a prior base run before AutoTune or promotion decisions use it.
+The goal is to verify whether a retrained legacy factor-factory run is
+materially consistent with a prior base run before historical AutoTune or
+promotion decisions use it. Desktop production training now uses Profit Arena.
 """
 from __future__ import annotations
 

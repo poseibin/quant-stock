@@ -1,13 +1,12 @@
 """批量策略评估。
 
-用于把候选策略放到同一个样本窗口里横向比较：
+用于把候选模型放到同一个样本窗口里横向比较：
 - 收益 / 回撤 / 夏普 / Calmar / 换手
 - 平均持仓数
 - 平均市值与成交额暴露
-- 与 small_cap_quality 的持仓重合度和收益相关性
+- 与收益擂台基线的持仓重合度和收益相关性
 
-默认会评估所有已注册策略，包括 disabled 的候选策略；是否进入实盘组合
-由 desktop MySQL 配置中的 enabled 决定。
+桌面生产入口只使用收益擂台；这个脚本保留为历史模型评估和组合复核工具。
 """
 from __future__ import annotations
 
@@ -42,15 +41,21 @@ def main() -> None:
     parser.add_argument("--strategies", default="all", help="all / enabled / comma-separated names")
     parser.add_argument("--benchmark", default="000905.SH")
     parser.add_argument("--slippage", type=float, default=0.002)
-    parser.add_argument("--baseline", default="small_cap_quality")
+    parser.add_argument("--baseline", default="profit_arena_model")
     parser.add_argument("--save", default=None, help="保存 run id；结果写入 MySQL eval_strategy_admission 表")
     parser.add_argument("--append-save", action="store_true", help="追加保存单个策略结果，不清空同 run_id 已有记录")
     parser.add_argument("--db-path", default=None, help="兼容旧参数；MySQL 模式忽略文件路径")
-    parser.add_argument("--strategy-version-mode", choices=["active", "latest"], default="latest", help="策略参数版本：评估默认 latest，实盘推股默认 active")
-    parser.add_argument("--strategy-version-json", default="{}", help="指定策略版本，如 {\"small_cap_quality\": 3}")
+    parser.add_argument("--strategy-version-mode", choices=["active", "latest"], default="latest", help="模型参数版本：评估默认 latest，生产推理默认 active")
+    parser.add_argument("--strategy-version-json", default="{}", help="指定模型版本，如 {\"profit_arena_model\": 3}")
     parser.add_argument("--export-files", action="store_true", help="额外导出 JSON/CSV 到 backtest_results/<save>/")
     parser.add_argument("--json", action="store_true", help="仅输出 JSON")
+    parser.add_argument("--allow-archived-strategy-eval", action="store_true", help="允许运行归档策略评估入口")
     args = parser.parse_args()
+    if not args.allow_archived_strategy_eval and os.environ.get("QUANT_ALLOW_ARCHIVED_STRATEGY_EVAL") != "1":
+        raise SystemExit(
+            "批量策略评估入口已归档，桌面生产链路只保留收益擂台。"
+            "如需复盘历史实验，请显式传 --allow-archived-strategy-eval。"
+        )
 
     os.environ["QUANT_STRATEGY_VERSION_MODE"] = args.strategy_version_mode
     os.environ["QUANT_STRATEGY_VERSION_JSON"] = args.strategy_version_json

@@ -1,13 +1,7 @@
-"""策略插件注册中心
+"""策略插件注册中心。
 
-通过 @register 装饰器自动登记策略，消除散落各处的硬编码策略清单。
-
-新增一个策略只需：
-1. 在 trading/strategy/ 下新建一个 .py 文件；
-2. 实现 build_strategy() 工厂函数，并加 @register("策略名", "中文标签") 装饰器；
-3. 在 desktop 配置页中加一段同名配置。
-
-注册即生效，无需再改 combiner / run_backtest / 测试。
+桌面生产链路已经收口到收益擂台；这里仅保留历史研究/回测工具需要的
+归档策略构造能力。新增策略不会自动进入桌面生产链路。
 """
 from __future__ import annotations
 
@@ -19,32 +13,15 @@ _REGISTRY: dict[str, dict] = {}
 _DISCOVERED = False
 
 ACTIVE_UNIVERSE = [
-    "market_regime_timing",
     "ml_factor_ranker",
-    "multi_factor_composite",
-    "momentum_quality_guard",
-    "quality_growth_cooldown",
-    "small_cap_quality",
-    "trend_pullback",
-    "turtle_breakout",
-    "dividend_quality",
-    "earnings_revision",
-    "industry_prosperity",
-    "low_crowding_reversal",
-    "event_enhanced",
 ]
-
-RESTRICTED_UNIVERSE = {
-    "beijing_se",
-    "beijing_satellite",
-}
 
 
 def register(name: str, label: str | None = None):
     """装饰器：把策略工厂函数登记到注册中心。
 
     用法：
-        @register("small_cap_quality", "小盘质量")
+        @register("ml_factor_ranker", "机器学习因子")
         def build_strategy():
             ...
     """
@@ -79,7 +56,7 @@ def _discover() -> None:
 def all_names() -> list[str]:
     """返回当前账户可交易、可参与训练/评估的策略名。"""
     _discover()
-    return [name for name in ACTIVE_UNIVERSE if name in _REGISTRY and name not in RESTRICTED_UNIVERSE]
+    return [name for name in ACTIVE_UNIVERSE if name in _REGISTRY]
 
 
 def get_factory(name: str) -> Callable:

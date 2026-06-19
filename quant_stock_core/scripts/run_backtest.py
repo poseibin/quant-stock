@@ -1,7 +1,7 @@
 """单策略回测脚本
 
 用法：
-    python scripts/run_backtest.py --strategy small_cap_quality --start 20200101 --end 20241231
+    python scripts/run_backtest.py --strategy ml_factor_ranker --start 20200101 --end 20241231
 """
 from __future__ import annotations
 
@@ -31,7 +31,13 @@ def main() -> None:
                         help="基准代码，默认中证 500")
     parser.add_argument("--slippage", type=float, default=0.002)
     parser.add_argument("--save", default=None, help="结果保存路径前缀")
+    parser.add_argument("--allow-archived-backtest", action="store_true", help="允许运行归档单策略回测入口")
     args = parser.parse_args()
+    if not args.allow_archived_backtest and os.environ.get("QUANT_ALLOW_ARCHIVED_BACKTEST") != "1":
+        raise SystemExit(
+            "单策略回测入口已归档，桌面生产链路只保留收益擂台。"
+            "如需复盘历史回测，请显式传 --allow-archived-backtest。"
+        )
     os.environ.setdefault("QUANT_REQUIRE_ML_FACTOR_RUN_ID", "1")
 
     strategy = registry.build(args.strategy)

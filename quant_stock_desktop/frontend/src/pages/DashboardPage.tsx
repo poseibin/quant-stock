@@ -5,20 +5,20 @@ import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import {
   getDataUpdateStatus,
+  getFactorSnapshotStatus,
+  getFactorStoreGovernance,
   getPositionHistory,
   getPositionRecommendation,
   getPositionSummary,
+  getProductionDiagnostics,
   listDatasetUpdateStatus,
-  listGovernanceDashboard,
-  listRecommendationHindsight,
   listTasks,
   type AppInfo,
   type DatasetUpdateStatus,
-  type GovernanceDashboard,
+  type FactorStoreGovernance,
   type PositionHistoryPoint,
   type PositionRecommendation,
   type PositionSummary,
-  type RecommendationHindsight,
   type RunStatus,
   type TaskDTO
 } from '../services/app'
@@ -26,8 +26,6 @@ import { formatDate } from '../components/format'
 import { strategyLabel } from './PositionPage'
 
 echarts.use([CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
-
-const evaluationTaskTypes = new Set(['evaluation_time_machine', 'eval_strategy_admission', 'portfolio_optimization', 'walk_forward_evaluation', 'parameter_experiment', 'factor_research', 'model_training'])
 
 function money(value: number) {
   return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -52,7 +50,9 @@ function statusLabel(status: string) {
     cancelled: '已取消',
     done: '已完成',
     idle: '空闲',
-    error: '异常'
+    error: '异常',
+    skipped: '已跳过',
+    historical_offline: '已归档'
   }
   return labels[status] || status || '—'
 }
@@ -69,66 +69,118 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
   const [recommendation, setRecommendation] = useState<PositionRecommendation | null>(null)
   const [tasks, setTasks] = useState<TaskDTO[]>([])
   const [dataStatus, setDataStatus] = useState<RunStatus | null>(null)
+  const [factorSnapshotStatus, setFactorSnapshotStatus] = useState<RunStatus | null>(null)
+  const [factorGovernance, setFactorGovernance] = useState<FactorStoreGovernance>({})
   const [datasetStatus, setDatasetStatus] = useState<DatasetUpdateStatus[]>([])
-  const [hindsight, setHindsight] = useState<RecommendationHindsight[]>([])
-  const [governance, setGovernance] = useState<GovernanceDashboard>(emptyGovernance())
+  const [diagnostics, setDiagnostics] = useState<Record<string, unknown>>({})
+  const [dashboardRefreshedAt, setDashboardRefreshedAt] = useState('')
 
   useEffect(() => {
-    Promise.all([
-      getPositionSummary(),
-      getPositionHistory(),
-      getPositionRecommendation().catch(() => null),
-      listTasks({ limit: 200 }),
-      getDataUpdateStatus(),
-      listDatasetUpdateStatus(),
-      listRecommendationHindsight().catch(() => []),
-      listGovernanceDashboard().catch(() => emptyGovernance())
-    ]).then(([nextSummary, nextHistory, nextRecommendation, nextTasks, nextDataStatus, nextDatasetStatus, nextHindsight, nextGovernance]) => {
-      setSummary(nextSummary)
-      setHistory(nextHistory)
-      setRecommendation(nextRecommendation)
-      setTasks(nextTasks)
-      setDataStatus(nextDataStatus)
-      setDatasetStatus(nextDatasetStatus)
-      setHindsight(nextHindsight || [])
-      setGovernance(nextGovernance || emptyGovernance())
-    }).catch(() => {})
+    let mounted = true
+    const loadDashboard = () => {
+      Promise.all([
+        getPositionSummary(),
+        getPositionHistory(),
+        getPositionRecommendation().catch(() => null),
+        listTasks({ limit: 200 }),
+        getDataUpdateStatus(),
+        getFactorSnapshotStatus().catch(() => null),
+        getFactorStoreGovernance('stock_factor_base_v1').catch(() => ({})),
+        listDatasetUpdateStatus(),
+        getProductionDiagnostics().catch(() => ({}))
+      ]).then(([nextSummary, nextHistory, nextRecommendation, nextTasks, nextDataStatus, nextFactorSnapshotStatus, nextFactorGovernance, nextDatasetStatus, nextDiagnostics]) => {
+        if (!mounted) return
+        setSummary(nextSummary)
+        setHistory(nextHistory)
+        setRecommendation(nextRecommendation)
+        setTasks(nextTasks.filter(isProductionTask))
+        setDataStatus(nextDataStatus)
+        setFactorSnapshotStatus(nextFactorSnapshotStatus)
+        setFactorGovernance(nextFactorGovernance || {})
+        setDatasetStatus(nextDatasetStatus)
+        setDiagnostics(nextDiagnostics || {})
+        setDashboardRefreshedAt(new Date().toISOString())
+      }).catch(() => {})
+    }
+    loadDashboard()
+    const timer = window.setInterval(loadDashboard, 15000)
+    return () => {
+      mounted = false
+      window.clearInterval(timer)
+    }
   }, [])
 
   const topLevelTasks = tasks.filter((task) => !task.parent_id)
-  const activeTasks = topLevelTasks.filter((task) => task.status === 'running' || task.status === 'queued')
-  const pendingTasks = topLevelTasks.filter((task) => task.status === 'created')
-  const runningTask = activeTasks.find((task) => task.status === 'running') || activeTasks[0]
-  const completedTasks = topLevelTasks.filter((task) => task.status === 'success')
-  const failedTasks = topLevelTasks.filter((task) => task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled')
-  const evaluations = topLevelTasks.filter((task) => evaluationTaskTypes.has(task.task_type))
-  const completedEvaluations = evaluations.filter((task) => task.status === 'success')
+  const productionTasks = topLevelTasks.filter(isProductionTask)
+  const activeTasks = productionTasks.filter((task) => task.status === 'running')
+  const staleRunningTasks = productionTasks.filter(isDashboardTaskHeartbeatStale)
+  const pendingTasks = productionTasks.filter((task) => task.status === 'created' || task.status === 'queued')
+  const runningTask = activeTasks[0]
+  const completedTasks = productionTasks.filter((task) => task.status === 'success' || task.status === 'done')
+  const failedTasks = productionTasks.filter((task) => task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled')
   const dataFinished = datasetStatus.filter((item) => item.state === 'done' || item.state === 'success').length
   const dataFailed = datasetStatus.filter((item) => item.state === 'failed' || item.state === 'error').length
   const dataRunning = datasetStatus.filter((item) => item.state === 'running').length
   const dataTotal = datasetStatus.length
   const risk = buildRisk(summary)
   const returnStats = useMemo(() => buildReturnStats(history, summary), [history, summary])
-  const signalStats = buildSignalStats(recommendation)
-  const hindsightSummary = summarizeHindsight(hindsight)
-  const dataQuality = governance.data_quality || {}
+  const signalReady = hasRecommendationSignal(recommendation)
+  const signalStats = buildSignalStats(signalReady ? recommendation : null)
+  const dataQuality = {}
   const displayDataQuality = buildDataQualityFallback(dataQuality, datasetStatus, dataStatus)
   const missingData = asStringArray(displayDataQuality.missing)
-  const recovery = governance.recovery || {}
+  const recovery = {}
   const displayRecovery = buildRecoveryFallback(recovery, topLevelTasks)
-  const latestRisk = governance.risk?.[0]
-  const walkRows = governance.walk?.length ? governance.walk : taskRowsAsStatus(topLevelTasks, 'walk_forward_evaluation')
-  const paramRows = governance.params?.length ? governance.params : taskRowsAsStatus(topLevelTasks, 'parameter_experiment')
-  const walkSummary = summarizeStatus(walkRows, 'pass')
-  const paramSummary = summarizeStatus(paramRows, 'stable')
-  const topPromotion = (governance.promotion || [])[0]
-  const promotionFallback = topPromotion || recommendationSourcePromotion(recommendation)
-  const topAttribution = (governance.portfolio_attribution || [])[0] || aggregateRecommendationSources(recommendation)[0]
-  const events = buildEvents({ recommendation, summary, tasks: topLevelTasks, dataStatus, datasetStatus })
-  const currentTaskLabel = runningTask ? `${runningTask.name} · ${Math.round(runningTask.progress * 100)}%` : '无'
+  const recoveryRetryable = num(displayRecovery.retryable_failed)
+  const recoveryBlocked = num(displayRecovery.blocked_failed)
+  const recoveryHint = recoveryBlocked
+    ? `可重跑 ${recoveryRetryable} · 自动链路阻断 ${recoveryBlocked}，先回数据页重跑数据更新触发因子快照`
+    : `可重跑 ${recoveryRetryable} · 阻断 0`
+  const topPromotion = null
+  const promotionFallback = topPromotion || recommendationSourcePromotion(signalReady ? recommendation : null)
+  const topAttribution = aggregateRecommendationSources(signalReady ? recommendation : null)[0]
+  const events = buildEvents({ recommendation, summary, tasks: productionTasks, dataStatus, datasetStatus })
+  const currentTaskLabel = runningTask ? taskDisplayLabel(runningTask) : '无'
+  const productionReadiness = buildProductionReadiness({
+    dataStatus,
+    factorSnapshotStatus,
+    factorGovernance,
+    recommendation,
+    runningTask,
+    staleRunningTasks,
+    failedTasks
+  })
+  const runtimeReadiness = buildRuntimeReadiness(diagnostics)
 
   return (
     <div className="dashboardPage">
+      <section className={`productionReadinessBanner dashboardProductionBanner ${runtimeReadiness.tone}`}>
+        <div>
+          <span>运行身份</span>
+          <b>{runtimeReadiness.title}</b>
+          <em>{runtimeReadiness.message}</em>
+        </div>
+        <div className="productionReadinessSteps">
+          {runtimeReadiness.steps.map((step) => (
+            <span className={step.tone} key={step.label}>{step.label} {step.value}</span>
+          ))}
+          <span className="pass">刷新 {dashboardRefreshedAt ? formatDate(dashboardRefreshedAt).replace(/^\d{4}-/, '').slice(0, 16) : '等待'}</span>
+        </div>
+      </section>
+
+      <section className={`productionReadinessBanner dashboardProductionBanner ${productionReadiness.tone}`}>
+        <div>
+          <span>生产闭环</span>
+          <b>{productionReadiness.title}</b>
+          <em>{productionReadiness.message}</em>
+        </div>
+        <div className="productionReadinessSteps">
+          {productionReadiness.steps.map((step) => (
+            <span className={step.tone} key={step.label}>{step.label} {step.value}</span>
+        ))}
+        </div>
+      </section>
+
       <section className="dashboardAssetPanel returnPanel">
         <div className="returnPanelIntro">
           <div>
@@ -161,14 +213,14 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
 
       <div className="dashboardGrid">
         <section className="dashboardPanel">
-          <div className="sectionLabel">SIGNAL</div>
-          <div className="dashboardPanelTitle">最新信号</div>
+          <div className="sectionLabel">BUY LIST</div>
+          <div className="dashboardPanelTitle">通用策略买入清单</div>
           <div className="dashboardRows">
-            <Row label="信号日" value={recommendation?.date || '—'} />
-            <Row label="目标仓位" value={recommendation ? percent(recommendation.total_weight) : '—'} />
-            <Row label="目标只数" value={recommendation ? `${recommendation.n_holdings} 只` : '—'} />
-            <Row label="调仓状态" value={recommendation?.rebalanced ? `今日已调仓 ${recommendation.rebalance_trades} 笔` : '待调仓'} />
-            <Row label="买入 / 卖出" value={recommendation ? `${signalStats.buy} / ${signalStats.sell}` : '—'} />
+            <Row label="清单日期" value={signalReady ? recommendation?.date || '—' : '—'} />
+            <Row label="目标仓位" value={signalReady && recommendation ? percent(recommendation.total_weight) : '—'} />
+            <Row label="目标只数" value={signalReady && recommendation ? `${recommendation.n_holdings} 只` : '—'} />
+            <Row label="调仓状态" value={signalReady && recommendation ? recommendation.rebalanced ? `今日已调仓 ${recommendation.rebalance_trades} 笔` : '待调仓' : '等待买入清单'} />
+            <Row label="买入 / 卖出" value={signalReady ? `${signalStats.buy} / ${signalStats.sell}` : '—'} />
           </div>
         </section>
 
@@ -180,7 +232,7 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
             <Row label="待处理任务" value={`${activeTasks.length + pendingTasks.length} 个`} />
             <Row label="今日完成" value={`${completedTasks.length} 个`} />
             <Row label="异常 / 取消" value={`${failedTasks.length} 个`} tone={failedTasks.length ? 'negative' : ''} />
-            <Row label="评估任务" value={`${completedEvaluations.length}/${evaluations.length}`} />
+            <Row label="生产闭环" value={`${completedTasks.length}/${productionTasks.length}`} />
           </div>
         </section>
 
@@ -203,17 +255,15 @@ export function DashboardPage({ appInfo }: { appInfo: AppInfo }) {
             <div className="sectionLabel">GOVERNANCE</div>
             <div className="dashboardPanelTitle">系统健康与研究闭环</div>
           </div>
-          <p>推荐回看、数据闸门、任务恢复和策略晋级统一看这里</p>
+          <p>数据闸门、任务恢复、通用策略冠军版本和调仓计划统一看这里，全部来自当前生产链路</p>
         </div>
         <div className="governanceSummaryGrid">
-          <SummaryTile title="推荐回看" value={hindsight.length ? `${hindsight.length} 日` : recommendation ? `${recommendation.rows.length} 条` : '暂无'} hint={hindsight.length ? `加权 ${formatNullablePercent(hindsightSummary.weightedReturn)} · 命中 ${formatNullablePercent(hindsightSummary.hitRate, 100)}` : recommendation ? `决策日 ${formatCompactDate(recommendation.date)} · 可执行 ${recommendation.n_buy + recommendation.n_sell}` : '等待推荐或回看'} />
+          <SummaryTile title="买入清单" value={signalReady && recommendation ? `${recommendation.rows.length} 条` : '暂无'} hint={signalReady && recommendation ? `决策日 ${formatCompactDate(recommendation.date)} · 可执行 ${recommendation.n_buy + recommendation.n_sell}` : '等待通用策略生成清单'} />
           <SummaryTile title="数据闸门" value={String(displayDataQuality.status || '—')} hint={missingData.length ? `缺少 ${missingData.join('、')}` : `数据集 ${Object.keys(asRecord(displayDataQuality.datasets) || {}).length}`} tone={missingData.length || dataFailed ? 'negative' : 'positive'} />
-          <SummaryTile title="任务恢复" value={`${num(displayRecovery.total)} 个`} hint={`可重跑 ${num(displayRecovery.retryable_failed)} · 阻断 ${num(displayRecovery.blocked_failed)}`} tone={num(displayRecovery.blocked_failed) ? 'negative' : ''} />
-          <SummaryTile title="风险暴露" value={latestRisk ? `${latestRisk.n_holdings} 只` : summary ? `${summary.n_holdings} 只` : '暂无'} hint={latestRisk ? `总仓 ${percent(latestRisk.total_weight)} · 单票 ${percent(latestRisk.max_single_weight)}` : summary ? `总仓 ${percent(risk.positionWeight)} · 单票 ${risk.topPosition ? percent(risk.topPosition.weight) : '—'}` : '等待持仓'} />
-          <SummaryTile title="Walk-forward" value={`${walkSummary.pass}/${walkSummary.total}`} hint={`通过率 ${formatNullablePercent(walkSummary.rate, 100)} · 失败 ${walkSummary.fail}`} tone={walkSummary.fail ? 'negative' : ''} />
-          <SummaryTile title="参数实验" value={`${paramSummary.pass}/${paramSummary.total}`} hint={`稳定率 ${formatNullablePercent(paramSummary.rate, 100)} · 不稳 ${paramSummary.fail}`} tone={paramSummary.fail ? 'negative' : ''} />
-          <SummaryTile title="策略晋级" value={promotionFallback ? strategyLabel(promotionFallback.strategy) : '暂无'} hint={promotionFallback ? `${promotionLabel(promotionFallback.recommended_status)} · v${promotionFallback.strategy_version} · ${Math.round(promotionFallback.score * 100)}%` : '等待准入结果'} />
-          <SummaryTile title="组合归因" value={topAttribution ? strategyLabel(String(topAttribution.strategy || '')) : '暂无'} hint={topAttribution ? `权重 ${percent(num(topAttribution.weight))}` : '等待时光机结果'} />
+          <SummaryTile title="任务恢复" value={`${num(displayRecovery.total)} 个`} hint={recoveryHint} tone={recoveryBlocked ? 'negative' : ''} />
+          <SummaryTile title="风险暴露" value={summary ? `${summary.n_holdings} 只` : '暂无'} hint={summary ? `总仓 ${percent(risk.positionWeight)} · 单票 ${risk.topPosition ? percent(risk.topPosition.weight) : '—'}` : '等待持仓'} />
+          <SummaryTile title="冠军版本治理" value={promotionFallback ? strategyLabel(promotionFallback.strategy) : '暂无'} hint={promotionFallback ? `${promotionLabel(promotionFallback.recommended_status)} · v${promotionFallback.strategy_version} · ${Math.round(promotionFallback.score * 100)}%` : '等待通用策略冠军版本'} />
+          <SummaryTile title="模型归因" value={topAttribution ? strategyLabel(String(topAttribution.strategy || '')) : '暂无'} hint={topAttribution ? `权重 ${percent(num(topAttribution.weight))}` : '等待归因结果'} />
         </div>
       </section>
 
@@ -269,6 +319,137 @@ function AssetBlock({ label, value, hint, tone = '' }: { label: string; value: s
       <em>{hint}</em>
     </div>
   )
+}
+
+function buildRuntimeReadiness(diagnostics: Record<string, unknown>) {
+  const runtime = dashboardRecord(diagnostics.runtime)
+  const status = dashboardString(diagnostics.status)
+  const databaseBackend = dashboardString(diagnostics.database_backend)
+  const expectedDatabaseBackend = dashboardString(diagnostics.expected_database_backend) || 'mysql'
+  const databaseMessage = dashboardString(diagnostics.message)
+  const legacyUserSQLiteState = dashboardBool(diagnostics.legacy_user_sqlite_state)
+  const retiredStrategyVersionCount = dashboardNumber(diagnostics.retired_strategy_version_count)
+  const retiredStrategyTaskCount = dashboardNumber(diagnostics.retired_strategy_task_count)
+  const retiredStrategyStatusCount = dashboardNumber(diagnostics.retired_strategy_status_count)
+  const retiredActiveModelCount = dashboardNumber(diagnostics.retired_active_model_count)
+  const retiredValidationResultCount = dashboardNumber(diagnostics.retired_validation_result_count)
+  const retiredObservationCount = dashboardNumber(diagnostics.retired_observation_count)
+  const retiredMySQLTableCount = dashboardNumber(diagnostics.retired_mysql_table_count)
+  const retiredDataArtifactCount = dashboardNumber(diagnostics.retired_data_artifact_count)
+  const profitArenaActiveRunID = dashboardString(diagnostics.profit_arena_active_run_id)
+  const profitArenaChampionRunID = dashboardString(diagnostics.profit_arena_champion_run_id)
+  const profitArenaLatestPredictionRunID = dashboardString(diagnostics.profit_arena_latest_prediction_run_id)
+  const profitArenaActiveMatchesChampion = dashboardBool(diagnostics.profit_arena_active_matches_champion)
+  const profitArenaActiveMatchesLatestPrediction = dashboardBool(diagnostics.profit_arena_active_matches_latest_prediction)
+  const profitArenaRunCount = dashboardNumber(diagnostics.profit_arena_run_count)
+  const profitArenaLatestPredictionDate = dashboardString(diagnostics.profit_arena_latest_prediction_date)
+  const profitArenaLatestPredictionCount = dashboardNumber(diagnostics.profit_arena_latest_prediction_count)
+  const bundleName = dashboardString(runtime.bundle_name)
+  const bundlePath = dashboardString(runtime.bundle_path)
+  const executablePath = dashboardString(runtime.real_executable_path) || dashboardString(runtime.executable_path)
+  const executableModifiedAt = dashboardString(runtime.real_executable_modified_at) || dashboardString(runtime.executable_modified_at)
+  const workerMode = dashboardString(runtime.worker_mode) || 'unknown'
+  const processPid = dashboardNumber(runtime.process_pid)
+  const processStartedAt = dashboardString(runtime.process_started_at)
+  const binaryNewerThanProcess = dashboardIsAfter(executableModifiedAt, processStartedAt)
+  const productionApp = dashboardBool(runtime.production_app)
+  const expectedBundle = dashboardBool(runtime.expected_bundle)
+  const bundleIdentifier = dashboardString(runtime.bundle_identifier)
+  const expectedBundleIdentifier = dashboardBool(runtime.expected_bundle_identifier)
+  const isPackaged = Boolean(bundleName || bundlePath)
+  const bundleIdentifierBad = isPackaged && Boolean(bundleIdentifier) && !expectedBundleIdentifier
+  const databaseBad = status === 'error' || (databaseBackend !== '' && databaseBackend !== expectedDatabaseBackend)
+  const retiredStrategyTotal = retiredStrategyVersionCount + retiredStrategyTaskCount + retiredStrategyStatusCount + retiredActiveModelCount + retiredValidationResultCount + retiredObservationCount + retiredMySQLTableCount + retiredDataArtifactCount
+  const retiredStrategyBad = retiredStrategyTotal > 0
+  const profitArenaBad = !profitArenaActiveRunID || !profitArenaChampionRunID || !profitArenaLatestPredictionRunID || !profitArenaActiveMatchesChampion || !profitArenaActiveMatchesLatestPrediction || profitArenaRunCount <= 0 || profitArenaLatestPredictionCount <= 0
+  const instanceText = [
+    processPid ? `PID ${processPid}` : '',
+    processStartedAt ? `启动 ${formatCompactDate(processStartedAt.replace('T', ' ').slice(0, 16))}` : ''
+  ].filter(Boolean).join(' · ')
+  const title = !productionApp
+    ? '当前不是正式生产工作台'
+    : databaseBad
+      ? '生产数据库未就绪'
+    : legacyUserSQLiteState
+      ? '发现旧桌面 SQLite 状态'
+    : retiredStrategyBad
+      ? '发现旧策略版本残留'
+    : profitArenaBad
+      ? '通用策略生产主线未就绪'
+    : binaryNewerThanProcess
+      ? '当前实例需要重启'
+    : isPackaged && !expectedBundle
+      ? '当前打开的不是正式包'
+    : bundleIdentifierBad
+      ? '正式包 Bundle ID 异常'
+      : '正式生产工作台已就绪'
+  const message = !productionApp
+    ? '请退出当前窗口，打开正式生产包，避免旧菜单或旧配置污染生产判断'
+    : databaseBad
+      ? databaseMessage || `当前数据库后端 ${databaseBackend || '未连接'}，生产要求 ${expectedDatabaseBackend}`
+    : legacyUserSQLiteState
+      ? '用户目录仍存在旧 meta.db，请使用正式启动脚本隔离后再运行'
+    : retiredStrategyBad
+      ? `旧策略残留：版本 ${retiredStrategyVersionCount}，任务 ${retiredStrategyTaskCount}，状态 ${retiredStrategyStatusCount}，激活指针 ${retiredActiveModelCount}，验证结果 ${retiredValidationResultCount}，观察池 ${retiredObservationCount}，旧表 ${retiredMySQLTableCount}，旧产物 ${retiredDataArtifactCount}`
+    : profitArenaBad
+      ? `active=${shortRunID(profitArenaActiveRunID)} champion=${shortRunID(profitArenaChampionRunID)} latestRun=${shortRunID(profitArenaLatestPredictionRunID)} runs=${profitArenaRunCount} latest=${profitArenaLatestPredictionDate || '无'}:${profitArenaLatestPredictionCount}`
+    : binaryNewerThanProcess
+      ? '磁盘上的正式包比当前进程更新，请退出当前窗口后重新打开正式 app'
+    : isPackaged && !expectedBundle
+      ? `当前包 ${bundleName || bundlePath} 不等于 quant-stock-desktop.app，请切回正式包`
+    : bundleIdentifierBad
+      ? `当前 Bundle ID ${bundleIdentifier || '未获取'} 不等于 com.quantstock.productionworkspace，请使用正式生产包`
+      : bundlePath
+        ? `当前运行自 ${bundlePath}${instanceText ? ` · ${instanceText}` : ''}`
+        : executablePath
+          ? `开发运行模式，执行文件 ${executablePath}${instanceText ? ` · ${instanceText}` : ''}`
+          : '等待运行身份诊断上报'
+  return {
+    tone: !productionApp || databaseBad || legacyUserSQLiteState || retiredStrategyBad || profitArenaBad || binaryNewerThanProcess || (isPackaged && !expectedBundle) || bundleIdentifierBad ? 'blocked' : 'ready',
+    title,
+    message,
+    steps: [
+      { label: '身份', value: productionApp ? '生产' : '异常', tone: productionApp ? 'pass' : 'wait' },
+      { label: '数据库', value: databaseBackend || '等待', tone: databaseBad ? 'wait' : 'pass' },
+      { label: '冠军版本', value: profitArenaActiveMatchesChampion ? '对齐' : '异常', tone: profitArenaBad ? 'wait' : 'pass' },
+      { label: '预测源', value: profitArenaActiveMatchesLatestPrediction ? '对齐' : '异常', tone: profitArenaBad ? 'wait' : 'pass' },
+      { label: '预测', value: profitArenaLatestPredictionCount ? `${profitArenaLatestPredictionCount}` : '0', tone: profitArenaLatestPredictionCount ? 'pass' : 'wait' },
+      { label: '旧状态', value: legacyUserSQLiteState ? '存在' : '隔离', tone: legacyUserSQLiteState ? 'wait' : 'pass' },
+      { label: '旧策略', value: retiredStrategyTotal ? `${retiredStrategyTotal}` : '0', tone: retiredStrategyBad ? 'wait' : 'pass' },
+      { label: '包名', value: isPackaged ? expectedBundle ? '通过' : '异常' : '开发', tone: !isPackaged || expectedBundle ? 'pass' : 'wait' },
+      { label: 'BundleID', value: bundleIdentifier ? expectedBundleIdentifier ? '通过' : '异常' : '未获取', tone: !bundleIdentifier || expectedBundleIdentifier ? 'pass' : 'wait' },
+      { label: '实例', value: binaryNewerThanProcess ? '需重启' : '当前', tone: binaryNewerThanProcess ? 'wait' : 'pass' },
+      { label: '进程', value: processPid ? String(processPid) : '等待', tone: processPid ? 'pass' : 'wait' },
+      { label: 'Worker', value: workerMode, tone: workerMode === 'bundled' ? 'pass' : 'run' }
+    ]
+  }
+}
+
+function shortRunID(value: string) {
+  if (!value) return '无'
+  return value.length > 18 ? `${value.slice(0, 18)}...` : value
+}
+
+function dashboardRecord(value: unknown): Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function dashboardString(value: unknown) {
+  return typeof value === 'string' ? value : ''
+}
+
+function dashboardBool(value: unknown) {
+  return value === true
+}
+
+function dashboardNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function dashboardIsAfter(left: string, right: string) {
+  const leftTime = Date.parse(left)
+  const rightTime = Date.parse(right)
+  return Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime > rightTime + 1000
 }
 
 function SummaryTile({ title, value, hint, tone = '' }: { title: string; value: string; hint: string; tone?: string }) {
@@ -419,6 +600,10 @@ function formatCompactDate(value: string) {
   return value || '—'
 }
 
+function hasRecommendationSignal(recommendation: PositionRecommendation | null) {
+  return Boolean(recommendation && (recommendation.generated_at || recommendation.date || (recommendation.rows || []).length > 0))
+}
+
 function buildSignalStats(recommendation: PositionRecommendation | null) {
   const rows = recommendation?.rows || []
   return rows.reduce((stats, row) => {
@@ -467,7 +652,7 @@ function buildEvents({ recommendation, summary, tasks, dataStatus, datasetStatus
   const events: Array<{ title: string; detail: string; time: string; tone: string; sortTime: string }> = []
   if (recommendation?.generated_at) {
     events.push({
-      title: '今日信号已生成',
+      title: '今日买入清单已生成',
       detail: `${recommendation.n_holdings} 只目标持仓，${recommendation.rebalanced ? `已调仓 ${recommendation.rebalance_trades} 笔` : '待调仓'}`,
       time: formatDate(recommendation.generated_at),
       tone: recommendation.rebalanced ? 'good' : 'warn',
@@ -505,12 +690,12 @@ function buildEvents({ recommendation, summary, tasks, dataStatus, datasetStatus
       })
     })
   tasks.slice(0, 6).forEach((task) => {
-    if (task.status !== 'running' && task.status !== 'failed' && task.status !== 'interrupted' && task.status !== 'success') return
+    if (!['running', 'failed', 'error', 'interrupted', 'success', 'done'].includes(task.status)) return
     events.push({
       title: `${task.name} ${statusLabel(task.status)}`,
-      detail: task.error_message || task.task_type,
+      detail: task.error_message || taskProgressSummary(task) || taskTypeLabel(task),
       time: formatDate(task.updated_at),
-      tone: task.status === 'running' ? 'warn' : task.status === 'success' ? 'good' : 'bad',
+      tone: task.status === 'running' ? 'warn' : task.status === 'success' || task.status === 'done' ? 'good' : 'bad',
       sortTime: task.updated_at
     })
   })
@@ -525,24 +710,101 @@ function formatNullablePercent(value?: number | null, multiplier = 1) {
   return `${(value * multiplier).toFixed(2)}%`
 }
 
-function summarizeStatus(rows: Array<{ status: string }>, passStatus: string) {
-  const total = rows.length
-  const pass = rows.filter((row) => row.status === passStatus).length
-  const fail = rows.filter((row) => row.status === 'fail' || row.status === 'unstable' || row.status === 'rejected').length
-  return { total, pass, fail, rate: total ? pass / total : null }
+function taskDisplayLabel(task: TaskDTO) {
+  const progress = `${taskProgressPct(task)}%`
+  const summary = taskProgressSummary(task)
+  return summary ? `${task.name} · ${summary} · ${progress}` : `${task.name} · ${progress}`
 }
 
-function taskRowsAsStatus(tasks: TaskDTO[], taskType: string): Array<{ status: string }> {
-  const passStatus = taskType === 'parameter_experiment' ? 'stable' : 'pass'
-  return tasks
-    .filter((task) => task.task_type === taskType)
-    .map((task) => {
-      if (task.status === 'success') return { status: passStatus }
-      if (task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled') {
-        return { status: taskType === 'parameter_experiment' ? 'unstable' : 'fail' }
-      }
-      return { status: 'research' }
-    })
+function taskProgressPct(task: TaskDTO) {
+  const pct = Number(task.progress) * 100
+  if (!Number.isFinite(pct)) return 0
+  return Math.max(0, Math.min(100, Math.round(pct)))
+}
+
+const DASHBOARD_TASK_HEARTBEAT_STALE_MS = 5 * 60 * 1000
+
+function isDashboardTaskHeartbeatStale(task: TaskDTO) {
+  if (task.status !== 'running') return false
+  const timestamp = Date.parse(String(task.updated_at || task.started_at || ''))
+  if (!Number.isFinite(timestamp)) return true
+  return Date.now() - timestamp > DASHBOARD_TASK_HEARTBEAT_STALE_MS
+}
+
+function taskProgressSummary(task: TaskDTO) {
+  if (task.task_type === 'factor_snapshot') {
+    const snapshot = factorSnapshotSummary(task)
+    if (snapshot) return snapshot
+  }
+  const stage = String(task.summary.name || task.summary.stage || task.subtask_name || task.subtask_key || '').trim()
+  if (stage) return stage
+  const message = String(task.summary.message || '')
+  if (valueToken(message, 'buy_plan')) return `买入计划${buyPlanLabel(valueToken(message, 'buy_plan'))}`
+  if (valueToken(message, 'portfolio_status')) return `组合预算${gateLabel(valueToken(message, 'portfolio_status'))}`
+  if (message.includes('capacity_pass') || message.includes('capacity_fail')) return '容量门禁'
+  if (message.includes('gate_pass') || message.includes('gate_fail')) return '硬门禁'
+  return ''
+}
+
+function factorSnapshotSummary(task: TaskDTO) {
+  const observability = asRecord(task.summary.observability)
+  const snapshot = asRecord(observability?.factor_snapshot)
+  const message = String(task.summary.message || '')
+  const rows = numericValue(snapshot?.row_count, numberToken(message, 'rows'))
+  const factors = numericValue(snapshot?.factor_count, numberToken(message, 'factors'))
+  const quality = String(snapshot?.quality_status || valueToken(message, 'quality') || '')
+  const parts = [
+    rows > 0 ? `${rows}行` : '',
+    factors > 0 ? `${factors}因子` : '',
+    quality ? `质量${gateLabel(quality)}` : '',
+  ].filter(Boolean)
+  return parts.join(' · ')
+}
+
+function taskTypeLabel(task: TaskDTO) {
+  if (task.task_type === 'profit_arena_rebalance') return '通用策略调仓'
+  if (task.task_type === 'factor_snapshot') return '因子快照'
+  if (task.task_type === 'model_training' && isProfitArenaTask(task)) return '通用策略'
+  return task.task_type
+}
+
+function isProfitArenaTask(task: TaskDTO) {
+  const strategy = String(task.params.strategy || '')
+  const name = String(task.name || '')
+  const external = String(task.external_run_id || '')
+  return strategy.includes('profit_arena') || name.includes('通用策略') || external.includes('profit_arena')
+}
+
+function valueToken(message: string, key: string) {
+  const match = new RegExp(`${key}=([^\\s,;]+)`).exec(message)
+  return match ? match[1].trim() : ''
+}
+
+function numberToken(message: string, key: string) {
+  const value = Number(valueToken(message, key))
+  return Number.isFinite(value) ? value : 0
+}
+
+function numericValue(value: unknown, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+
+function gateLabel(status: string) {
+  if (status === 'pass') return '通过'
+  if (status === 'warn') return '警告'
+  if (status === 'fail') return '失败'
+  if (status === 'missing') return '等待'
+  return status
+}
+
+function buyPlanLabel(status: string) {
+  if (status === 'ready') return '就绪'
+  if (status === 'partial_capacity') return '容量部分可用'
+  if (status === 'blocked_by_capacity') return '容量阻断'
+  if (status === 'blocked_by_portfolio_risk') return '组合风险阻断'
+  if (status === 'missing') return '等待'
+  return status
 }
 
 function buildDataQualityFallback(dataQuality: Record<string, unknown>, datasetStatus: DatasetUpdateStatus[], runStatus: RunStatus | null) {
@@ -569,20 +831,36 @@ function buildDataQualityFallback(dataQuality: Record<string, unknown>, datasetS
 
 function buildRecoveryFallback(recovery: Record<string, unknown>, tasks: TaskDTO[]) {
   if (num(recovery.total) > 0) return recovery
-  const failed = tasks.filter((task) => task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled')
-  const retryable = failed.filter((task) => task.max_attempts <= 0 || task.attempt < task.max_attempts)
+  const productionTasks = tasks.filter(isProductionTask)
+  const failed = productionTasks.filter((task) => task.status === 'failed' || task.status === 'interrupted' || task.status === 'cancelled')
+  const retryable = failed.filter((task) => isManualRecoveryTask(task) && (task.max_attempts <= 0 || task.attempt < task.max_attempts))
   return {
     ...recovery,
-    total: tasks.length,
+    total: productionTasks.length,
     retryable_failed: retryable.length,
     blocked_failed: failed.length - retryable.length
   }
+}
+
+function isProductionTask(task: TaskDTO) {
+  if (task.task_type === 'data_update') return true
+  if (task.task_type === 'factor_snapshot') return true
+  if (task.task_type === 'profit_arena_rebalance') return true
+  if (task.task_type === 'model_training') return isProfitArenaTask(task)
+  return false
+}
+
+function isManualRecoveryTask(task: TaskDTO) {
+  if (task.task_type === 'factor_snapshot') return false
+  return isProductionTask(task)
 }
 
 function aggregateRecommendationSources(recommendation: PositionRecommendation | null): Array<Record<string, unknown>> {
   const weights = new Map<string, number>()
   recommendation?.rows.forEach((row) => {
     row.sources?.forEach((source) => {
+      if (source.strategy !== 'profit_arena_model' && source.strategy !== 'profit_arena') return
+      if (num(source.weight) <= 0) return
       weights.set(source.strategy, (weights.get(source.strategy) || 0) + source.weight)
     })
   })
@@ -592,34 +870,13 @@ function aggregateRecommendationSources(recommendation: PositionRecommendation |
 }
 
 function recommendationSourcePromotion(recommendation: PositionRecommendation | null) {
-  const source = recommendation?.active_strategy_versions?.find((item) => item.strategy !== 'account_rebalance')
+  const source = recommendation?.active_strategy_versions?.find((item) => item.strategy === 'profit_arena_model' || item.strategy === 'profit_arena')
   if (!source) return null
   return {
     strategy: source.strategy,
     recommended_status: source.mode || 'research',
     strategy_version: source.version || 1,
     score: source.weight || 0
-  }
-}
-
-function summarizeHindsight(rows: RecommendationHindsight[]) {
-  let weightedSum = 0
-  let weightedCount = 0
-  let hitSum = 0
-  let hitCount = 0
-  for (const row of rows) {
-    if (typeof row.weighted_return === 'number' && Number.isFinite(row.weighted_return)) {
-      weightedSum += row.weighted_return
-      weightedCount += 1
-    }
-    if (typeof row.hit_rate === 'number' && Number.isFinite(row.hit_rate)) {
-      hitSum += row.hit_rate
-      hitCount += 1
-    }
-  }
-  return {
-    weightedReturn: weightedCount ? weightedSum / weightedCount : null,
-    hitRate: hitCount ? hitSum / hitCount : null
   }
 }
 
@@ -636,17 +893,110 @@ function num(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
+function buildProductionReadiness({
+  dataStatus,
+  factorSnapshotStatus,
+  factorGovernance,
+  recommendation,
+  runningTask,
+  staleRunningTasks,
+  failedTasks
+}: {
+  dataStatus: RunStatus | null
+  factorSnapshotStatus: RunStatus | null
+  factorGovernance: FactorStoreGovernance
+  recommendation: PositionRecommendation | null
+  runningTask?: TaskDTO
+  staleRunningTasks: TaskDTO[]
+  failedTasks: TaskDTO[]
+}) {
+  const gate = asRecord(factorGovernance.quality_gate) || {}
+  const spec = asRecord(factorGovernance.profit_arena_spec) || {}
+  const freshness = asRecord(factorGovernance.snapshot_freshness) || {}
+  const gateStatus = String(gate.status || factorGovernance.status || 'missing').toLowerCase()
+  const specStatus = String(spec.status || factorGovernance.snapshot_fresh_status || 'missing').toLowerCase()
+  const factorReady = (gateStatus === 'pass' || gateStatus === 'warn') && specStatus === 'pass'
+  const snapshotDate = String(freshness.actual || factorGovernance.trade_date_max || factorGovernance.end || '')
+  const signalReady = hasRecommendationSignal(recommendation)
+  const dataState = dataStatus?.state || 'idle'
+  const factorStep = factorSnapshotStatus?.state === 'running'
+    ? { value: '生成中', tone: 'run' }
+    : factorReady
+      ? { value: '就绪', tone: 'pass' }
+      : specStatus === 'fail' || gateStatus === 'fail'
+        ? { value: '未通过', tone: 'wait' }
+        : { value: '等待', tone: 'wait' }
+  const steps = [
+    { label: '数据', value: statusLabel(dataState), tone: productionStateTone(dataState) },
+    { label: '因子', value: factorStep.value, tone: factorStep.tone },
+    { label: '签名', value: gateLabel(specStatus), tone: specStatus === 'pass' ? 'pass' : 'wait' },
+    { label: '心跳', value: staleRunningTasks.length ? `${staleRunningTasks.length}异常` : '正常', tone: staleRunningTasks.length ? 'wait' : 'pass' },
+    { label: '买入清单', value: signalReady ? formatCompactDate(recommendation?.date || '') : '等待', tone: signalReady ? 'pass' : 'wait' },
+    { label: '调仓', value: recommendation?.rebalanced ? '已执行' : signalReady ? '待执行' : '等待', tone: recommendation?.rebalanced ? 'pass' : signalReady ? 'run' : 'wait' }
+  ]
+  if (staleRunningTasks.length > 0) {
+    const staleTask = staleRunningTasks[0]
+    return {
+      tone: 'blocked',
+      title: `有 ${staleRunningTasks.length} 个生产任务疑似卡住`,
+      message: `${staleTask.name}：running 但超过 5 分钟没有进度上报，请到任务中心查看日志或取消后重跑`,
+      steps
+    }
+  }
+  if (failedTasks.length > 0) {
+    return {
+      tone: 'blocked',
+      title: `有 ${failedTasks.length} 个生产任务异常`,
+      message: `${failedTasks[0].name}：${failedTasks[0].error_message || taskProgressSummary(failedTasks[0]) || '请到任务中心查看失败原因'}`,
+      steps
+    }
+  }
+  if (runningTask || dataStatus?.state === 'running' || factorSnapshotStatus?.state === 'running') {
+    return {
+      tone: 'running',
+      title: '生产链路运行中',
+      message: runningTask ? taskDisplayLabel(runningTask) : dataStatus?.state === 'running' ? (dataStatus.stage || dataStatus.message || '数据更新中') : (factorSnapshotStatus?.stage || factorSnapshotStatus?.message || '因子快照生成中'),
+      steps
+    }
+  }
+  if (!factorReady) {
+    return {
+      tone: 'blocked',
+      title: '因子快照未就绪',
+      message: snapshotDate ? `${formatCompactDate(snapshotDate)} 快照未通过通用策略生产签名` : '请先在数据管理执行数据更新并自动抽取因子',
+      steps
+    }
+  }
+  if (!signalReady) {
+    return {
+      tone: 'blocked',
+      title: '等待通用策略买入清单',
+      message: '因子快照已就绪，下一步需要训练冠军版本或重新推理最新截面',
+      steps
+    }
+  }
+  return {
+    tone: 'ready',
+    title: '通用策略生产闭环可用',
+    message: `买入清单 ${formatCompactDate(recommendation?.date || '')} · ${recommendation?.n_holdings || 0} 只 · ${recommendation?.rebalanced ? '今日已调仓' : '等待条件价调仓'}`,
+    steps
+  }
+}
+
+function productionStateTone(state: string) {
+  if (state === 'running' || state === 'queued' || state === 'created') return 'run'
+  if (state === 'success' || state === 'done' || state === 'pass') return 'pass'
+  if (state === 'warn' || state === 'skipped') return 'run'
+  return 'wait'
+}
+
 function promotionLabel(status: string) {
   return ({
     research: '研究',
-    paper: '进模拟',
+    paper: '观察中',
     active_candidate: '可生效',
     rejected: '拒绝',
     active: '生效',
-    promotable: '可模拟'
+    promotable: '可观察'
   } as Record<string, string>)[status] || status || '研究'
-}
-
-function emptyGovernance(): GovernanceDashboard {
-  return { hindsight: [], risk: [], paper: [], promotion: [], walk: [], params: [], data_quality: {}, parameter_recommendations: [], retirement: [], portfolio_attribution: [], recovery: {}, reports: [] }
 }

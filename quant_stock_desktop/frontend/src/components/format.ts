@@ -1,6 +1,6 @@
 export function formatDate(value: string) {
   if (!value) return '—'
-  return value.replace('T', ' ').replace(/Z$/, '')
+  return value.replace('T', ' ').replace(/Z$/, '').replace(/([+-]\d{2}:\d{2})$/, '')
 }
 
 export function formatBytes(value: number) {

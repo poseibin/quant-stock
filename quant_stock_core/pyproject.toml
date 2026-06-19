@@ -22,7 +22,6 @@ dependencies = [
 ]
 
 [project.scripts]
-quant-daily-signal = "scripts.daily_signal:main"
 quant-pool-confirm = "scripts.pool_confirm:main"
 quant-run-backtest = "scripts.run_backtest:main"
 quant-evaluate-strategies = "scripts.evaluate_strategies:main"

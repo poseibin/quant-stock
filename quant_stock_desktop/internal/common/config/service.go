@@ -50,6 +50,7 @@ func (service *Service) Load(defaults Settings) (Settings, error) {
 	if service.db != nil {
 		settings, err := service.loadFromDB(defaults)
 		if err == nil {
+			_ = service.pruneUnsupportedStrategyVersions()
 			_ = service.ensureStrategyVersions(settings, "settings_load", "初始化策略版本")
 			return settings, nil
 		}
@@ -137,6 +138,9 @@ func (service *Service) ensureStrategyVersions(settings Settings, source string,
 }
 
 func (service *Service) saveStrategyVersions(tx *sql.Tx, settings Settings, source string, note string) error {
+	if err := pruneUnsupportedStrategyVersionsTx(tx); err != nil {
+		return err
+	}
 	now := time.Now().Format("2006-01-02T15:04:05")
 	for name, strategy := range settings.Strategies {
 		configJSON, err := json.Marshal(strategy)
@@ -171,6 +175,19 @@ func (service *Service) saveStrategyVersions(tx *sql.Tx, settings Settings, sour
 		}
 	}
 	return nil
+}
+
+func (service *Service) pruneUnsupportedStrategyVersions() error {
+	if service.db == nil {
+		return nil
+	}
+	_, err := service.db.Conn().Exec(`DELETE FROM strategy_config_versions WHERE strategy <> ?`, "profit_arena_model")
+	return err
+}
+
+func pruneUnsupportedStrategyVersionsTx(tx *sql.Tx) error {
+	_, err := tx.Exec(`DELETE FROM strategy_config_versions WHERE strategy <> ?`, "profit_arena_model")
+	return err
 }
 
 func activateStrategyVersion(tx *sql.Tx, strategy string, version int, activatedAt string) error {
@@ -295,14 +312,14 @@ func normalize(settings Settings) Settings {
 	if settings.DeepSeekModel == "" {
 		settings.DeepSeekModel = "deepseek-v4-pro"
 	}
-	settings.Strategies = mergeStrategies(defaultStrategies(), settings.Strategies)
+	settings.Strategies = normalizeStrategies(settings.Strategies)
 	if settings.PortfolioRisk == nil {
 		settings.PortfolioRisk = defaultPortfolioRisk()
 	}
 	if settings.ExitRules == nil {
 		settings.ExitRules = defaultExitRules()
 	}
-	settings.GovernanceRules = mergeAnyMap(defaultGovernanceRules(), settings.GovernanceRules)
+	settings.GovernanceRules = normalizeGovernanceRules(settings.GovernanceRules)
 	settings.StrategySchedule = normalizeStrategySchedule(settings.StrategySchedule)
 	return settings
 }
@@ -356,35 +373,7 @@ func normalizeStrategySchedule(schedule StrategyScheduleSettings) StrategySchedu
 			"arena": true,
 		}
 	} else {
-		targets := map[string]bool{}
-		hasExplicitArena := false
-		legacyTargetFound := false
-		legacyEnabled := false
-		for key, value := range schedule.Targets {
-			key = strings.TrimSpace(key)
-			switch key {
-			case "arena":
-				hasExplicitArena = true
-				targets[key] = value
-			case "profit_arena":
-				hasExplicitArena = true
-				targets["arena"] = targets["arena"] || value
-			case "profit_arena_model":
-				hasExplicitArena = true
-				targets["arena"] = targets["arena"] || value
-			case "t0", "limit_up", "breakout", "factor":
-				legacyTargetFound = true
-				legacyEnabled = legacyEnabled || value
-			}
-		}
-		if !hasExplicitArena {
-			if legacyTargetFound {
-				targets["arena"] = legacyEnabled
-			} else {
-				targets["arena"] = true
-			}
-		}
-		schedule.Targets = targets
+		schedule.Targets = map[string]bool{"arena": true}
 	}
 	schedule.WechatWebhook = strings.TrimSpace(schedule.WechatWebhook)
 	cleanUsers := make([]string, 0, len(schedule.WechatUsers))
@@ -519,187 +508,79 @@ func cloneAnyValue(value any) any {
 
 func defaultGovernanceRules() map[string]any {
 	return map[string]any{
-		"min_promotable_score":          0.85,
-		"min_research_score":            0.55,
-		"min_paper_score":               0.85,
-		"min_active_candidate_score":    0.85,
-		"max_drawdown":                  0.22,
-		"min_sharpe":                    0.30,
-		"min_calmar":                    0.25,
-		"max_turnover":                  0.45,
-		"min_stability_rate":            0.45,
-		"min_walk_forward_pass_rate":    0.50,
-		"min_eval_walk_forward_windows": 1,
-		"min_parameter_stable_rate":     0.50,
-		"require_positive_return":       true,
-		"allow_missing_parameter_tests": true,
+		"profit_arena_factor_store_id":       "profit_arena_v1",
+		"min_arena_score":                    85.0,
+		"min_rank_ic":                        0.08,
+		"min_capital_annual_return":          0.12,
+		"max_capital_drawdown":               0.22,
+		"min_capital_sharpe":                 0.30,
+		"max_single_weight":                  0.10,
+		"max_industry_weight":                0.30,
+		"max_target_participation_rate":      0.02,
+		"max_allowed_participation_rate":     0.05,
+		"require_fresh_factor_snapshot":      true,
+		"require_profit_arena_spec_pass":     true,
+		"require_positive_capital_return":    true,
+		"block_untradeable_boards":           true,
+		"auto_refresh_after_factor_snapshot": true,
+	}
+}
+
+func normalizeGovernanceRules(current map[string]any) map[string]any {
+	merged := mergeAnyMap(defaultGovernanceRules(), current)
+	for _, key := range legacyGovernanceRuleKeys() {
+		delete(merged, key)
+	}
+	return merged
+}
+
+func legacyGovernanceRuleKeys() []string {
+	return []string{
+		"min_promotable_score",
+		"min_research_score",
+		"min_paper_score",
+		"min_active_candidate_score",
+		"max_drawdown",
+		"min_sharpe",
+		"min_calmar",
+		"max_turnover",
+		"min_stability_rate",
+		"min_walk_forward_pass_rate",
+		"min_eval_walk_forward_windows",
+		"min_parameter_stable_rate",
+		"require_positive_return",
+		"allow_missing_parameter_tests",
 	}
 }
 
 func defaultStrategies() map[string]StrategySettings {
 	return map[string]StrategySettings{
-		"market_regime_timing": {
-			Label: "市场状态择时", Enabled: true, Weight: 0.10, Rebalance: "weekly",
-			Filters:  map[string]any{"market_regime": map[string]any{"trend_window": 60, "breadth_window": 20, "min_breadth": 0.45, "normal_exposure": 1.0, "weak_exposure": 0.50, "bear_exposure": 0.25}},
-			Position: map[string]any{"n_holdings": 25, "max_single_weight": 0.05},
-		},
-		"ml_factor_ranker": {
-			Label:     "机器学习因子",
-			Enabled:   false,
-			Weight:    0.10,
-			Rebalance: "monthly",
-			Universe:  map[string]any{"exclude_restricted": true, "min_total_mv": 2000000000, "max_total_mv": 120000000000, "min_amount": 30000000},
-			Filters: map[string]any{
-				"exclude_st":     true,
-				"max_day_return": 0.095,
-				"market_regime": map[string]any{
-					"continuous": true, "trend_window": 60, "breadth_window": 20,
-					"drawdown_window": 120, "volatility_window": 20,
-					"min_breadth": 0.50, "normal_exposure": 1.0, "weak_exposure": 0.30, "bear_exposure": 0.08,
-					"crisis_guard": true, "crisis_exposure": 0.0, "crisis_drawdown": -0.10, "crisis_short_return": -0.045, "crisis_breadth": 0.34,
-					"risk_state": map[string]any{"enabled": true, "normal_exposure": 1.0, "weak_exposure": 0.25, "post_crash_repair_exposure": 0.35, "liquidity_squeeze_exposure": 0.0, "crash_exposure": 0.0},
-				},
-				"stress_controls": map[string]any{
-					"enabled": true, "states": []any{"weak", "crash", "liquidity_squeeze"},
-					"stress_min_amount_mult": 1.8, "max_ret20": 0.18, "max_vol20": 0.55,
-					"max_amount_chg20": 2.0, "max_turnover_rate": 12.0,
-					"ret20_penalty": 0.28, "vol20_penalty": 0.12, "amount_chg20_penalty": 0.03,
-					"turnover_penalty": 0.12, "weak_base_penalty": 0.03, "crash_drawdown_penalty": 0.18,
-				},
-				"crash_gate": map[string]any{"enabled": true, "lookback_days": 20, "crash_states": []any{"crash", "liquidity_squeeze"}, "cooldown_days": 10},
-				"crash_exit": map[string]any{"enabled": true, "trigger_states": []any{"crash", "liquidity_squeeze"}, "cooldown_days": 10},
-			},
-			Selection: map[string]any{"run_id": "fr_full_105_2010_2025_20260606", "min_pred_rank": 0.97},
-			Position:  map[string]any{"n_holdings": 20, "max_single_weight": 0.0665, "max_industry_weight": 0.16},
-		},
-		"multi_factor_composite": {
-			Label: "多因子综合", Enabled: true, Weight: 0.18, Rebalance: "monthly",
-			Selection: map[string]any{"component_weights": map[string]any{"small_cap_quality": 0.30, "trend_pullback": 0.25, "dividend_quality": 0.20, "earnings_revision": 0.15, "industry_prosperity": 0.10}},
-			Position:  map[string]any{"n_holdings": 30, "max_single_weight": 0.05},
-		},
-		"small_cap_quality": {
-			Label: "小盘质量", Enabled: true, Weight: 0.30, Rebalance: "monthly",
-			Universe: map[string]any{"profile": "retail_edge", "min_circ_mv": 2000000000, "max_circ_mv": 5000000000, "max_total_mv": 50000000000, "min_listed_days": 250, "min_avg_amount": 20000000, "max_20d_return": 0.35, "max_amount_spike": 5.0},
-			Filters: map[string]any{
-				"exclude_st": true, "exclude_delist_warn": true, "min_roe_ttm": 0.05, "max_debt_ratio": 0.70,
-				"max_goodwill_to_equity": 0.50, "min_consecutive_profit_years": 2, "drop_pb_top_pct": 0.10,
-				"score_weights": map[string]any{"small_size": 0.45, "low_pb": 0.25, "momentum_20d": 0.20, "low_vol_20d": 0.10},
-			},
-			Position: map[string]any{"n_holdings": 25, "max_single_weight": 0.05},
-		},
-		"trend_pullback": {
-			Label: "趋势回撤", Enabled: true, Weight: 0.12, Rebalance: "weekly",
-			Universe: map[string]any{"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 50000000, "avg_amount_window": 20, "max_total_mv": 80000000000, "max_20d_return": 0.30, "max_amount_spike": 4.0},
-			Filters: map[string]any{
-				"exclude_st": true, "long_window": 120, "mid_window": 60, "short_window": 20,
-				"min_mid_return": 0.06, "max_short_return": 0.18, "min_roe": 0.06, "max_debt_ratio": 0.75,
-				"score_weights": map[string]any{"trend": 0.38, "breakout": 0.17, "liquidity": 0.15, "low_vol": 0.15, "quality": 0.15},
-			},
-			Position: map[string]any{"n_holdings": 18, "max_single_weight": 0.05, "max_industry_weight": 0.30},
-		},
-		"turtle_breakout": {
-			Label: "海龟突破", Enabled: true, Weight: 0.08, Rebalance: "daily",
-			Universe: map[string]any{"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 50000000, "min_total_mv": 2000000000, "max_total_mv": 120000000000, "max_20d_return": 0.45, "max_amount_spike": 5.0},
-			Filters:  map[string]any{"entry_window": 55, "exit_window": 20, "atr_window": 20, "trend_window": 120},
-			Position: map[string]any{"n_holdings": 20, "max_units": 4, "risk_per_unit": 0.006, "max_unit_weight": 0.02, "max_single_weight": 0.06, "max_total_exposure": 1.0, "add_atr_step": 0.5, "stop_atr": 2.0},
-		},
-		"dividend_quality": {
-			Label: "红利质量", Enabled: true, Weight: 0.10, Rebalance: "monthly",
-			Universe: map[string]any{"profile": "retail_edge", "min_listed_days": 730, "min_avg_amount": 30000000, "avg_amount_window": 20, "min_total_mv": 5000000000, "max_total_mv": 120000000000, "max_20d_return": 0.25, "max_amount_spike": 4.0},
-			Filters: map[string]any{
-				"exclude_st": true, "min_total_mv": 8000000000, "min_dv_ttm": 2.0, "max_pb": 3.0,
-				"vol_window": 60, "min_roe": 0.07, "max_debt_ratio": 0.70,
-				"score_weights": map[string]any{"dividend": 0.35, "low_vol": 0.25, "low_pb": 0.15, "quality": 0.20, "liquidity": 0.05},
-			},
-			Position: map[string]any{"n_holdings": 20, "max_single_weight": 0.05, "max_industry_weight": 0.25},
-		},
-		"earnings_revision": {
-			Label: "盈利预期修正", Enabled: true, Weight: 0.10, Rebalance: "event",
-			Filters: map[string]any{
-				"min_profit_growth": 25.0, "min_turnaround_profit": 20000000,
-				"max_post_ann_return": 0.15, "max_pe_ttm": 70.0, "max_pb": 7.0, "min_total_mv": 2000000000, "max_total_mv": 80000000000,
-				"min_avg_amount": 20000000, "lookback_days": 20, "holding_days": 35,
-			},
-			Position: map[string]any{"max_single_weight": 0.04, "max_active_events": 20},
-		},
-		"industry_prosperity": {
-			Label: "行业景气", Enabled: true, Weight: 0.10, Rebalance: "monthly",
-			Universe:  map[string]any{"profile": "retail_edge", "min_listed_days": 250, "min_avg_amount": 30000000, "max_total_mv": 120000000000, "max_20d_return": 0.30, "max_amount_spike": 4.0},
-			Selection: map[string]any{"top_n_industries": 4, "momentum_window": 20, "rank_within_industry": []any{3, 10}, "stocks_per_industry": 3, "min_industry_size": 5},
-			Position:  map[string]any{"n_holdings": 12, "max_single_weight": 0.05},
-		},
-		"low_crowding_reversal": {
-			Label: "低拥挤反转", Enabled: true, Weight: 0.10, Rebalance: "quarterly",
-			Filters: map[string]any{
-				"exclude_st": true, "universe_profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 20000000, "max_total_mv": 80000000000, "max_20d_return": 0.25, "min_yoy_revenue": 0.0, "min_quarter_profit_yoy": 0.20,
-				"last_year_negative_or_decline": 0.50, "min_cfo_to_ni_ratio": 0.50, "industry_60d_return_min": -0.05,
-			},
-			Position: map[string]any{"n_holdings": 15, "max_single_weight": 0.06, "max_industry_weight": 0.30},
-		},
-		"event_enhanced": {
-			Label: "事件增强", Enabled: false, Weight: 0.06, Rebalance: "event",
-			Filters: map[string]any{
-				"min_profit_growth": 25.0, "min_turnaround_profit": 20000000, "min_net_amount": 30000000, "min_amount_rate": 1.0, "min_inst_net_buy": 50000000, "min_increase_amount": 10000000, "min_avg_to_current_price_ratio": 0.95,
-				"max_post_ann_return": 0.15, "max_event_day_return": 6.0, "max_event_day_return_cap": 6.0, "min_total_mv": 2000000000, "max_total_mv": 80000000000, "min_avg_amount": 20000000,
-				"entry_wait_days": 5, "max_pullback_from_event_close": -0.03, "min_60d_return": 0.10, "holding_days": 10,
-			},
-			Position: map[string]any{"max_single_weight": 0.03, "max_active_events": 20},
-		},
-		"beijing_satellite": {
-			Label: "北交所卫星", Enabled: false, Weight: 0.04, Rebalance: "monthly",
-			Universe: map[string]any{"market": "BJ", "min_avg_amount": 5000000},
-			Filters:  map[string]any{"min_yoy_profit": 0.0, "max_60d_return": 0.25},
-			Position: map[string]any{"n_holdings": 10, "max_single_weight": 0.06},
-		},
-		"insider_buy": {
-			Label: "高管增持", Enabled: true, Weight: 0.20, Rebalance: "event",
-			Filters: map[string]any{
-				"min_increase_amount": 10000000, "min_avg_to_current_price_ratio": 0.95,
-				"max_post_ann_return": 0.20, "min_total_mv": 2000000000, "max_total_mv": 80000000000, "min_avg_amount": 20000000, "max_20d_return": 0.35, "holding_days_min": 30, "holding_days_max": 60,
-			},
-			Position: map[string]any{"max_single_weight": 0.05, "stop_loss": -0.15},
-		},
-		"lhb_follow": {
-			Label: "龙虎榜", Enabled: true, Weight: 0.10, Rebalance: "event",
-			Filters:  map[string]any{"min_inst_net_buy": 50000000, "exclude_limit_up": true, "max_5d_return": 0.15, "holding_days": 7},
-			Position: map[string]any{"max_single_weight": 0.04, "stop_loss_break_5d_low": true},
-		},
-		"trend_quality": {
-			Label: "趋势质量", Enabled: false, Weight: 0.12, Rebalance: "monthly",
-			Universe: map[string]any{"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 50000000, "avg_amount_window": 20, "max_total_mv": 80000000000, "max_20d_return": 0.35, "max_amount_spike": 5.0},
-			Filters: map[string]any{
-				"exclude_st": true, "long_window": 120, "mid_window": 60, "short_window": 20,
-				"min_mid_return": 0.08, "max_short_return": 0.25, "min_roe": 0.06, "max_debt_ratio": 0.75,
-				"score_weights": map[string]any{"trend": 0.45, "breakout": 0.20, "liquidity": 0.15, "low_vol": 0.10, "quality": 0.10},
-			},
-			Position: map[string]any{"n_holdings": 18, "max_single_weight": 0.05, "max_industry_weight": 0.30},
-		},
-		"garp_quality": {
-			Label: "质量成长", Enabled: false, Weight: 0.12, Rebalance: "monthly",
-			Universe: map[string]any{"profile": "retail_edge", "min_listed_days": 730, "min_avg_amount": 40000000, "max_total_mv": 80000000000, "max_20d_return": 0.35, "max_amount_spike": 5.0},
-			Filters: map[string]any{
-				"exclude_st": true, "max_pe_ttm": 60.0, "max_pb": 8.0, "max_ps_ttm": 12.0,
-				"min_roe": 0.08, "min_gross_margin": 0.15, "min_revenue_yoy": 0.08, "min_profit_yoy": 0.08,
-			},
-			Position: map[string]any{"n_holdings": 20, "max_single_weight": 0.05, "max_industry_weight": 0.30},
-		},
-		"moneyflow_pullback": {
-			Label: "资金低吸", Enabled: false, Weight: 0.08, Rebalance: "event",
-			Filters: map[string]any{
-				"min_net_amount": 30000000, "min_amount_rate": 1.0,
-				"max_event_day_return": 9.5, "max_event_day_return_cap": 6.0,
-				"max_amount_rate": 200.0, "min_turnover_rate": 0.0, "max_turnover_rate": 100.0,
-				"min_inst_net_buy": -1000000000000, "max_inst_net_buy": 1000000000000,
-				"min_total_mv": 2000000000, "max_total_mv": 80000000000,
-				"entry_wait_days": 5, "min_pullback_from_event_close": -1.00,
-				"max_pullback_from_event_close": -0.03,
-				"max_dist_to_20d_high":          0.06, "max_dist_to_20d_high_cap": 0.06,
-				"min_close_to_ma20": 0.0, "min_close_to_ma60": 0.0,
-				"min_60d_return": 0.10, "min_60d_return_floor": 0.10, "holding_days": 10,
-			},
-			Position: map[string]any{"max_single_weight": 0.04, "max_active_events": 15},
+		"profit_arena_model": {
+			Label:     "收益擂台",
+			Enabled:   true,
+			Weight:    1.0,
+			Rebalance: "daily",
+			Universe:  map[string]any{"exclude_restricted": true},
+			Filters:   map[string]any{},
+			Selection: map[string]any{"factor_store_id": "profit_arena_v1"},
+			Position:  map[string]any{"n_holdings": 10, "max_single_weight": 0.10},
 		},
 	}
+}
+
+func normalizeStrategies(strategies map[string]StrategySettings) map[string]StrategySettings {
+	defaults := defaultStrategies()
+	result := cloneStrategies(defaults)
+	if existing, ok := strategies["profit_arena_model"]; ok {
+		merged := mergeStrategies(defaults, map[string]StrategySettings{"profit_arena_model": existing})["profit_arena_model"]
+		merged.Enabled = true
+		merged.Weight = 1.0
+		if strings.TrimSpace(merged.Label) == "" {
+			merged.Label = "收益擂台"
+		}
+		result["profit_arena_model"] = merged
+	}
+	return result
 }
 
 func defaultPortfolioRisk() map[string]any {

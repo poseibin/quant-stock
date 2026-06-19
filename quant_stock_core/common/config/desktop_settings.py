@@ -20,173 +20,14 @@ from .settings import DATA_ROOT
 def _default_settings() -> dict[str, Any]:
     return {
         "strategies": {
-            "market_regime_timing": {
-                "label": "市场状态择时", "enabled": True, "weight": 0.10, "rebalance": "weekly",
-                "filters": {"market_regime": {"trend_window": 60, "breadth_window": 20, "min_breadth": 0.45, "normal_exposure": 1.0, "weak_exposure": 0.50, "bear_exposure": 0.25}},
-                "position": {"n_holdings": 25, "max_single_weight": 0.05},
-            },
-            "ml_factor_ranker": {
-                "label": "机器学习因子", "enabled": False, "weight": 0.10, "rebalance": "monthly",
-                "universe": {"exclude_restricted": True, "min_total_mv": 2_000_000_000, "max_total_mv": 50_000_000_000, "min_circ_mv": 2_000_000_000, "max_circ_mv": 8_000_000_000, "min_amount": 30_000_000},
-                "filters": {
-                    "exclude_st": True, "max_day_return": 0.095,
-                    "market_regime": {
-                        "continuous": True, "daily_risk_overlay": True, "trend_window": 60, "breadth_window": 20,
-                        "drawdown_window": 120, "volatility_window": 20,
-                        "index_anchor_codes": ["932000.CSI", "399303.SZ", "000852.SH", "000905.SH"],
-                        "min_breadth": 0.50, "normal_exposure": 1.0, "weak_exposure": 0.30, "bear_exposure": 0.08,
-                        "crisis_guard": True, "crisis_exposure": 0.0, "crisis_drawdown": -0.10, "crisis_short_return": -0.045, "crisis_breadth": 0.34,
-                        "risk_state": {"enabled": True, "normal_exposure": 1.0, "weak_exposure": 0.25, "post_crash_repair_exposure": 0.35, "liquidity_squeeze_exposure": 0.0, "crash_exposure": 0.0},
-                    },
-                    "stress_controls": {
-                        "enabled": True, "states": ["weak", "crash", "liquidity_squeeze"],
-                        "stress_min_amount_mult": 1.8, "max_ret20": 0.18, "max_vol20": 0.55,
-                        "max_amount_chg20": 2.0, "max_turnover_rate": 12.0,
-                        "ret20_penalty": 0.28, "vol20_penalty": 0.12, "amount_chg20_penalty": 0.03,
-                        "turnover_penalty": 0.12, "weak_base_penalty": 0.03, "crash_drawdown_penalty": 0.18,
-                    },
-                    "index_anchor_warning": {
-                        "enabled": True, "lookback_days": 8,
-                        "normal_exposure": 1.0, "warning_exposure": 0.45, "severe_exposure": 0.0, "repair_exposure": 0.35,
-                        "ret5_warning": -0.035, "ret5_severe": -0.055,
-                        "ret20_warning": -0.060, "ret20_severe": -0.100,
-                        "drawdown20_warning": -0.080, "drawdown20_severe": -0.140,
-                        "rel20_warning": -0.050, "rel20_severe": -0.085,
-                        "ret5_overheat": 0.12, "ret20_overheat": 0.28,
-                        "overheat_exposure": 0.35, "overheat_cooldown_days": 3,
-                        "risk_score_warning": 22.0, "risk_score_severe": 45.0,
-                        "cooldown_days": 5, "severe_cooldown_days": 10, "recovery_days": 3,
-                    },
-                    "crash_gate": {"enabled": True, "lookback_days": 20, "crash_states": ["crash", "liquidity_squeeze"], "cooldown_days": 10},
-                    "crash_exit": {"enabled": True, "trigger_states": ["crash", "liquidity_squeeze"], "cooldown_days": 10, "max_exit_days": 0},
-                },
-                "selection": {"run_id": "fr_full_105_2010_2025_20260606", "min_pred_rank": 0.97},
-                "position": {"n_holdings": 20, "max_single_weight": 0.0665, "max_industry_weight": 0.16},
-            },
-            "multi_factor_composite": {
-                "label": "多因子综合", "enabled": True, "weight": 0.18, "rebalance": "monthly",
-                "selection": {"component_weights": {"small_cap_quality": 0.30, "trend_pullback": 0.25, "dividend_quality": 0.20, "earnings_revision": 0.15, "industry_prosperity": 0.10}},
-                "position": {"n_holdings": 30, "max_single_weight": 0.05},
-            },
-            "momentum_quality_guard": {
-                "label": "动量质量护栏", "enabled": True, "weight": 0.14, "rebalance": "monthly",
-                "universe": {"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 30_000_000, "min_total_mv": 2_000_000_000, "max_total_mv": 120_000_000_000, "max_20d_return": 0.30, "max_amount_spike": 4.0},
-                "filters": {
-                    "min_momentum_score": 0.75, "min_quality_score": 0.55, "max_short_return": 0.30,
-                    "max_debt_ratio": 0.75, "min_value_guard_score": 0.35,
-                    "market_regime": {"trend_window": 60, "breadth_window": 20, "min_breadth": 0.45, "normal_exposure": 1.0, "weak_exposure": 0.55, "bear_exposure": 0.25},
-                },
-                "position": {"n_holdings": 24, "max_single_weight": 0.05, "max_industry_weight": 0.30},
-            },
-            "quality_growth_cooldown": {
-                "label": "质量成长冷却", "enabled": True, "weight": 0.10, "rebalance": "monthly",
-                "universe": {"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 30_000_000, "min_total_mv": 2_000_000_000, "max_total_mv": 120_000_000_000, "max_20d_return": 0.25, "max_amount_spike": 4.0},
-                "filters": {
-                    "min_quality_score": 0.70, "min_growth_score": 0.65, "max_short_return": 0.25,
-                    "max_vol_20": 0.70, "max_debt_ratio": 0.75, "min_value_guard_score": 0.30,
-                    "market_regime": {"trend_window": 60, "breadth_window": 20, "min_breadth": 0.45, "normal_exposure": 1.0, "weak_exposure": 0.55, "bear_exposure": 0.25},
-                },
-                "position": {"n_holdings": 24, "max_single_weight": 0.05, "max_industry_weight": 0.30},
-            },
-            "small_cap_quality": {
-                "label": "小盘质量", "enabled": True, "weight": 0.30, "rebalance": "monthly",
-                "universe": {"profile": "retail_edge", "min_circ_mv": 2_000_000_000, "max_circ_mv": 5_000_000_000, "max_total_mv": 50_000_000_000, "min_listed_days": 250, "min_avg_amount": 20_000_000, "max_20d_return": 0.35, "max_amount_spike": 5.0},
-                "filters": {
-                    "exclude_st": True, "exclude_delist_warn": True, "min_roe_ttm": 0.05, "max_debt_ratio": 0.70,
-                    "max_goodwill_to_equity": 0.50, "min_consecutive_profit_years": 2, "drop_pb_top_pct": 0.10,
-                    "score_weights": {"small_size": 0.45, "low_pb": 0.25, "momentum_20d": 0.20, "low_vol_20d": 0.10},
-                },
-                "position": {"n_holdings": 25, "max_single_weight": 0.05},
-            },
-            "trend_pullback": {
-                "label": "趋势回撤", "enabled": True, "weight": 0.12, "rebalance": "weekly",
-                "universe": {"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 50_000_000, "avg_amount_window": 20, "max_total_mv": 80_000_000_000, "max_20d_return": 0.30, "max_amount_spike": 4.0},
-                "filters": {"exclude_st": True, "long_window": 120, "mid_window": 60, "short_window": 20, "min_mid_return": 0.06, "max_short_return": 0.18, "min_roe": 0.06, "max_debt_ratio": 0.75, "score_weights": {"trend": 0.38, "breakout": 0.17, "liquidity": 0.15, "low_vol": 0.15, "quality": 0.15}},
-                "position": {"n_holdings": 18, "max_single_weight": 0.05, "max_industry_weight": 0.30},
-            },
-            "turtle_breakout": {
-                "label": "海龟突破", "enabled": True, "weight": 0.08, "rebalance": "daily",
-                "universe": {"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 50_000_000, "min_total_mv": 2_000_000_000, "max_total_mv": 120_000_000_000, "max_20d_return": 0.45, "max_amount_spike": 5.0},
-                "filters": {"entry_window": 55, "exit_window": 20, "atr_window": 20, "trend_window": 120},
-                "position": {"n_holdings": 20, "max_units": 4, "risk_per_unit": 0.006, "max_unit_weight": 0.02, "max_single_weight": 0.06, "max_total_exposure": 1.0, "add_atr_step": 0.5, "stop_atr": 2.0},
-            },
-            "dividend_quality": {
-                "label": "红利质量", "enabled": True, "weight": 0.10, "rebalance": "monthly",
-                "universe": {"profile": "retail_edge", "min_listed_days": 730, "min_avg_amount": 30_000_000, "avg_amount_window": 20, "min_total_mv": 5_000_000_000, "max_total_mv": 120_000_000_000, "max_20d_return": 0.25, "max_amount_spike": 4.0},
-                "filters": {"exclude_st": True, "min_total_mv": 8_000_000_000, "min_dv_ttm": 2.0, "max_pb": 3.0, "vol_window": 60, "min_roe": 0.07, "max_debt_ratio": 0.70, "score_weights": {"dividend": 0.35, "low_vol": 0.25, "low_pb": 0.15, "quality": 0.20, "liquidity": 0.05}},
-                "position": {"n_holdings": 20, "max_single_weight": 0.05, "max_industry_weight": 0.25},
-            },
-            "earnings_revision": {
-                "label": "盈利预期修正", "enabled": True, "weight": 0.10, "rebalance": "event",
-                "filters": {"min_profit_growth": 25.0, "min_turnaround_profit": 20_000_000, "max_post_ann_return": 0.15, "max_pe_ttm": 70.0, "max_pb": 7.0, "min_total_mv": 2_000_000_000, "max_total_mv": 80_000_000_000, "min_avg_amount": 20_000_000, "lookback_days": 20, "holding_days": 35},
-                "position": {"max_single_weight": 0.04, "max_active_events": 20},
-            },
-            "industry_prosperity": {
-                "label": "行业景气", "enabled": True, "weight": 0.10, "rebalance": "monthly",
-                "universe": {"profile": "retail_edge", "min_listed_days": 250, "min_avg_amount": 30_000_000, "max_total_mv": 120_000_000_000, "max_20d_return": 0.30, "max_amount_spike": 4.0},
-                "selection": {"top_n_industries": 4, "momentum_window": 20, "rank_within_industry": [3, 10], "stocks_per_industry": 3, "min_industry_size": 5},
-                "position": {"n_holdings": 12, "max_single_weight": 0.05},
-            },
-            "low_crowding_reversal": {
-                "label": "低拥挤反转", "enabled": True, "weight": 0.10, "rebalance": "quarterly",
-                "filters": {"exclude_st": True, "universe_profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 20_000_000, "max_total_mv": 80_000_000_000, "max_20d_return": 0.25, "min_yoy_revenue": 0.0, "min_quarter_profit_yoy": 0.20, "last_year_negative_or_decline": 0.50, "min_cfo_to_ni_ratio": 0.50, "industry_60d_return_min": -0.05},
-                "position": {"n_holdings": 15, "max_single_weight": 0.06, "max_industry_weight": 0.30},
-            },
-            "event_enhanced": {
-                "label": "事件增强", "enabled": False, "weight": 0.06, "rebalance": "event",
-                "filters": {"min_profit_growth": 25.0, "min_turnaround_profit": 20_000_000, "min_net_amount": 30_000_000, "min_amount_rate": 1.0, "min_inst_net_buy": 50_000_000, "min_increase_amount": 10_000_000, "min_avg_to_current_price_ratio": 0.95, "max_post_ann_return": 0.15, "max_event_day_return": 6.0, "max_event_day_return_cap": 6.0, "min_total_mv": 2_000_000_000, "max_total_mv": 80_000_000_000, "min_avg_amount": 20_000_000, "entry_wait_days": 5, "max_pullback_from_event_close": -0.03, "min_60d_return": 0.10, "holding_days": 10},
-                "position": {"max_single_weight": 0.03, "max_active_events": 20},
-            },
-            "beijing_satellite": {
-                "label": "北交所卫星", "enabled": False, "weight": 0.04, "rebalance": "monthly",
-                "universe": {"market": "BJ", "min_avg_amount": 5_000_000},
-                "filters": {"min_yoy_profit": 0.0, "max_60d_return": 0.25},
-                "position": {"n_holdings": 10, "max_single_weight": 0.06},
-            },
-            "insider_buy": {
-                "label": "高管增持", "enabled": True, "weight": 0.20, "rebalance": "event",
-                "filters": {"min_increase_amount": 10_000_000, "min_avg_to_current_price_ratio": 0.95, "max_post_ann_return": 0.20, "min_total_mv": 2_000_000_000, "max_total_mv": 80_000_000_000, "min_avg_amount": 20_000_000, "max_20d_return": 0.35, "holding_days_min": 30, "holding_days_max": 60},
-                "position": {"max_single_weight": 0.05, "stop_loss": -0.15},
-            },
-            "lhb_follow": {
-                "label": "龙虎榜", "enabled": True, "weight": 0.10, "rebalance": "event",
-                "filters": {"min_inst_net_buy": 50_000_000, "exclude_limit_up": True, "max_5d_return": 0.15, "holding_days": 7},
-                "position": {"max_single_weight": 0.04, "stop_loss_break_5d_low": True},
-            },
-            "trend_quality": {
-                "label": "趋势质量", "enabled": False, "weight": 0.12, "rebalance": "monthly",
-                "universe": {"profile": "retail_edge", "min_listed_days": 365, "min_avg_amount": 50_000_000, "avg_amount_window": 20, "max_total_mv": 80_000_000_000, "max_20d_return": 0.35, "max_amount_spike": 5.0},
-                "filters": {
-                    "exclude_st": True, "long_window": 120, "mid_window": 60, "short_window": 20,
-                    "min_mid_return": 0.08, "max_short_return": 0.25, "min_roe": 0.06, "max_debt_ratio": 0.75,
-                    "score_weights": {"trend": 0.45, "breakout": 0.20, "liquidity": 0.15, "low_vol": 0.10, "quality": 0.10},
-                },
-                "position": {"n_holdings": 18, "max_single_weight": 0.05, "max_industry_weight": 0.30},
-            },
-            "garp_quality": {
-                "label": "质量成长", "enabled": False, "weight": 0.12, "rebalance": "monthly",
-                "universe": {"profile": "retail_edge", "min_listed_days": 730, "min_avg_amount": 40_000_000, "max_total_mv": 80_000_000_000, "max_20d_return": 0.35, "max_amount_spike": 5.0},
-                "filters": {
-                    "exclude_st": True, "max_pe_ttm": 60.0, "max_pb": 8.0, "max_ps_ttm": 12.0,
-                    "min_roe": 0.08, "min_gross_margin": 0.15, "min_revenue_yoy": 0.08, "min_profit_yoy": 0.08,
-                },
-                "position": {"n_holdings": 20, "max_single_weight": 0.05, "max_industry_weight": 0.30},
-            },
-            "moneyflow_pullback": {
-                "label": "资金低吸", "enabled": False, "weight": 0.08, "rebalance": "event",
-                "filters": {
-                    "min_net_amount": 30_000_000, "min_amount_rate": 1.0,
-                    "max_event_day_return": 9.5, "max_event_day_return_cap": 6.0,
-                    "max_amount_rate": 200.0, "min_turnover_rate": 0.0, "max_turnover_rate": 100.0,
-                    "min_inst_net_buy": -1_000_000_000_000, "max_inst_net_buy": 1_000_000_000_000,
-                    "min_total_mv": 2_000_000_000, "max_total_mv": 80_000_000_000,
-                    "entry_wait_days": 5, "min_pullback_from_event_close": -1.00,
-                    "max_pullback_from_event_close": -0.03,
-                    "max_dist_to_20d_high": 0.06, "max_dist_to_20d_high_cap": 0.06,
-                    "min_close_to_ma20": 0.0, "min_close_to_ma60": 0.0,
-                    "min_60d_return": 0.10, "min_60d_return_floor": 0.10, "holding_days": 10,
-                },
-                "position": {"max_single_weight": 0.04, "max_active_events": 15},
+            "profit_arena_model": {
+                "label": "收益擂台",
+                "enabled": True,
+                "weight": 1.0,
+                "rebalance": "daily",
+                "filters": {},
+                "universe": {},
+                "position": {"n_holdings": 10, "max_single_weight": 0.10},
             },
         },
         "portfolio_risk": {
@@ -216,11 +57,11 @@ def load_settings() -> dict[str, Any]:
         loaded = json.loads(row[0])
     except (TypeError, json.JSONDecodeError):
         return settings
-    return _deep_merge(settings, loaded)
+    return _normalize_desktop_settings(_deep_merge(settings, loaded))
 
 
 def save_settings(settings: dict[str, Any]) -> None:
-    payload = json.dumps(_deep_merge(_default_settings(), settings), ensure_ascii=False)
+    payload = json.dumps(_normalize_desktop_settings(_deep_merge(_default_settings(), settings)), ensure_ascii=False)
     db_path = config_db_path()
     with write_transaction(db_path) as conn:
         conn.execute(
@@ -237,12 +78,30 @@ def save_settings(settings: dict[str, Any]) -> None:
         )
 
 
+def _normalize_desktop_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    normalized = deepcopy(settings or {})
+    strategies = normalized.get("strategies")
+    if isinstance(strategies, dict):
+        arena = strategies.get("profit_arena_model") or strategies.get("profit_arena") or _default_settings()["strategies"]["profit_arena_model"]
+        if not isinstance(arena, dict):
+            arena = _default_settings()["strategies"]["profit_arena_model"]
+        normalized["strategies"] = {
+            "profit_arena_model": _deep_merge(_default_settings()["strategies"]["profit_arena_model"], arena)
+        }
+        normalized["strategies"]["profit_arena_model"]["enabled"] = True
+        normalized["strategies"]["profit_arena_model"]["weight"] = 1.0
+    return normalized
+
+
 def load_strategy_settings() -> dict[str, dict[str, Any]]:
     settings = _load_versioned_strategy_settings(deepcopy(load_settings().get("strategies", {}) or {}))
     for name, override in _strategy_overrides().items():
-        if isinstance(override, dict) and isinstance(settings.get(name), dict):
-            settings[name] = _deep_merge(settings[name], override)
-    return settings
+        normalized_name = "profit_arena_model" if name == "profit_arena" else name
+        if normalized_name != "profit_arena_model":
+            continue
+        if isinstance(override, dict) and isinstance(settings.get("profit_arena_model"), dict):
+            settings["profit_arena_model"] = _deep_merge(settings["profit_arena_model"], override)
+    return _normalize_desktop_settings({"strategies": settings})["strategies"]
 
 
 def load_strategy(name: str) -> dict[str, Any]:

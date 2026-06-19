@@ -185,12 +185,6 @@ func legacyTableRenames() []tableRename {
 		{old: "time_machine_trades", new: "portfolio_tm_trades"},
 		{old: "time_machine_positions", new: "portfolio_tm_positions"},
 		{old: "market_data_files", new: "data_market_files"},
-		{old: "limit_breakout_cache", new: "market_limit_breakout_cache"},
-		{old: "limit_breakout_cache_meta", new: "market_limit_breakout_cache_meta"},
-		{old: "limit_up_momentum_cache", new: "market_limit_momentum_cache"},
-		{old: "limit_up_momentum_cache_meta", new: "market_limit_momentum_cache_meta"},
-		{old: "limit_signal_predictions", new: "market_limit_signal_predictions"},
-		{old: "limit_signal_evaluation_summary", new: "market_limit_signal_eval_summary"},
 		{old: "daily_recommendation", new: "rec_daily_recommendations"},
 		{old: "strategy_evaluation", new: "eval_strategy_admission"},
 		{old: "portfolio_optimization_runs", new: "eval_portfolio_runs"},
@@ -201,8 +195,6 @@ func legacyTableRenames() []tableRename {
 		{old: "promotion_decisions", new: "strategy_promotion_decisions"},
 		{old: "walk_forward_windows", new: "eval_walk_forward_windows"},
 		{old: "parameter_experiments", new: "eval_parameter_experiments"},
-		{old: "policy_support_signals", new: "monitor_policy_support_signals"},
-		{old: "policy_support_candidates", new: "monitor_policy_support_candidates"},
 		{old: "py_run_lock", new: "task_run_locks"},
 		{old: "py_run_status", new: "task_run_status"},
 		{old: "runtime_run_locks", new: "task_run_locks"},
@@ -408,105 +400,6 @@ func baseSchemaStatements() []string {
 			PRIMARY KEY(ts_code, trade_date)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_data_daily_bars_date ON data_daily_bars(trade_date);`,
-		`CREATE TABLE IF NOT EXISTS t0_daily_runs (
-			run_id TEXT PRIMARY KEY,
-			trade_date TEXT NOT NULL,
-			status TEXT NOT NULL,
-			candidate_count INTEGER NOT NULL DEFAULT 0,
-			backtest_count INTEGER NOT NULL DEFAULT 0,
-			summary_json TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);`,
-		`CREATE TABLE IF NOT EXISTS t0_daily_candidates (
-			run_id TEXT NOT NULL,
-			ts_code TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT '',
-			industry TEXT NOT NULL DEFAULT '',
-			trade_date TEXT NOT NULL,
-			action TEXT NOT NULL,
-			score REAL NOT NULL DEFAULT 0,
-			state TEXT NOT NULL DEFAULT '',
-			setup TEXT NOT NULL DEFAULT '',
-			first_action TEXT NOT NULL DEFAULT '',
-			price REAL NOT NULL DEFAULT 0,
-			reduce_price REAL NOT NULL DEFAULT 0,
-			buy_price REAL NOT NULL DEFAULT 0,
-			stop_price REAL NOT NULL DEFAULT 0,
-			t_ratio REAL NOT NULL DEFAULT 0,
-			today_pct REAL NOT NULL DEFAULT 0,
-			return_5d REAL NOT NULL DEFAULT 0,
-			return_20d REAL NOT NULL DEFAULT 0,
-			avg_range_20d REAL NOT NULL DEFAULT 0,
-			drawdown_20d REAL NOT NULL DEFAULT 0,
-			amount REAL NOT NULL DEFAULT 0,
-			avg_amount_20d REAL NOT NULL DEFAULT 0,
-			expected_edge REAL NOT NULL DEFAULT 0,
-			target_freq TEXT NOT NULL DEFAULT 'daily',
-			lookback_days INTEGER NOT NULL DEFAULT 0,
-			plan_json LONGTEXT NOT NULL,
-			reasons_json TEXT NOT NULL,
-			risks_json TEXT NOT NULL,
-			generated_at TEXT NOT NULL,
-			PRIMARY KEY(run_id, ts_code)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_t0_daily_candidates_latest ON t0_daily_candidates(trade_date, score DESC);`,
-		`CREATE TABLE IF NOT EXISTS t0_daily_backtests (
-			run_id TEXT NOT NULL,
-			ts_code TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT '',
-			industry TEXT NOT NULL DEFAULT '',
-			n_days INTEGER NOT NULL DEFAULT 0,
-			n_candidates INTEGER NOT NULL DEFAULT 0,
-			two_sided_rate REAL NOT NULL DEFAULT 0,
-			one_sided_rate REAL NOT NULL DEFAULT 0,
-			avg_edge REAL NOT NULL DEFAULT 0,
-			total_edge REAL NOT NULL DEFAULT 0,
-			avg_next_range REAL NOT NULL DEFAULT 0,
-			score REAL NOT NULL DEFAULT 0,
-			summary_json TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(run_id, ts_code)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_t0_daily_backtests_score ON t0_daily_backtests(run_id, score DESC);`,
-		`CREATE TABLE IF NOT EXISTS t0_daily_time_machine_runs (
-			run_id TEXT PRIMARY KEY,
-			as_of_date TEXT NOT NULL,
-			eval_start_date TEXT NOT NULL,
-			eval_end_date TEXT NOT NULL,
-			status TEXT NOT NULL,
-			candidate_count INTEGER NOT NULL DEFAULT 0,
-			evaluated_count INTEGER NOT NULL DEFAULT 0,
-			avg_t0_edge REAL NOT NULL DEFAULT 0,
-			avg_underlying_return REAL NOT NULL DEFAULT 0,
-			avg_combined_return REAL NOT NULL DEFAULT 0,
-			win_rate REAL NOT NULL DEFAULT 0,
-			summary_json TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);`,
-		`CREATE TABLE IF NOT EXISTS t0_daily_time_machine_results (
-			run_id TEXT NOT NULL,
-			ts_code TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT '',
-			industry TEXT NOT NULL DEFAULT '',
-			as_of_date TEXT NOT NULL,
-			eval_start_date TEXT NOT NULL,
-			eval_end_date TEXT NOT NULL,
-			score REAL NOT NULL DEFAULT 0,
-			n_eval_days INTEGER NOT NULL DEFAULT 0,
-			two_sided_count INTEGER NOT NULL DEFAULT 0,
-			one_sided_count INTEGER NOT NULL DEFAULT 0,
-			t0_edge REAL NOT NULL DEFAULT 0,
-			avg_t0_edge REAL NOT NULL DEFAULT 0,
-			underlying_return REAL NOT NULL DEFAULT 0,
-			combined_return REAL NOT NULL DEFAULT 0,
-			max_drawdown REAL NOT NULL DEFAULT 0,
-			summary_json TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(run_id, ts_code)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_t0_daily_tm_results_score ON t0_daily_time_machine_results(run_id, combined_return DESC);`,
 		`CREATE TABLE IF NOT EXISTS data_daily_basic (
 			ts_code TEXT NOT NULL,
 			trade_date TEXT NOT NULL,
@@ -535,92 +428,6 @@ func baseSchemaStatements() []string {
 			PRIMARY KEY(ts_code, end_date)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_data_fina_indicator_ts_end ON data_fina_indicator(ts_code, end_date);`,
-		`CREATE TABLE IF NOT EXISTS market_limit_breakout_cache (
-			cache_key TEXT NOT NULL,
-			rank_no INTEGER NOT NULL DEFAULT 0,
-			ts_code TEXT NOT NULL,
-			latest_date TEXT NOT NULL DEFAULT '',
-			score REAL NOT NULL DEFAULT 0,
-			payload_json TEXT NOT NULL,
-			generated_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(cache_key, ts_code)
-		);`,
-		`CREATE TABLE IF NOT EXISTS market_limit_breakout_cache_meta (
-			cache_key TEXT PRIMARY KEY,
-			item_count INTEGER NOT NULL DEFAULT 0,
-			generated_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_market_limit_breakout_cache_rank ON market_limit_breakout_cache(cache_key, rank_no);`,
-		`CREATE INDEX IF NOT EXISTS idx_market_limit_breakout_cache_date ON market_limit_breakout_cache(latest_date);`,
-		`CREATE TABLE IF NOT EXISTS market_limit_momentum_cache (
-			cache_key TEXT NOT NULL,
-			rank_no INTEGER NOT NULL DEFAULT 0,
-			ts_code TEXT NOT NULL,
-			trade_date TEXT NOT NULL DEFAULT '',
-			score REAL NOT NULL DEFAULT 0,
-			payload_json TEXT NOT NULL,
-			generated_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(cache_key, ts_code)
-		);`,
-		`CREATE TABLE IF NOT EXISTS market_limit_momentum_cache_meta (
-			cache_key TEXT PRIMARY KEY,
-			item_count INTEGER NOT NULL DEFAULT 0,
-			generated_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_market_limit_momentum_cache_rank ON market_limit_momentum_cache(cache_key, rank_no);`,
-		`CREATE INDEX IF NOT EXISTS idx_market_limit_momentum_cache_date ON market_limit_momentum_cache(trade_date);`,
-		`CREATE TABLE IF NOT EXISTS market_limit_signal_predictions (
-			id TEXT PRIMARY KEY,
-			signal_type TEXT NOT NULL,
-			strategy_version TEXT NOT NULL DEFAULT 'v1',
-			parameter_key TEXT NOT NULL,
-			cache_key TEXT NOT NULL,
-			` + "`rank`" + ` INTEGER NOT NULL DEFAULT 0,
-			ts_code TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT '',
-			industry TEXT NOT NULL DEFAULT '',
-			signal_date TEXT NOT NULL,
-			signal_price REAL NOT NULL DEFAULT 0,
-			score REAL NOT NULL DEFAULT 0,
-			recommendation TEXT NOT NULL DEFAULT '',
-			payload_json TEXT NOT NULL DEFAULT '{}',
-			ret_1d REAL,
-			ret_3d REAL,
-			ret_5d REAL,
-			ret_10d REAL,
-			max_drawdown_5d REAL,
-			hit_limit_up_5d INTEGER,
-			target_hit INTEGER,
-			outcome_json TEXT NOT NULL DEFAULT '{}',
-			evaluated_at TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			UNIQUE(signal_type, parameter_key, ts_code, signal_date)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_market_limit_signal_predictions_type_date
-			ON market_limit_signal_predictions(signal_type, signal_date);`,
-		`CREATE TABLE IF NOT EXISTS market_limit_signal_eval_summary (
-			signal_type TEXT NOT NULL,
-			strategy_version TEXT NOT NULL DEFAULT 'v1',
-			parameter_key TEXT NOT NULL,
-			sample_count INTEGER NOT NULL DEFAULT 0,
-			pending_count INTEGER NOT NULL DEFAULT 0,
-			hit_rate REAL NOT NULL DEFAULT 0,
-			avg_return_1d REAL NOT NULL DEFAULT 0,
-			avg_return_3d REAL NOT NULL DEFAULT 0,
-			avg_return_5d REAL NOT NULL DEFAULT 0,
-			avg_return_10d REAL NOT NULL DEFAULT 0,
-			avg_max_drawdown_5d REAL NOT NULL DEFAULT 0,
-			avg_score REAL NOT NULL DEFAULT 0,
-			recommendation TEXT NOT NULL DEFAULT '',
-			parameter_hint TEXT NOT NULL DEFAULT '',
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(signal_type, strategy_version, parameter_key)
-		);`,
 		`CREATE TABLE IF NOT EXISTS rec_daily_recommendations (
 			date TEXT PRIMARY KEY,
 			generated_at TEXT NOT NULL,
@@ -722,47 +529,6 @@ func baseSchemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_eval_strategy_admission_date ON eval_strategy_admission(start_date, end_date);`,
 		`CREATE INDEX IF NOT EXISTS idx_eval_strategy_admission_strategy ON eval_strategy_admission(strategy);`,
 		`CREATE INDEX IF NOT EXISTS idx_eval_strategy_admission_admission ON eval_strategy_admission(admission);`,
-		`CREATE TABLE IF NOT EXISTS factor_autotune_runs (
-			run_id VARCHAR(255) PRIMARY KEY,
-			base_model_run_id VARCHAR(255) NOT NULL,
-			start_date VARCHAR(16) NOT NULL,
-			end_date VARCHAR(16) NOT NULL,
-			status VARCHAR(32) NOT NULL,
-			best_trial_id VARCHAR(255) NOT NULL DEFAULT '',
-			best_model_run_id VARCHAR(255) NOT NULL DEFAULT '',
-			best_admission VARCHAR(64) NOT NULL DEFAULT '',
-			best_score DOUBLE,
-			summary_json LONGTEXT NOT NULL,
-			created_at VARCHAR(64) NOT NULL,
-			updated_at VARCHAR(64) NOT NULL
-		);`,
-		`CREATE TABLE IF NOT EXISTS factor_autotune_trials (
-			run_id VARCHAR(255) NOT NULL,
-			trial_id VARCHAR(255) NOT NULL,
-			round_no BIGINT NOT NULL DEFAULT 0,
-			source VARCHAR(64) NOT NULL DEFAULT '',
-			model_run_id VARCHAR(255) NOT NULL DEFAULT '',
-			eval_run_id VARCHAR(255) NOT NULL DEFAULT '',
-			params_json LONGTEXT NOT NULL,
-			llm_direction_json LONGTEXT NOT NULL,
-			admission VARCHAR(64) NOT NULL DEFAULT '',
-			admission_score DOUBLE,
-			reason LONGTEXT NOT NULL,
-			annual_return DOUBLE,
-			total_return DOUBLE,
-			max_drawdown DOUBLE,
-			sharpe DOUBLE,
-			stress_bad_event_count BIGINT NOT NULL DEFAULT 0,
-			stress_crash_state_failed BIGINT NOT NULL DEFAULT 0,
-			stress_weak_drawdown_failed BIGINT NOT NULL DEFAULT 0,
-			passed BIGINT NOT NULL DEFAULT 0,
-			created_at VARCHAR(64) NOT NULL,
-			updated_at VARCHAR(64) NOT NULL,
-			PRIMARY KEY(run_id, trial_id)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_factor_autotune_trials_run_round ON factor_autotune_trials(run_id, round_no);`,
-		`CREATE INDEX IF NOT EXISTS idx_factor_autotune_trials_passed ON factor_autotune_trials(passed);`,
-		`CREATE INDEX IF NOT EXISTS idx_factor_autotune_trials_score ON factor_autotune_trials(admission_score);`,
 		`CREATE TABLE IF NOT EXISTS eval_portfolio_runs (
 			run_id TEXT PRIMARY KEY,
 			start_date TEXT NOT NULL,
@@ -943,35 +709,6 @@ func baseSchemaStatements() []string {
 			UNIQUE(strategy, strategy_version, param_set)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_eval_parameter_experiments_strategy ON eval_parameter_experiments(strategy, strategy_version);`,
-		`CREATE TABLE IF NOT EXISTS monitor_policy_support_signals (
-			trade_date TEXT PRIMARY KEY,
-			signal_level TEXT NOT NULL,
-			total_score REAL NOT NULL DEFAULT 0,
-			market_stress_score REAL NOT NULL DEFAULT 0,
-			support_score REAL NOT NULL DEFAULT 0,
-			institution_score REAL NOT NULL DEFAULT 0,
-			weight_support_score REAL NOT NULL DEFAULT 0,
-			direction TEXT NOT NULL DEFAULT '',
-			reason TEXT NOT NULL DEFAULT '',
-			evidence_json TEXT NOT NULL DEFAULT '{}',
-			updated_at TEXT NOT NULL
-		);`,
-		`CREATE TABLE IF NOT EXISTS monitor_policy_support_candidates (
-			trade_date TEXT NOT NULL,
-			ts_code TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT '',
-			industry TEXT NOT NULL DEFAULT '',
-			candidate_type TEXT NOT NULL DEFAULT '',
-			score REAL NOT NULL DEFAULT 0,
-			pct_chg REAL NOT NULL DEFAULT 0,
-			amount_ratio REAL NOT NULL DEFAULT 0,
-			turnover_rate REAL NOT NULL DEFAULT 0,
-			institution_net_buy REAL NOT NULL DEFAULT 0,
-			reason TEXT NOT NULL DEFAULT '',
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(trade_date, ts_code)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_monitor_policy_support_candidates_score ON monitor_policy_support_candidates(trade_date, score DESC);`,
 		`CREATE TABLE IF NOT EXISTS task_run_locks (
 			name TEXT PRIMARY KEY,
 			pid INTEGER NOT NULL,
@@ -1114,8 +851,6 @@ func (db *DB) isMigrationAlreadyApplied(version int) bool {
 		return db.columnsExist("task_run_status", "worker_pid")
 	case 8:
 		return db.columnsExist("task_run_status", "task_type")
-	case 12:
-		return db.columnsExist("t0_daily_candidates", "setup", "first_action", "reduce_price", "buy_price", "stop_price", "t_ratio", "plan_json")
 	default:
 		return false
 	}
@@ -1252,17 +987,6 @@ func (db *DB) schemaMigrations() []migration {
 			_, err := db.conn.Exec(`DELETE FROM cfg_schema_comments WHERE table_name IN ('monitor_state_team_holder_changes', 'monitor_state_team_holder_snapshots', 'state_team_holder_changes', 'state_team_holder_snapshots')`)
 			return err
 		}},
-		{version: 12, name: "t0_trader_plan_columns", up: func(db *DB) error {
-			return db.addColumnsIfMissing([]columnMigration{
-				{table: "t0_daily_candidates", name: "setup", ddl: "TEXT NOT NULL DEFAULT ''"},
-				{table: "t0_daily_candidates", name: "first_action", ddl: "TEXT NOT NULL DEFAULT ''"},
-				{table: "t0_daily_candidates", name: "reduce_price", ddl: "REAL NOT NULL DEFAULT 0"},
-				{table: "t0_daily_candidates", name: "buy_price", ddl: "REAL NOT NULL DEFAULT 0"},
-				{table: "t0_daily_candidates", name: "stop_price", ddl: "REAL NOT NULL DEFAULT 0"},
-				{table: "t0_daily_candidates", name: "t_ratio", ddl: "REAL NOT NULL DEFAULT 0"},
-				{table: "t0_daily_candidates", name: "plan_json", ddl: "LONGTEXT NOT NULL"},
-			})
-		}},
 		{version: 13, name: "pool_trade_accounting_columns", up: func(db *DB) error {
 			return db.addColumnsIfMissing([]columnMigration{
 				{table: "portfolio_pool_trades", name: "cash_after", ddl: "REAL NOT NULL DEFAULT 0"},
@@ -1277,10 +1001,6 @@ func (db *DB) backfillPyRunStatusTaskTypes() error {
 		UPDATE task_run_status
 		SET task_type = CASE
 			WHEN task = 'data_update' THEN 'data_update'
-			WHEN task = 'daily_signal' THEN 'signal'
-			WHEN task = 'limit_signal_evaluation' THEN 'evaluation'
-			WHEN task IN ('limit_breakout', 'limit_up_momentum') THEN 'market_scan'
-			WHEN task = 'policy_support_analysis' THEN 'analysis'
 			ELSE 'python'
 		END
 		WHERE COALESCE(task_type, '') = ''`)

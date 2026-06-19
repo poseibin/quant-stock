@@ -147,7 +147,7 @@
   - 结论: 现有市场状态聚合阈值更适合作为压力诊断和事后减灾，不适合作为当前默认前置开关；后续若继续做前置预警，应训练一个明确预测“未来 1-3 日 crash/大跌风险”的分类模型，而不是继续手工调硬阈值。
 
 - 2026-06-06: 未来 1-3 日大跌/流动性冲击分类模型第一版完成。
-  - 新增 `scripts/crash_warning_model_worker.py`，输出 `market_crash_warning_runs/features/predictions`；标签为未来 3 个交易日内出现 crash/liquidity_squeeze、单日硬跌或跌停扩散。
+  - 历史独立 crash warning worker 已下线；急跌/流动性挤压只作为收益擂台和因子模型的压力分段，不再作为桌面独立模型入口。
   - 训练 run: `cw_lgbm_h3_2014_2025_20260606`，2018-2025 walk-forward，无未来数据泄露。
   - 模型层有效：OOS AUC 0.778、AP 0.331、Top10% precision 34.0%、Top10% capture 33.2%；2024 年 Top10% precision 62.5%。重要特征集中在 volatility20、trend60、limit_down_ratio5、amount_chg5、small_large_rel20、drawdown20、breadth20。
   - `ml_factor_ranker` 新增实验开关 `filters.crash_warning_model`，可读取模型概率调低日级目标暴露，默认关闭。

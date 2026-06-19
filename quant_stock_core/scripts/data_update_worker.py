@@ -75,6 +75,11 @@ PHASES: dict[str, list[str]] = {
     "event": ["stk_holdertrade", "top_list", "top_inst", "top10_holders"],
 }
 
+NON_BLOCKING_DATASETS = {
+    "stk_holdertrade",
+    "top10_holders",
+}
+
 API_INTERVAL = {
     "stock_basic": 1.0,
     "index_basic": 1.0,
@@ -301,6 +306,12 @@ class StatusStore:
         for idx, name in enumerate(names, start=1):
             self._upsert_dataset_task(name, "queued", 0, 0, "", 0, "", "", "", ts, idx, total)
 
+    def mark_skipped(self, names: list[str], message: str) -> None:
+        ts = now()
+        for name in names:
+            if name in DATASETS:
+                self._upsert_dataset_task(name, "skipped", 1, 1, message, 0, "", "", ts, ts, 0, 0)
+
     def dataset_begin(self, name: str) -> None:
         ts = now()
         self._upsert_dataset_task(name, "running", 0, 0, "", 0, "", ts, "", ts, 0, 0)
@@ -326,6 +337,11 @@ class StatusStore:
                worker_pid=NULL, finished_at=?, updated_at=? WHERE task_type='data_update' AND subtask_key=?""",
             (self._summary_json(name, 0, 0, message, rows, message), message, ts, ts, name),
         )
+
+    def dataset_optional_failed(self, name: str, rows: int, message: str) -> None:
+        ts = now()
+        message = f"非阻塞跳过: {message}"
+        self._upsert_dataset_task(name, "skipped", 1, 1, message, rows, message, "", ts, ts, 0, 0)
 
     def _upsert_dataset_task(
         self,
@@ -487,10 +503,22 @@ class Worker:
             return [name for name in out if name not in self.exclude_datasets]
         return [name for name in PHASES[self.phase] if name not in self.exclude_datasets]
 
+    def skipped_jobs(self) -> list[str]:
+        if self.dataset:
+            return []
+        if self.phase == "all":
+            names: list[str] = []
+            for items in PHASES.values():
+                names.extend(items)
+        else:
+            names = list(PHASES[self.phase])
+        return [name for name in names if name in self.exclude_datasets]
+
     def run(self) -> None:
         jobs = self.jobs()
         self.status.begin(len(jobs))
         self.status.mark_pending(jobs)
+        self.status.mark_skipped(self.skipped_jobs(), "主流程默认跳过，可在单项数据集中手动更新")
         failed: list[str] = []
         for idx, name in enumerate(jobs, start=1):
             self.status.progress(idx, len(jobs), DATASETS[name].category, name, "running")
@@ -501,9 +529,13 @@ class Worker:
                 self.status.dataset_success(name, rows, f"写入/保留 {rows} 行")
             except Exception as exc:
                 msg = self.reason(name, exc)
-                failed.append(name)
-                self.status.dataset_failed(name, rows, msg)
-                print(f"[data_update] {name} failed: {msg}", flush=True)
+                if name in NON_BLOCKING_DATASETS:
+                    self.status.dataset_optional_failed(name, rows, msg)
+                    print(f"[data_update] {name} optional failed: {msg}", flush=True)
+                else:
+                    failed.append(name)
+                    self.status.dataset_failed(name, rows, msg)
+                    print(f"[data_update] {name} failed: {msg}", flush=True)
         if failed:
             self.status.error("失败: " + ", ".join(failed))
         else:

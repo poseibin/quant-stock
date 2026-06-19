@@ -232,7 +232,10 @@ def add_column(conn: ConnectionAdapter, table: str, name: str, ddl: str) -> None
 
 
 def to_backend_ddl(ddl: str, backend: str | None = None) -> str:
-    out = ddl.replace("INTEGER", "BIGINT").replace("REAL", "DOUBLE").replace("TEXT", "VARCHAR(255)")
+    marker = "__LONGTXT_MARKER__"
+    out = ddl.replace("LONGTEXT", marker)
+    out = out.replace("INTEGER", "BIGINT").replace("REAL", "DOUBLE").replace("TEXT", "VARCHAR(255)")
+    out = out.replace(marker, "LONGTEXT")
     if "_json" in ddl or "payload_json" in ddl or "config_json" in ddl or "summary_json" in ddl:
         out = out.replace("VARCHAR(255)", "LONGTEXT")
         out = re.sub(r"\s+DEFAULT\s+'[^']*'", "", out, flags=re.IGNORECASE)

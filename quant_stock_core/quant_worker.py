@@ -1,19 +1,12 @@
 """Unified entry point for PyInstaller packaging.
 
 Usage (mirrors original python invocations):
-  quant_worker scripts/daily_signal.py [args...]
   quant_worker scripts/data_update_worker.py [args...]
+  quant_worker scripts/factor_snapshot_worker.py [args...]
   quant_worker scripts/scan_market_files.py [args...]
-  quant_worker scripts/limit_breakout_worker.py [args...]
-  quant_worker scripts/limit_breakout_model_worker.py [args...]
-  quant_worker scripts/limit_up_momentum_worker.py [args...]
-  quant_worker scripts/limit_up_model_worker.py [args...]
-  quant_worker scripts/evaluate_strategies.py [args...]
-  quant_worker scripts/crash_warning_model_worker.py [args...]
-  quant_worker scripts/optimize_portfolio.py [args...]
-  quant_worker scripts/run_portfolio_candidate.py [args...]
+  quant_worker scripts/profit_arena_worker.py [args...]
+  quant_worker scripts/factor_research_worker.py [args...]
   quant_worker scripts/pool_confirm.py [args...]
-  quant_worker -m trading.execution.eval_worker [args...]
 """
 from __future__ import annotations
 
@@ -39,20 +32,12 @@ def main() -> None:
     sys.argv = [script_path] + sys.argv[2:]
 
     script_map = {
-        "scripts/daily_signal.py": "scripts.daily_signal",
         "scripts/data_update_worker.py": "scripts.data_update_worker",
+        "scripts/factor_snapshot_worker.py": "scripts.factor_snapshot_worker",
         "scripts/scan_market_files.py": "scripts.scan_market_files",
-        "scripts/limit_breakout_worker.py": "scripts.limit_breakout_worker",
-        "scripts/limit_breakout_model_worker.py": "scripts.limit_breakout_model_worker",
-        "scripts/limit_up_momentum_worker.py": "scripts.limit_up_momentum_worker",
-        "scripts/limit_up_model_worker.py": "scripts.limit_up_model_worker",
-        "scripts/t0_daily_worker.py": "scripts.t0_daily_worker",
-        "scripts/evaluate_strategies.py": "scripts.evaluate_strategies",
-        "scripts/crash_warning_model_worker.py": "scripts.crash_warning_model_worker",
-        "scripts/optimize_portfolio.py": "scripts.optimize_portfolio",
-        "scripts/run_portfolio_candidate.py": "scripts.run_portfolio_candidate",
+        "scripts/profit_arena_worker.py": "scripts.profit_arena_worker",
+        "scripts/factor_research_worker.py": "scripts.factor_research_worker",
         "scripts/pool_confirm.py": "scripts.pool_confirm",
-        "scripts/run_backtest.py": "scripts.run_backtest",
     }
 
     normalized = script_path.replace(os.sep, "/")

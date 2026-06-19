@@ -20,9 +20,9 @@ generates the one-click rebalance plan. The scheduler records recent run
 results in `cfg_app_settings.strategy_schedule_reports`, including per-module
 status, WeCom notification status, and the markdown content that was pushed.
 
-The scheduled full data refresh intentionally excludes `top10_holders` so API
-limits in that slow dataset do not block strategy recommendations. Manual data
-updates can still run `top10_holders` explicitly from the data page.
+The full data refresh intentionally excludes the slow top-holder dataset so API
+limits do not block Profit Arena recommendations. Desktop production data
+updates no longer expose that dataset as an operator action.
 
 ## Strategy Plugins
 

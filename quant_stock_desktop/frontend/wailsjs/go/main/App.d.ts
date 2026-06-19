@@ -5,26 +5,13 @@ import {task} from '../models';
 import {position} from '../models';
 import {datafetch} from '../models';
 import {market} from '../models';
-import {result} from '../models';
 import {config} from '../models';
 
-export function ActivateStrategyModelRun(arg1:main.StrategyModelRunRequest):Promise<main.ActiveStrategyModelRun>;
-
-export function ActivateStrategyVersion(arg1:main.StrategyVersionActivateRequest):Promise<main.SettingsResponse>;
-
-export function AnalyzePortfolioTask(arg1:string):Promise<task.DTO>;
-
 export function ApplyPortfolioCandidate(arg1:main.ApplyPortfolioCandidateRequest):Promise<main.SettingsResponse>;
-
-export function CancelPositionSignal():Promise<position.RunStatus>;
 
 export function CancelTask(arg1:string):Promise<task.DTO>;
 
 export function CheckExternalDependencies():Promise<Array<main.ExternalDependencyStatus>>;
-
-export function ClearLimitBreakoutCandidates():Promise<void>;
-
-export function ClearLimitUpMomentumCandidates():Promise<void>;
 
 export function ClearPositionPool():Promise<position.Summary>;
 
@@ -32,31 +19,17 @@ export function ConfirmPositionTrades(arg1:Array<position.TradeRequest>):Promise
 
 export function CreateTask(arg1:task.CreateRequest):Promise<task.DTO>;
 
-export function DeleteTask(arg1:string):Promise<void>;
-
-export function GeneratePositionSignal(arg1:position.GenerateSignalRequest):Promise<position.GenerateSignalResponse>;
-
-export function GetActiveStrategyModelRun(arg1:string):Promise<main.ActiveStrategyModelRun>;
-
 export function GetAppInfo():Promise<main.AppInfo>;
+
+export function GetArenaStrategyDefinitions():Promise<Array<main.ArenaStrategyDefinitionDTO>>;
 
 export function GetDataUpdateStatus():Promise<datafetch.RunStatus>;
 
 export function GetFactorModelRun(arg1:string):Promise<main.FactorModelRun>;
 
-export function GetLatestPolicySupportSignal():Promise<main.PolicySupportSignalDTO>;
+export function GetFactorSnapshotStatus():Promise<position.RunStatus>;
 
-export function GetLimitBreakoutModelRunStatus():Promise<position.RunStatus>;
-
-export function GetLimitBreakoutRunStatus():Promise<position.RunStatus>;
-
-export function GetLimitSignalEvaluationRunStatus():Promise<position.RunStatus>;
-
-export function GetLimitUpModelRunStatus():Promise<position.RunStatus>;
-
-export function GetLimitUpMomentumRunStatus():Promise<position.RunStatus>;
-
-export function GetPolicySupportAnalysisStatus():Promise<position.RunStatus>;
+export function GetFactorStoreGovernance(arg1:string):Promise<Record<string, any>>;
 
 export function GetPositionHistory():Promise<Array<position.HistoryPoint>>;
 
@@ -66,41 +39,25 @@ export function GetPositionRecommendation():Promise<position.Recommendation>;
 
 export function GetPositionSummary():Promise<position.Summary>;
 
+export function GetProductionDiagnostics():Promise<Record<string, any>>;
+
 export function GetProfitArenaMarketDate():Promise<string>;
+
+export function GetProfitArenaRebalanceStatus():Promise<position.RunStatus>;
 
 export function GetProfitArenaRunStatus():Promise<position.RunStatus>;
 
 export function GetSettings():Promise<main.SettingsResponse>;
 
-export function GetSignalPortfolioContext():Promise<main.SignalPortfolioContextDTO>;
-
-export function GetSignalRunStatus():Promise<position.RunStatus>;
-
 export function GetStockValuation(arg1:market.ValuationQuery):Promise<market.StockValuation>;
 
-export function GetT0DailyResearchStatus():Promise<position.RunStatus>;
-
-export function GetT0TimeMachineStatus():Promise<position.RunStatus>;
-
 export function GetTask(arg1:string):Promise<task.DTO>;
-
-export function GetTaskLog(arg1:string,arg2:number):Promise<string>;
-
-export function GetTimeMachineDetail(arg1:string):Promise<result.TimeMachineDetail>;
-
-export function ListCrashWarningFeatures(arg1:string,arg2:number):Promise<Array<main.CrashWarningFeature>>;
-
-export function ListCrashWarningRuns(arg1:number):Promise<Array<main.CrashWarningRunSummary>>;
 
 export function ListDailyBars(arg1:market.DailyQuery):Promise<Array<market.DailyBar>>;
 
 export function ListDatasetUpdateStatus():Promise<Array<datafetch.DatasetStatus>>;
 
 export function ListFactorAdmissionComparisons(arg1:number):Promise<Array<main.FactorAdmissionComparison>>;
-
-export function ListFactorAutoTuneRuns(arg1:number):Promise<Array<main.FactorAutoTuneRun>>;
-
-export function ListFactorAutoTuneTrials(arg1:string,arg2:number):Promise<Array<main.FactorAutoTuneTrial>>;
 
 export function ListFactorCorrelationResults(arg1:string,arg2:number):Promise<Array<main.FactorCorrelationResult>>;
 
@@ -122,35 +79,7 @@ export function ListFactorStressResults(arg1:string,arg2:number):Promise<Array<m
 
 export function ListFinancialIndicators(arg1:market.FinancialQuery):Promise<Array<market.FinancialIndicator>>;
 
-export function ListGovernanceDashboard():Promise<main.GovernanceDashboardDTO>;
-
-export function ListLimitBreakoutCandidates(arg1:market.BreakoutQuery):Promise<Array<market.LimitBreakoutCandidate>>;
-
-export function ListLimitBreakoutModelFeatures(arg1:string,arg2:number):Promise<Array<main.LimitUpModelFeature>>;
-
-export function ListLimitBreakoutModelPredictions(arg1:string,arg2:number):Promise<Array<main.LimitUpModelPrediction>>;
-
-export function ListLimitBreakoutModelRuns(arg1:number):Promise<Array<main.LimitUpModelRunSummary>>;
-
-export function ListLimitBreakoutModelTimeMachineSlices(arg1:string,arg2:number):Promise<Array<main.LimitUpModelTimeMachineSlice>>;
-
-export function ListLimitSignalEvaluationSummary():Promise<Array<market.LimitSignalEvaluationSummary>>;
-
-export function ListLimitSignalTimeMachineSlices(arg1:number):Promise<Array<market.LimitSignalTimeMachineSlice>>;
-
-export function ListLimitUpModelFeatures(arg1:string,arg2:number):Promise<Array<main.LimitUpModelFeature>>;
-
-export function ListLimitUpModelPredictions(arg1:string,arg2:number):Promise<Array<main.LimitUpModelPrediction>>;
-
-export function ListLimitUpModelRuns(arg1:number):Promise<Array<main.LimitUpModelRunSummary>>;
-
-export function ListLimitUpModelTimeMachineSlices(arg1:string,arg2:number):Promise<Array<main.LimitUpModelTimeMachineSlice>>;
-
-export function ListLimitUpMomentumCandidates(arg1:market.LimitUpMomentumQuery):Promise<Array<market.LimitUpMomentumCandidate>>;
-
 export function ListMarketDataFiles():Promise<Array<market.DataFileDTO>>;
-
-export function ListPolicySupportCandidates(arg1:number):Promise<Array<main.PolicySupportCandidateDTO>>;
 
 export function ListProfitArenaEvaluations(arg1:string,arg2:number):Promise<Array<main.ProfitArenaEvaluation>>;
 
@@ -160,57 +89,19 @@ export function ListProfitArenaPredictions(arg1:string,arg2:number):Promise<Arra
 
 export function ListProfitArenaRuns(arg1:number):Promise<Array<main.ProfitArenaRunSummary>>;
 
-export function ListRecommendationHindsight():Promise<Array<main.RecommendationHindsightDTO>>;
-
 export function ListStockBasic(arg1:market.StockBasicQuery):Promise<Array<market.StockBasic>>;
 
 export function ListStrategyScheduleReports():Promise<Array<main.StrategyScheduleReport>>;
 
-export function ListStrategyVersions(arg1:string):Promise<Array<main.StrategyVersionDTO>>;
-
-export function ListT0DailyBacktests(arg1:number):Promise<Array<main.T0DailyBacktest>>;
-
-export function ListT0DailyRuns(arg1:number):Promise<Array<main.T0DailyRunSummary>>;
-
-export function ListT0DataPullCandidates(arg1:number):Promise<Array<main.T0DataPullCandidate>>;
-
-export function ListT0Recommendations(arg1:number):Promise<Array<main.T0Recommendation>>;
-
-export function ListT0TimeMachineResults(arg1:number):Promise<Array<main.T0TimeMachineResult>>;
-
 export function ListTasks(arg1:task.Query):Promise<Array<task.DTO>>;
 
-export function ListValidationEvidence(arg1:main.ValidationEvidenceQuery):Promise<main.ValidationEvidenceDTO>;
-
-export function RefreshGovernanceAudit():Promise<main.GovernanceDashboardDTO>;
-
-export function RefreshLimitBreakoutCandidates(arg1:market.BreakoutQuery):Promise<Array<market.LimitBreakoutCandidate>>;
-
-export function RefreshLimitUpMomentumCandidates(arg1:market.LimitUpMomentumQuery):Promise<Array<market.LimitUpMomentumCandidate>>;
-
 export function RefreshPositionRealtimeQuotes():Promise<position.Summary>;
-
-export function RefreshRecommendationHindsight():Promise<Array<main.RecommendationHindsightDTO>>;
 
 export function RefreshTaskStatus(arg1:string):Promise<task.DTO>;
 
 export function RetryTask(arg1:string):Promise<task.DTO>;
 
-export function ReviewStrategyVersion(arg1:main.StrategyVersionActivateRequest):Promise<main.ValidationReviewDTO>;
-
 export function RunDataUpdate(arg1:datafetch.UpdateRequest):Promise<void>;
-
-export function RunFactorAutoTune(arg1:number,arg2:number,arg3:boolean):Promise<task.DTO>;
-
-export function RunFactorLatestInference():Promise<task.DTO>;
-
-export function RunLimitBreakoutModelTraining():Promise<void>;
-
-export function RunLimitSignalEvaluation():Promise<void>;
-
-export function RunLimitUpModelTraining():Promise<void>;
-
-export function RunPolicySupportAnalysis():Promise<void>;
 
 export function RunProfitArenaLatestInference():Promise<task.DTO>;
 
@@ -218,15 +109,9 @@ export function RunProfitArenaTraining():Promise<void>;
 
 export function RunStrategyScheduleNow():Promise<main.StrategyScheduleReport>;
 
-export function RunT0DailyResearch():Promise<void>;
-
-export function RunT0TimeMachine():Promise<void>;
-
 export function SaveSettings(arg1:config.Settings):Promise<main.SettingsResponse>;
 
 export function ScanMarketDataFiles():Promise<Array<market.DataFileDTO>>;
-
-export function SetStrategyVersionStatus(arg1:main.StrategyVersionStatusRequest):Promise<Array<main.StrategyVersionDTO>>;
 
 export function StartTask(arg1:string):Promise<task.DTO>;
 

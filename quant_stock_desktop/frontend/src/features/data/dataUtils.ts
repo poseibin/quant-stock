@@ -1,7 +1,7 @@
 import type { MarketDataFile } from '../../services/app'
 import { formatBytes } from '../../components/format'
 
-export type DatasetKey = 'stock_basic' | 'daily' | 'trade_cal' | 'daily_basic' | 'adj_factor' | 'finance' | 'top_list' | 'top10_holders'
+export type DatasetKey = 'stock_basic' | 'daily' | 'trade_cal' | 'daily_basic' | 'adj_factor' | 'finance' | 'top_list'
 
 export type DatasetCardConfig = {
   id: DatasetKey
@@ -19,8 +19,7 @@ export const datasetCards: DatasetCardConfig[] = [
   { id: 'daily_basic', title: '每日指标', name: 'daily_basic', desc: '估值、换手率、量比等指标', datasets: ['daily_basic'], expectedYears: [2010, 2026] },
   { id: 'adj_factor', title: '复权因子', name: 'adj_factor', desc: '前后复权计算所需因子', datasets: ['adj_factor'], expectedYears: [2010, 2026] },
   { id: 'finance', title: '财务数据', name: 'income / balancesheet / cashflow', desc: '利润表、资产负债表、现金流', datasets: ['income', 'balancesheet', 'cashflow'], expectedYears: [2010, 2026] },
-  { id: 'top_list', title: '龙虎榜', name: 'top_list / top_inst', desc: '龙虎榜明细和机构席位数据', datasets: ['top_list', 'top_inst'], expectedYears: [2024, 2026] },
-  { id: 'top10_holders', title: '前十大股东', name: 'top10_holders', desc: '国家队跟踪所需的十大股东数据', datasets: ['top10_holders'], expectedYears: [2024, 2026] }
+  { id: 'top_list', title: '龙虎榜', name: 'top_list / top_inst', desc: '龙虎榜明细和机构席位数据', datasets: ['top_list', 'top_inst'], expectedYears: [2024, 2026] }
 ]
 
 // 每个数据集（与后端 JobEntry.Name 一一对应）的展示元数据。
@@ -38,11 +37,14 @@ export type JobMeta = {
   title: string
   category: DatasetCategory
   expectedYears?: [number, number]
+  optional?: boolean
 }
 
 export const jobMetas: JobMeta[] = [
   { name: 'stock_basic', title: '股票基础信息', category: 'basic' },
+  { name: 'index_basic', title: '指数基础信息', category: 'basic' },
   { name: 'trade_cal', title: '交易日历', category: 'basic' },
+  { name: 'index_daily', title: '指数日线行情', category: 'price', expectedYears: [2010, 2026] },
   { name: 'daily', title: '日线行情', category: 'price', expectedYears: [2010, 2026] },
   { name: 'daily_basic', title: '每日指标', category: 'price', expectedYears: [2010, 2026] },
   { name: 'adj_factor', title: '复权因子', category: 'price', expectedYears: [2010, 2026] },
@@ -51,10 +53,10 @@ export const jobMetas: JobMeta[] = [
   { name: 'cashflow', title: '现金流量表', category: 'finance', expectedYears: [2010, 2026] },
   { name: 'fina_indicator', title: '财务指标', category: 'finance', expectedYears: [2010, 2026] },
   { name: 'forecast', title: '业绩预告', category: 'finance', expectedYears: [2010, 2026] },
-  { name: 'stk_holdertrade', title: '股东增减持', category: 'event', expectedYears: [2010, 2026] },
+  { name: 'stk_holdertrade', title: '股东增减持（非阻塞）', category: 'event', expectedYears: [2010, 2026], optional: true },
+  { name: 'top10_holders', title: '前十大股东（非阻塞）', category: 'event', expectedYears: [2010, 2026], optional: true },
   { name: 'top_list', title: '龙虎榜明细', category: 'event', expectedYears: [2024, 2026] },
-  { name: 'top_inst', title: '龙虎榜机构', category: 'event', expectedYears: [2024, 2026] },
-  { name: 'top10_holders', title: '前十大股东', category: 'event', expectedYears: [2024, 2026] }
+  { name: 'top_inst', title: '龙虎榜机构', category: 'event', expectedYears: [2024, 2026] }
 ]
 
 export function partitionYear(partition: string) {
@@ -90,12 +92,17 @@ export function buildJobHealth(meta: JobMeta, files: MarketDataFile[]) {
   const hasLatestYear = latestExpectedYear ? years.includes(latestExpectedYear) : false
   const hasOnlyHistoricalGaps = missingYears.length > 0 && hasLatestYear
   const status = matched.length === 0 ? 'missing' : missingYears.length > 0 ? 'stale' : 'ready'
-  const label = status === 'ready'
+  const displayStatus = meta.optional && status !== 'ready' ? 'stale' : status
+  const label = meta.optional && status !== 'ready'
+    ? '非阻塞'
+    : status === 'ready'
     ? '正常'
     : status === 'missing'
       ? '缺失'
       : '缺数据'
-  const reason = missingYears.length > 0
+  const reason = meta.optional && missingYears.length > 0
+    ? `非生产必需数据，不阻塞通用策略；缺少年份：${missingYears.join(', ')}。`
+    : missingYears.length > 0
     ? (hasOnlyHistoricalGaps
         ? `最新年份已有，历史缺口：${missingYears.join(', ')}。`
         : `缺少年份：${missingYears.join(', ')}。`)
@@ -105,7 +112,8 @@ export function buildJobHealth(meta: JobMeta, files: MarketDataFile[]) {
     title: meta.title,
     category: meta.category,
     categoryLabel: categoryLabels[meta.category],
-    status,
+    optional: Boolean(meta.optional),
+    status: displayStatus,
     label,
     coverage: years.length > 0 ? `${years[0]}-${years[years.length - 1]}` : '',
     latestUpdatedAt: latestUpdatedAt(matched),

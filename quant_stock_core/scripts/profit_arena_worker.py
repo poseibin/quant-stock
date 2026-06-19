@@ -21,6 +21,21 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.infra import status as run_status
+from common.arena import ArenaChallengeManager, ArenaChallengeRules, DEFAULT_ARENA_STRATEGIES
+from common.factor_store import (
+    FactorSnapshotSpec,
+    build_capacity_report,
+    build_feature_consistency_report,
+    build_portfolio_risk_report,
+    capacity_summary,
+    factor_snapshot_path,
+    feature_consistency_summary,
+    load_factor_snapshot,
+    load_latest_factor_snapshot_meta,
+    portfolio_risk_summary,
+    preprocess_factors,
+    write_factor_snapshot,
+)
 from common.infra.db import add_column, replace_sql, table_columns, write_transaction
 from common.utils.market import price_limit_pct_series, restricted_exclude_sql
 
@@ -31,8 +46,11 @@ except Exception:
 
 
 TASK_NAME = "profit_arena_model"
+ARENA_STRATEGY = DEFAULT_ARENA_STRATEGIES.get(TASK_NAME)
 PANEL_CACHE_VERSION = "profit_arena_panel_v7"
 PROGRESS_FILE: Path | None = None
+STATUS_RUN_ID = ""
+STATUS_ARENA_NAME = ARENA_STRATEGY.default_arena_name
 
 FEATURES = [
     "ret1",
@@ -151,6 +169,27 @@ FEATURES = [
     "industry_rs_market20",
     "rs_industry5",
     "rs_industry20",
+    "close_position_day",
+    "high_to_close_pullback",
+    "low_to_close_rebound",
+    "upper_shadow_pct",
+    "lower_shadow_pct",
+    "gap_fill_strength",
+    "turnover_chg20",
+    "turnover_chg60",
+    "turnover_volatility20",
+    "consecutive_up_days",
+    "consecutive_down_days",
+    "failed_breakout20",
+    "prev_limit_follow_through",
+    "prev_near_limit_follow_through",
+    "hot_turnover5",
+    "amount_market_share",
+    "turnover_pct_rank",
+    "hot_money_score20",
+    "t_intraday_space",
+    "t_reversal_score",
+    "t_pressure_score",
 ]
 
 LEGACY53_FEATURES = [
@@ -227,6 +266,30 @@ ECOLOGY_FEATURES = {
     "small_rs_market20",
 }
 
+HOT_T_DAILY_FEATURES = {
+    "close_position_day",
+    "high_to_close_pullback",
+    "low_to_close_rebound",
+    "upper_shadow_pct",
+    "lower_shadow_pct",
+    "gap_fill_strength",
+    "turnover_chg20",
+    "turnover_chg60",
+    "turnover_volatility20",
+    "consecutive_up_days",
+    "consecutive_down_days",
+    "failed_breakout20",
+    "prev_limit_follow_through",
+    "prev_near_limit_follow_through",
+    "hot_turnover5",
+    "amount_market_share",
+    "turnover_pct_rank",
+    "hot_money_score20",
+    "t_intraday_space",
+    "t_reversal_score",
+    "t_pressure_score",
+}
+
 V7_ADDED_FEATURES = {
     "amount_accel5_20",
     "industry_heat_accel5_20",
@@ -242,13 +305,53 @@ V7_ADDED_FEATURES = {
     "volatility_compress5_20",
 }
 
-V6ALL_FEATURES = [feature for feature in FEATURES if feature not in V7_ADDED_FEATURES]
+V6ALL_FEATURES = [feature for feature in FEATURES if feature not in V7_ADDED_FEATURES and feature not in HOT_T_DAILY_FEATURES]
+
+STOCK_H20_GENERAL_FINAL_EXTRA_FEATURES = {
+    "close_position_day",
+    "high_to_close_pullback",
+    "low_to_close_rebound",
+    "upper_shadow_pct",
+    "turnover_chg20",
+    "turnover_chg60",
+    "failed_breakout20",
+    "prev_limit_follow_through",
+    "prev_near_limit_follow_through",
+    "hot_turnover5",
+    "amount_market_share",
+    "turnover_pct_rank",
+    "hot_money_score20",
+}
+
+STOCK_H20_GENERAL_FINAL_FEATURES = set(V6ALL_FEATURES) | V7_ADDED_FEATURES | STOCK_H20_GENERAL_FINAL_EXTRA_FEATURES
 
 
 def feature_columns_for_set(feature_set: str) -> list[str]:
     value = str(feature_set or "all").strip().lower()
     if value in {"v6all", "pre_v7", "champion_v100"}:
         return list(V6ALL_FEATURES)
+    if value in {"base_v1", "champion_v116", "stock_factor_base_v1", "stock_factor_base_v1"}:
+        return list(FEATURES)
+    if value in {"stock_h20_general_final_v1"}:
+        return [feature for feature in FEATURES if feature in STOCK_H20_GENERAL_FINAL_FEATURES]
+    if value in {"hot_t_daily_v1", "hot_t_v1"}:
+        base = [
+            "ret1", "ret3", "ret5", "ret10", "ret20",
+            "open_to_close", "high_low_range", "gap_open",
+            "limit_up_flag", "near_limit_up_flag", "limit_up_count5", "limit_up_count10", "near_limit_up_count5", "near_limit_up_count10",
+            "big_up_count5", "big_up_count10", "up_days5", "up_days10",
+            "volatility5", "volatility10", "volatility20",
+            "amount_chg3", "amount_chg5", "amount_chg20",
+            "turnover_rate", "turnover_chg5", "volume_ratio",
+            "ma5_bias", "ma10_bias", "ma20_bias",
+            "distance_high20", "distance_low20", "drawdown20", "close_position20", "breakout_high20",
+            "momentum_accel5_20", "volume_price_burst5", "amount_breakout5", "amount_breakout20",
+            "market_ret1", "market_ret5", "market_up_ratio", "market_amount_chg5",
+            "small_up_ratio", "small_limit_up_ratio", "small_near_limit_up_ratio", "small_big_up_ratio", "small_amount_chg5",
+            "industry_up_ratio", "industry_limit_up_ratio", "industry_near_limit_up_ratio", "industry_big_up_ratio", "industry_amount_chg5",
+            "rs_market5", "rs_industry5",
+        ]
+        return [feature for feature in FEATURES if feature in set(base) | HOT_T_DAILY_FEATURES]
     if value == "legacy53":
         return list(LEGACY53_FEATURES)
     if value == "core":
@@ -273,6 +376,39 @@ def progress_log(event: str, **payload: Any) -> None:
                 fh.write(line + "\n")
         except Exception:
             pass
+
+
+def set_status_context(args: argparse.Namespace) -> None:
+    global STATUS_RUN_ID, STATUS_ARENA_NAME
+    STATUS_RUN_ID = str(getattr(args, "run_id", "") or "")
+    STATUS_ARENA_NAME = str(getattr(args, "arena_name", ARENA_STRATEGY.default_arena_name) or ARENA_STRATEGY.default_arena_name)
+
+
+def status_message(message: str | None = None) -> str:
+    payload = ARENA_STRATEGY.observability_payload(run_id=STATUS_RUN_ID, arena_name=STATUS_ARENA_NAME)
+    prefix = (
+        f"strategy_id={payload.get('strategy_id')} "
+        f"arena_name={payload.get('arena_name')} "
+        f"task_key={payload.get('task_key')}"
+    )
+    if not message:
+        return prefix
+    return f"{prefix} | {message}"
+
+
+def status_progress(idx: int, total: int, stage: str, name: str, message: str | None = None) -> None:
+    try:
+        run_status.progress(
+            TASK_NAME,
+            int(idx),
+            int(total),
+            stage,
+            name,
+            status_message(message),
+            metadata=ARENA_STRATEGY.observability_payload(run_id=STATUS_RUN_ID, arena_name=STATUS_ARENA_NAME),
+        )
+    except Exception:
+        pass
 
 
 def set_progress_file(path: Path) -> None:
@@ -307,6 +443,8 @@ def early_exit_column(kind: str, horizon: int, threshold: float) -> str:
 
 def ensure_tables(db_path: str | None) -> None:
     with write_transaction(db_path) as conn:
+        DEFAULT_ARENA_STRATEGIES.ensure_registered(conn, updated_at=now_text())
+        ARENA_STRATEGY.manager(run_id="", data_path=Path(".")).ensure_tables(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS profit_arena_runs (
@@ -505,6 +643,7 @@ def read_market_panel(data_path: Path, start: str, end: str, warmup_days: int) -
               AND d.close IS NOT NULL
               AND d.close > 0
               AND d.pct_chg IS NOT NULL
+              AND s.ts_code IS NOT NULL
               AND COALESCE(s.list_status, 'L') = 'L'
               AND COALESCE(s.name, '') NOT LIKE '%ST%'
               AND COALESCE(s.name, '') NOT LIKE '退市%'
@@ -558,6 +697,20 @@ def add_features(
     df["open_to_close"] = df["close"] / df["open"].replace(0, np.nan) - 1
     df["high_low_range"] = df["high"] / df["low"].replace(0, np.nan) - 1
     df["gap_open"] = df["open"] / group["close"].shift(1).replace(0, np.nan) - 1
+    day_range = (df["high"] - df["low"]).replace(0, np.nan)
+    body_high = pd.concat([df["open"], df["close"]], axis=1).max(axis=1)
+    body_low = pd.concat([df["open"], df["close"]], axis=1).min(axis=1)
+    previous_close = group["close"].shift(1)
+    df["close_position_day"] = (df["close"] - df["low"]) / day_range
+    df["high_to_close_pullback"] = df["high"] / df["close"].replace(0, np.nan) - 1
+    df["low_to_close_rebound"] = df["close"] / df["low"].replace(0, np.nan) - 1
+    df["upper_shadow_pct"] = df["high"] / body_high.replace(0, np.nan) - 1
+    df["lower_shadow_pct"] = body_low / df["low"].replace(0, np.nan) - 1
+    df["gap_fill_strength"] = np.where(
+        df["gap_open"].abs() > 1e-12,
+        (df["close"] / previous_close.replace(0, np.nan) - 1) / df["gap_open"].replace(0, np.nan),
+        0.0,
+    )
     intraday_high_pct = (df["high"] / df["pre_close"].replace(0, np.nan) - 1) * 100.0
     df["limit_up_flag"] = (df["pct_chg"] >= price_limit_pct - 0.2).astype("float64")
     df["near_limit_up_flag"] = (intraday_high_pct >= price_limit_pct - 0.5).astype("float64")
@@ -588,6 +741,18 @@ def add_features(
         df[f"amount_chg{window}"] = df["amount"] / avg_amount.replace(0, np.nan) - 1
     turnover5 = group["turnover_rate"].transform(lambda s: s.rolling(5, min_periods=2).mean())
     df["turnover_chg5"] = df["turnover_rate"] / turnover5.replace(0, np.nan) - 1
+    turnover20 = group["turnover_rate"].transform(lambda s: s.rolling(20, min_periods=5).mean())
+    turnover60 = group["turnover_rate"].transform(lambda s: s.rolling(60, min_periods=20).mean())
+    df["turnover_chg20"] = df["turnover_rate"] / turnover20.replace(0, np.nan) - 1
+    df["turnover_chg60"] = df["turnover_rate"] / turnover60.replace(0, np.nan) - 1
+    df["turnover_volatility20"] = group["turnover_rate"].transform(lambda s: s.rolling(20, min_periods=5).std())
+    df["hot_turnover5"] = turnover5
+    df["amount_market_share"] = df["amount"] / df.groupby("trade_date")["amount"].transform("sum").replace(0, np.nan)
+    df["turnover_pct_rank"] = df.groupby("trade_date")["turnover_rate"].rank(pct=True, method="first")
+    up_flag = df["pct_chg"].gt(0)
+    down_flag = df["pct_chg"].lt(0)
+    df["consecutive_up_days"] = group["pct_chg"].transform(lambda s: s.gt(0).groupby(s.le(0).cumsum()).cumcount() + 1).where(up_flag, 0.0)
+    df["consecutive_down_days"] = group["pct_chg"].transform(lambda s: s.lt(0).groupby(s.ge(0).cumsum()).cumcount() + 1).where(down_flag, 0.0)
     for window in (5, 10, 20, 60, 120):
         ma = group["close"].transform(lambda s, w=window: s.rolling(w, min_periods=max(3, w // 3)).mean())
         df[f"ma{window}_bias"] = df["close"] / ma.replace(0, np.nan) - 1
@@ -609,13 +774,15 @@ def add_features(
     prev_high60 = group["high"].transform(lambda s: s.shift(1).rolling(60, min_periods=20).max())
     df["breakout_high20"] = (df["close"] > prev_high20).astype("float64")
     df["breakout_high60"] = (df["close"] > prev_high60).astype("float64")
+    df["failed_breakout20"] = ((df["high"] > prev_high20) & (df["close"] <= prev_high20)).astype("float64")
+    df["prev_limit_follow_through"] = df["limit_up_yesterday"] * df["ret1"]
+    df["prev_near_limit_follow_through"] = df["near_limit_up_yesterday"] * df["ret1"]
     df["momentum_accel5_20"] = df["ret5"] - df["ret20"] / 4.0
     df["volume_price_burst5"] = df["ret5"] * df["amount_chg5"]
     df["amount_breakout5"] = (df["amount_chg5"] >= 0.5).astype("float64")
     df["amount_breakout20"] = (df["amount_chg20"] >= 1.0).astype("float64")
     df["volatility_compress5_20"] = df["volatility5"] / df["volatility20"].replace(0, np.nan) - 1
     df["amount_accel5_20"] = df["amount_chg5"] - df["amount_chg20"]
-    turnover20 = group["turnover_rate"].transform(lambda s: s.rolling(20, min_periods=5).mean())
     df["turnover_accel5_20"] = turnover5 / turnover20.replace(0, np.nan) - 1
     df["trend_quality20"] = df["ret20"] / df["volatility20"].replace(0, np.nan)
     df["trend_quality60"] = df["ret60"] / df["volatility60"].replace(0, np.nan)
@@ -691,6 +858,15 @@ def add_features(
     relative_feature_cols["rs_industry_accel5_20"] = relative_feature_cols["rs_industry5"] - relative_feature_cols["rs_industry20"] / 4.0
     relative_feature_cols["industry_heat_accel5_20"] = df["industry_ret5"] / 100.0 - df["industry_ret20"] / 400.0
     relative_feature_cols["small_heat_accel5_20"] = df["small_ret5"] / 100.0 - df["small_ret20"] / 400.0
+    relative_feature_cols["hot_money_score20"] = (
+        df["turnover_pct_rank"].fillna(0.0)
+        + df["amount_chg20"].clip(lower=-2.0, upper=5.0).fillna(0.0)
+        + df["limit_up_density20"].fillna(0.0)
+        + df["near_limit_up_count10"].fillna(0.0) / 10.0
+    )
+    relative_feature_cols["t_intraday_space"] = df["high_low_range"].fillna(0.0) * df["turnover_pct_rank"].fillna(0.0)
+    relative_feature_cols["t_reversal_score"] = df["low_to_close_rebound"].fillna(0.0) - df["high_to_close_pullback"].fillna(0.0)
+    relative_feature_cols["t_pressure_score"] = df["upper_shadow_pct"].fillna(0.0) + df["failed_breakout20"].fillna(0.0) + df["consecutive_up_days"].fillna(0.0) / 10.0
 
     trade_dt = pd.to_datetime(df["trade_date"], format="%Y%m%d", errors="coerce")
     list_dt = pd.to_datetime(df.get("list_date", ""), format="%Y%m%d", errors="coerce")
@@ -816,10 +992,7 @@ def simulate_capital_curve(trades: pd.DataFrame, horizon: int, tranche_fraction:
     if current.empty:
         return capital_curve_stats(pd.Series(dtype="float64"))
 
-    fraction = float(tranche_fraction)
-    if fraction <= 0:
-        fraction = 1.0 / max(int(horizon), 1)
-    fraction = min(max(fraction, 0.0), 1.0)
+    fraction = effective_capital_tranche_fraction(tranche_fraction, horizon)
 
     entries = {date: group.copy() for date, group in current.groupby("trade_date", sort=True)}
     event_dates = sorted(set(current["trade_date"]).union(set(current["exit_date"])))
@@ -841,6 +1014,13 @@ def simulate_capital_curve(trades: pd.DataFrame, horizon: int, tranche_fraction:
                 scheduled_exits.setdefault(exit_date, []).append(pnl)
         curve[date] = equity
     return capital_curve_stats(pd.Series(curve, dtype="float64"))
+
+
+def effective_capital_tranche_fraction(tranche_fraction: float, horizon: int) -> float:
+    fraction = safe_float(tranche_fraction, 0.0)
+    if fraction <= 0:
+        fraction = 1.0 / max(int(horizon), 1)
+    return min(max(float(fraction), 0.0), 1.0)
 
 
 def capital_scale_series(trades: pd.DataFrame, mode: str = "none") -> pd.Series:
@@ -1046,10 +1226,7 @@ def simulate_capital_curves_many(
     max_gross_exposure: float = 1.0,
 ) -> list[dict[str, float]]:
     fractions = [float(value) for value in tranche_fractions] or [0.0]
-    normalized = []
-    for value in fractions:
-        fraction = value if value > 0 else 1.0 / max(int(horizon), 1)
-        normalized.append(min(max(float(fraction), 0.0), 1.0))
+    normalized = [effective_capital_tranche_fraction(value, horizon) for value in fractions]
     if trades.empty or "exit_date" not in trades.columns:
         empty = capital_curve_stats(pd.Series(dtype="float64"))
         return [empty.copy() for _ in normalized]
@@ -1383,7 +1560,7 @@ def champion_validation_report(args: argparse.Namespace, pred: pd.DataFrame, can
                 "evidence": f"net_return 标签已扣 buy_slippage={args.buy_slippage}, sell_slippage={args.sell_slippage}, commission={args.commission}, stamp_tax={args.stamp_tax}。",
             },
             {
-                "item": "买入涨停/不可买过滤",
+                "item": "买入受限/不可买过滤",
                 "evidence": "样本构造要求 next_open>0 且 next_pct < price_limit_pct-0.2，否则 net_return 置 NaN，无法进入可交易收益标签。",
             },
             {
@@ -1538,7 +1715,7 @@ def filtered_pool(
         current = current[current["small_breakout_high20_ratio"] >= float(min_small_breakout_high20_ratio)]
     if max_crash_prob < 900 and "crash_prob" in current.columns:
         current = current[current["crash_prob"] <= float(max_crash_prob)]
-    return apply_daily_signal_filter(
+    return apply_buy_candidate_filter(
         current,
         top_n,
         min_daily_top_score,
@@ -1547,7 +1724,7 @@ def filtered_pool(
     )
 
 
-def apply_daily_signal_filter(
+def apply_buy_candidate_filter(
     current: pd.DataFrame,
     top_n: int,
     min_daily_top_score: float = -999.0,
@@ -1697,6 +1874,15 @@ def evaluate_predictions_many_capital(
     all_dates: Sequence[str] | None = None,
     min_rank_ic: float = 0.0,
     min_rank_ic_days: int = 0,
+    capacity_capital_base: float = 20000.0,
+    capacity_target_participation_rate: float = 0.02,
+    capacity_max_participation_rate: float = 0.05,
+    capacity_amount_unit: float = 1000.0,
+    capacity_impact_bps_coefficient: float = 50.0,
+    portfolio_max_single_weight: float = 0.10,
+    portfolio_max_industry_weight: float = 0.30,
+    portfolio_max_size_bucket_weight: float = 0.60,
+    portfolio_max_avg_crash_prob: float = 0.15,
 ) -> list[dict[str, Any]]:
     pool = filtered_pool(
         pred,
@@ -1759,6 +1945,17 @@ def evaluate_predictions_many_capital(
         capital_tranche_fractions,
         max_gross_exposure,
         all_dates,
+        min_rank_ic,
+        min_rank_ic_days,
+        capacity_capital_base,
+        capacity_target_participation_rate,
+        capacity_max_participation_rate,
+        capacity_amount_unit,
+        capacity_impact_bps_coefficient,
+        portfolio_max_single_weight,
+        portfolio_max_industry_weight,
+        portfolio_max_size_bucket_weight,
+        portfolio_max_avg_crash_prob,
     )
 
 
@@ -1798,6 +1995,15 @@ def evaluate_trades_many_capital(
     all_dates: Sequence[str] | None = None,
     min_rank_ic: float = 0.0,
     min_rank_ic_days: int = 0,
+    capacity_capital_base: float = 20000.0,
+    capacity_target_participation_rate: float = 0.02,
+    capacity_max_participation_rate: float = 0.05,
+    capacity_amount_unit: float = 1000.0,
+    capacity_impact_bps_coefficient: float = 50.0,
+    portfolio_max_single_weight: float = 0.10,
+    portfolio_max_industry_weight: float = 0.30,
+    portfolio_max_size_bucket_weight: float = 0.60,
+    portfolio_max_avg_crash_prob: float = 0.15,
 ) -> list[dict[str, Any]]:
     base = {
         "horizon": int(horizon),
@@ -1845,6 +2051,20 @@ def evaluate_trades_many_capital(
                 "sharpe": 0.0,
                 **ic_stats,
                 **empty_capital,
+                **candidate_capacity_risk_fields(
+                    trades,
+                    top_n=int(top_n),
+                    capital_fraction=effective_capital_tranche_fraction(capital_fraction, horizon),
+                    capacity_capital_base=capacity_capital_base,
+                    capacity_max_participation_rate=capacity_max_participation_rate,
+                    capacity_target_participation_rate=capacity_target_participation_rate,
+                    capacity_amount_unit=capacity_amount_unit,
+                    capacity_impact_bps_coefficient=capacity_impact_bps_coefficient,
+                    portfolio_max_single_weight=portfolio_max_single_weight,
+                    portfolio_max_industry_weight=portfolio_max_industry_weight,
+                    portfolio_max_size_bucket_weight=portfolio_max_size_bucket_weight,
+                    portfolio_max_avg_crash_prob=portfolio_max_avg_crash_prob,
+                ),
                 "yearly": [],
             }
             for capital_fraction in capital_tranche_fractions
@@ -1882,6 +2102,20 @@ def evaluate_trades_many_capital(
         {
             **common,
             "capital_tranche_fraction": safe_float(capital_fraction),
+            **candidate_capacity_risk_fields(
+                trades,
+                top_n=int(top_n),
+                capital_fraction=effective_capital_tranche_fraction(capital_fraction, horizon),
+                capacity_capital_base=capacity_capital_base,
+                capacity_max_participation_rate=capacity_max_participation_rate,
+                capacity_target_participation_rate=capacity_target_participation_rate,
+                capacity_amount_unit=capacity_amount_unit,
+                capacity_impact_bps_coefficient=capacity_impact_bps_coefficient,
+                portfolio_max_single_weight=portfolio_max_single_weight,
+                portfolio_max_industry_weight=portfolio_max_industry_weight,
+                portfolio_max_size_bucket_weight=portfolio_max_size_bucket_weight,
+                portfolio_max_avg_crash_prob=portfolio_max_avg_crash_prob,
+            ),
             **stats_for_fraction,
         }
         for capital_fraction, stats_for_fraction in zip(capital_tranche_fractions, capital_stats)
@@ -1922,6 +2156,15 @@ def evaluate_pool_many_top_capital(
     all_dates: Sequence[str] | None = None,
     min_rank_ic: float = 0.0,
     min_rank_ic_days: int = 0,
+    capacity_capital_base: float = 20000.0,
+    capacity_target_participation_rate: float = 0.02,
+    capacity_max_participation_rate: float = 0.05,
+    capacity_amount_unit: float = 1000.0,
+    capacity_impact_bps_coefficient: float = 50.0,
+    portfolio_max_single_weight: float = 0.10,
+    portfolio_max_industry_weight: float = 0.30,
+    portfolio_max_size_bucket_weight: float = 0.60,
+    portfolio_max_avg_crash_prob: float = 0.15,
 ) -> list[dict[str, Any]]:
     max_top_n = max(int(value) for value in top_n_values) if top_n_values else 0
     pool = filtered_pool(
@@ -1949,7 +2192,7 @@ def evaluate_pool_many_top_capital(
 
     evaluations: list[dict[str, Any]] = []
     for top_n in top_n_values:
-        top_pool = apply_daily_signal_filter(
+        top_pool = apply_buy_candidate_filter(
             pool,
             int(top_n),
             min_daily_top_score,
@@ -2000,6 +2243,17 @@ def evaluate_pool_many_top_capital(
             capital_tranche_fractions,
             max_gross_exposure,
             all_dates,
+            min_rank_ic,
+            min_rank_ic_days,
+            capacity_capital_base,
+            capacity_target_participation_rate,
+            capacity_max_participation_rate,
+            capacity_amount_unit,
+            capacity_impact_bps_coefficient,
+            portfolio_max_single_weight,
+            portfolio_max_industry_weight,
+            portfolio_max_size_bucket_weight,
+            portfolio_max_avg_crash_prob,
         ))
     return evaluations
 
@@ -2476,6 +2730,15 @@ def train_scope_horizon(args: argparse.Namespace, data: pd.DataFrame, scope: str
             all_eval_dates,
             min_rank_ic=args.min_rank_ic,
             min_rank_ic_days=args.min_rank_ic_days,
+            capacity_capital_base=args.capacity_capital_base,
+            capacity_target_participation_rate=args.capacity_target_participation_rate,
+            capacity_max_participation_rate=args.capacity_max_participation_rate,
+            capacity_amount_unit=args.capacity_amount_unit,
+            capacity_impact_bps_coefficient=args.capacity_impact_bps_coefficient,
+            portfolio_max_single_weight=args.portfolio_max_single_weight,
+            portfolio_max_industry_weight=args.portfolio_max_industry_weight,
+            portfolio_max_size_bucket_weight=args.portfolio_max_size_bucket_weight,
+            portfolio_max_avg_crash_prob=args.portfolio_max_avg_crash_prob,
         )
         evaluations.extend(batch)
         gate_pass_so_far += sum(1 for item in batch if evaluation_gate_ok(item, args))
@@ -2506,6 +2769,18 @@ def train_scope_horizon(args: argparse.Namespace, data: pd.DataFrame, scope: str
                 best_rank_ic_days=progress_best.get("rank_ic_days"),
                 best_challenger_score=progress_score.get("score"),
                 best_challenger=champion_payload(progress_best),
+            )
+            status_progress(
+                58,
+                100,
+                "evaluation_grid",
+                f"评估 {scope} {horizon}日策略参数网格",
+                (
+                    f"done={eval_base_done} total={eval_base_total} "
+                    f"eta={round(eta_seconds, 1) if eta_seconds is not None else ''} "
+                    f"gate_pass={gate_pass_so_far} "
+                    f"best_score={progress_score.get('score', '')}"
+                ),
             )
     if not evaluations:
         progress_log(
@@ -2701,15 +2976,352 @@ def panel_cache_path(args: argparse.Namespace, horizons: Sequence[int]) -> Path:
     return Path(args.data_path) / "profit_arena" / "cache" / f"panel_{args.start}_{args.end}_h{horizon_text}_{digest}.parquet"
 
 
+def factor_snapshot_spec(args: argparse.Namespace, horizons: Sequence[int]) -> FactorSnapshotSpec:
+    factor_store_feature_set = str(
+        getattr(args, "factor_store_feature_set", "")
+        or ("stock_factor_base_v1" if str(getattr(args, "factor_store_id", "") or "") == "stock_factor_base_v1" else getattr(args, "feature_set", "all"))
+        or "stock_factor_base_v1"
+    )
+    return FactorSnapshotSpec(
+        factor_store_id=str(getattr(args, "factor_store_id", "stock_factor_base_v1") or "stock_factor_base_v1"),
+        start=str(args.start),
+        end=str(args.end),
+        horizons=tuple(sorted(int(h) for h in horizons)),
+        feature_set=factor_store_feature_set,
+        universe="main_board_non_st_listed120_amount20000_price250",
+        version=PANEL_CACHE_VERSION,
+        params={
+            "buy_slippage": float(args.buy_slippage),
+            "sell_slippage": float(args.sell_slippage),
+            "commission": float(args.commission),
+            "stamp_tax": float(args.stamp_tax),
+            "stop_loss": float(getattr(args, "stop_loss", 0.0) or 0.0),
+            "take_profit": float(getattr(args, "take_profit", 0.0) or 0.0),
+            "execution_stop_losses": parse_float_list(getattr(args, "execution_stop_loss", "0")),
+            "execution_take_profits": parse_float_list(getattr(args, "execution_take_profit", "0")),
+            "warmup_days": 260,
+            "preprocess": str(getattr(args, "factor_preprocess", "institutional") or "institutional"),
+        },
+    )
+
+
+def factor_store_summary(args: argparse.Namespace, horizons: Sequence[int]) -> dict[str, Any]:
+    spec = factor_snapshot_spec(args, horizons)
+    latest_meta = load_latest_factor_snapshot_meta(args.data_path, spec.factor_store_id)
+    snapshot_path = str(factor_snapshot_path(args.data_path, spec))
+    summary = {
+        "factor_store_id": spec.factor_store_id,
+        "factor_store_mode": str(getattr(args, "factor_store_mode", "auto") or "auto"),
+        "feature_set": str(getattr(args, "feature_set", "") or ""),
+        "factor_store_feature_set": spec.feature_set,
+        "factor_preprocess": str(getattr(args, "factor_preprocess", "institutional") or "institutional"),
+        "snapshot_path": snapshot_path,
+    }
+    if latest_meta and str(latest_meta.get("path") or "") == snapshot_path:
+        summary["manifest_path"] = latest_meta.get("manifest_path", "")
+        summary["quality_gate"] = latest_meta.get("quality_gate", {})
+        summary["drift_summary"] = latest_meta.get("drift_summary", {})
+        summary["artifact_paths"] = latest_meta.get("artifact_paths", {})
+    return summary
+
+
+def enforce_factor_store_quality_gate(args: argparse.Namespace, spec: FactorSnapshotSpec) -> None:
+    if bool(getattr(args, "allow_factor_quality_fail", False)):
+        return
+    latest_meta = load_latest_factor_snapshot_meta(args.data_path, spec.factor_store_id)
+    snapshot_path = str(factor_snapshot_path(args.data_path, spec))
+    if not latest_meta or str(latest_meta.get("path") or "") != snapshot_path:
+        return
+    gate = latest_meta.get("quality_gate") if isinstance(latest_meta, dict) else None
+    if not isinstance(gate, dict):
+        return
+    if str(gate.get("status") or "").lower() == "fail":
+        raise RuntimeError(f"因子快照质量门禁失败，拒绝训练/推理: {gate}")
+
+
+def enforce_factor_snapshot_freshness(
+    args: argparse.Namespace,
+    spec: FactorSnapshotSpec,
+    snapshot: pd.DataFrame | None,
+    context: str,
+) -> dict[str, Any]:
+    expected_end = str(spec.end or "").strip()
+    actual_max = ""
+    if snapshot is not None and not snapshot.empty and "trade_date" in snapshot.columns:
+        actual_max = str(snapshot["trade_date"].astype(str).max())
+    status = "pass"
+    message = ""
+    if expected_end and actual_max and actual_max < expected_end:
+        status = "fail"
+        message = f"snapshot_trade_date_max={actual_max} < expected_end={expected_end}"
+    elif expected_end and not actual_max:
+        status = "fail"
+        message = f"snapshot missing trade_date coverage for expected_end={expected_end}"
+    summary = {
+        "status": status,
+        "factor_store_id": spec.factor_store_id,
+        "expected_end": expected_end,
+        "trade_date_max": actual_max,
+        "message": message,
+    }
+    if status == "fail" and bool(getattr(args, "require_fresh_factor_snapshot", False)) and not bool(getattr(args, "allow_factor_snapshot_stale", False)):
+        raise RuntimeError(f"{context} 因子快照新鲜度门禁失败，拒绝继续: {summary}")
+    return summary
+
+
+def factor_store_manifest_for_args(args: argparse.Namespace, horizons: Sequence[int]) -> dict[str, Any]:
+    spec = factor_snapshot_spec(args, horizons)
+    latest_meta = load_latest_factor_snapshot_meta(args.data_path, spec.factor_store_id)
+    snapshot_path = str(factor_snapshot_path(args.data_path, spec))
+    if not latest_meta or str(latest_meta.get("path") or "") != snapshot_path:
+        return {}
+    manifest_path = str(latest_meta.get("manifest_path") or "")
+    if not manifest_path or not Path(manifest_path).exists():
+        return {}
+    try:
+        return json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def write_feature_consistency_artifact(out_dir: Path, name: str, report: pd.DataFrame) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = out_dir / f"{name}.parquet"
+    json_path = out_dir / f"{name}.json"
+    out = report.copy()
+    for column in ("check", "status", "value", "threshold", "message"):
+        if column in out.columns:
+            out[column] = out[column].astype(str)
+    out.to_parquet(parquet_path, index=False, compression="zstd")
+    json_path.write_text(out.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
+    return {"report_path": str(parquet_path), "report_json_path": str(json_path), "summary": feature_consistency_summary(report)}
+
+
+def write_capacity_artifact(out_dir: Path, name: str, report: pd.DataFrame) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = out_dir / f"{name}.parquet"
+    json_path = out_dir / f"{name}.json"
+    report.to_parquet(parquet_path, index=False, compression="zstd")
+    json_path.write_text(report.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
+    return {"report_path": str(parquet_path), "report_json_path": str(json_path), "summary": capacity_summary(report)}
+
+
+def enforce_capacity_gate(args: argparse.Namespace, report: pd.DataFrame, context: str) -> dict[str, Any]:
+    summary = capacity_summary(report)
+    if str(summary.get("status") or "").lower() == "fail" and bool(getattr(args, "enforce_capacity_gate", False)) and not bool(getattr(args, "allow_capacity_fail", False)):
+        raise RuntimeError(f"{context} 容量门禁失败，拒绝继续: {summary}")
+    return summary
+
+
+def write_portfolio_risk_artifact(out_dir: Path, name: str, report: pd.DataFrame) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = out_dir / f"{name}.parquet"
+    json_path = out_dir / f"{name}.json"
+    report.to_parquet(parquet_path, index=False, compression="zstd")
+    json_path.write_text(report.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
+    return {"report_path": str(parquet_path), "report_json_path": str(json_path), "summary": portfolio_risk_summary(report)}
+
+
+def enforce_portfolio_risk_gate(args: argparse.Namespace, report: pd.DataFrame, context: str) -> dict[str, Any]:
+    summary = portfolio_risk_summary(report)
+    if str(summary.get("status") or "").lower() == "fail" and bool(getattr(args, "enforce_portfolio_risk_gate", False)) and not bool(getattr(args, "allow_portfolio_risk_fail", False)):
+        raise RuntimeError(f"{context} 组合风险预算失败，拒绝继续: {summary}")
+    return summary
+
+
+def candidate_capacity_risk_fields(
+    trades: pd.DataFrame,
+    *,
+    top_n: int,
+    capital_fraction: float = 1.0,
+    capacity_capital_base: float,
+    capacity_max_participation_rate: float,
+    capacity_target_participation_rate: float,
+    capacity_amount_unit: float,
+    capacity_impact_bps_coefficient: float,
+    portfolio_max_single_weight: float,
+    portfolio_max_industry_weight: float,
+    portfolio_max_size_bucket_weight: float,
+    portfolio_max_avg_crash_prob: float,
+) -> dict[str, Any]:
+    capacity = capacity_summary(build_capacity_report(
+        trades,
+        top_n=int(top_n),
+        capital_base=float(capacity_capital_base),
+        capital_fraction=safe_float(capital_fraction, 1.0),
+        max_participation_rate=float(capacity_max_participation_rate),
+        target_participation_rate=float(capacity_target_participation_rate),
+        amount_unit=float(capacity_amount_unit),
+        impact_bps_coefficient=float(capacity_impact_bps_coefficient),
+        weight_column="position_weight",
+        capital_scale_column="capital_scale",
+    ))
+    risk = portfolio_risk_summary(build_portfolio_risk_report(
+        trades,
+        top_n=int(top_n),
+        capital_fraction=safe_float(capital_fraction, 1.0),
+        max_single_weight=float(portfolio_max_single_weight),
+        max_industry_weight=float(portfolio_max_industry_weight),
+        max_size_bucket_weight=float(portfolio_max_size_bucket_weight),
+        max_avg_crash_prob=float(portfolio_max_avg_crash_prob),
+        weight_column="position_weight",
+        capital_scale_column="capital_scale",
+    ))
+    return {
+        "capacity_status": str(capacity.get("status", "missing")),
+        "capacity_fail_count": int(capacity.get("fail_count", 0) or 0),
+        "capacity_warn_count": int(capacity.get("warn_count", 0) or 0),
+        "capacity_max_participation_rate": safe_float(capacity.get("max_participation_rate")),
+        "capacity_median_participation_rate": safe_float(capacity.get("median_participation_rate")),
+        "capacity_max_estimated_impact_bps": safe_float(capacity.get("max_estimated_impact_bps")),
+        "capacity_min_capacity_notional": safe_float(capacity.get("min_capacity_notional")),
+        "portfolio_risk_status": str(risk.get("status", "missing")),
+        "portfolio_risk_fail_count": int(risk.get("fail_count", 0) or 0),
+        "portfolio_risk_warn_count": int(risk.get("warn_count", 0) or 0),
+        "portfolio_risk_worst_value": safe_float(risk.get("worst_value")),
+        "portfolio_risk_max_single_weight": safe_float(risk.get("max_single_weight")),
+        "portfolio_risk_max_industry_weight": safe_float(risk.get("max_industry_weight")),
+        "portfolio_risk_max_size_bucket_weight": safe_float(risk.get("max_size_bucket_weight")),
+        "portfolio_risk_max_avg_crash_prob": safe_float(risk.get("max_avg_crash_prob")),
+    }
+
+
+def attach_capacity_summary(pred: pd.DataFrame, capacity_report: pd.DataFrame) -> pd.DataFrame:
+    if pred.empty or capacity_report is None or capacity_report.empty:
+        return pred
+    out = pred.copy()
+    cols = ["trade_date", "ts_code", "participation_rate", "max_capacity_notional", "estimated_impact_bps", "status", "message"]
+    existing = [column for column in cols if column in capacity_report.columns]
+    if "trade_date" not in existing or "ts_code" not in existing:
+        return out
+    capacity = capacity_report[existing].rename(columns={
+        "participation_rate": "capacity_participation_rate",
+        "max_capacity_notional": "capacity_max_notional",
+        "estimated_impact_bps": "capacity_impact_bps",
+        "status": "capacity_status",
+        "message": "capacity_message",
+    })
+    return out.merge(capacity, on=["trade_date", "ts_code"], how="left")
+
+
+def latest_capacity_selection_summary(frame: pd.DataFrame, top_n: int) -> dict[str, Any]:
+    if frame.empty:
+        return {
+            "display_count": 0,
+            "evaluated_top_n": int(top_n),
+            "evaluated_count": 0,
+            "pass_count": 0,
+            "warn_count": 0,
+            "fail_count": 0,
+            "tradable_count": 0,
+            "buy_plan_complete": False,
+        }
+    status = frame.get("capacity_status", pd.Series("", index=frame.index)).fillna("").astype(str).str.lower()
+    tradable_count = int(status.isin(["pass", "warn"]).sum())
+    return {
+        "display_count": int(len(frame)),
+        "evaluated_top_n": int(top_n),
+        "evaluated_count": int(status.isin(["pass", "warn", "fail"]).sum()),
+        "pass_count": int((status == "pass").sum()),
+        "warn_count": int((status == "warn").sum()),
+        "fail_count": int((status == "fail").sum()),
+        "tradable_count": tradable_count,
+        "buy_plan_complete": bool(tradable_count >= int(top_n)),
+    }
+
+
+def latest_buy_plan_status(capacity_selection: dict[str, Any], portfolio_risk: dict[str, Any]) -> dict[str, Any]:
+    risk_status = str(portfolio_risk.get("status", "") or "").lower()
+    if risk_status == "fail":
+        return {
+            "status": "blocked_by_portfolio_risk",
+            "reason": "portfolio_risk_gate_failed",
+            "tradable_count": int(capacity_selection.get("tradable_count", 0) or 0),
+            "target_count": int(capacity_selection.get("evaluated_top_n", 0) or 0),
+            "capacity_fail_count": int(capacity_selection.get("fail_count", 0) or 0),
+            "portfolio_risk_status": risk_status,
+        }
+    tradable = int(capacity_selection.get("tradable_count", 0) or 0)
+    target = int(capacity_selection.get("evaluated_top_n", 0) or 0)
+    if target <= 0:
+        return {
+            "status": "missing",
+            "reason": "missing_target_count",
+            "tradable_count": tradable,
+            "target_count": target,
+            "capacity_fail_count": int(capacity_selection.get("fail_count", 0) or 0),
+            "portfolio_risk_status": risk_status,
+        }
+    if tradable <= 0:
+        return {
+            "status": "blocked_by_capacity",
+            "reason": "no_capacity_tradable_candidates",
+            "tradable_count": tradable,
+            "target_count": target,
+            "capacity_fail_count": int(capacity_selection.get("fail_count", 0) or 0),
+            "portfolio_risk_status": risk_status,
+        }
+    if tradable < target:
+        return {
+            "status": "partial_capacity",
+            "reason": "capacity_tradable_candidates_below_top_n",
+            "tradable_count": tradable,
+            "target_count": target,
+            "capacity_fail_count": int(capacity_selection.get("fail_count", 0) or 0),
+            "portfolio_risk_status": risk_status,
+        }
+    return {
+        "status": "ready",
+        "reason": "",
+        "tradable_count": tradable,
+        "target_count": target,
+        "capacity_fail_count": int(capacity_selection.get("fail_count", 0) or 0),
+        "portfolio_risk_status": risk_status or "pass",
+    }
+
+
+def enforce_feature_consistency(args: argparse.Namespace, report: pd.DataFrame, context: str) -> dict[str, Any]:
+    summary = feature_consistency_summary(report)
+    if str(summary.get("status") or "").lower() == "fail" and not bool(getattr(args, "allow_feature_consistency_fail", False)):
+        raise RuntimeError(f"{context} 特征一致性门禁失败，拒绝继续: {summary}")
+    return summary
+
+
 def load_or_build_panel(args: argparse.Namespace, horizons: Sequence[int]) -> pd.DataFrame:
+    factor_store_mode = str(getattr(args, "factor_store_mode", "auto") or "auto").strip().lower()
+    factor_preprocess = str(getattr(args, "factor_preprocess", "institutional") or "institutional").strip().lower()
+    spec = factor_snapshot_spec(args, horizons)
+    feature_columns = list(getattr(args, "feature_columns", feature_columns_for_set(getattr(args, "feature_set", "all"))))
+    required_columns = ["trade_date", "ts_code", *feature_columns]
+    if factor_store_mode in {"auto", "require"}:
+        snapshot = load_factor_snapshot(args.data_path, spec, required_columns)
+        if snapshot is not None:
+            enforce_factor_store_quality_gate(args, spec)
+            freshness = enforce_factor_snapshot_freshness(args, spec, snapshot, "训练/推理")
+            progress_log(
+                "factor_snapshot_hit",
+                run_id=args.run_id,
+                factor_store_id=spec.factor_store_id,
+                rows=len(snapshot),
+                columns=len(snapshot.columns),
+                freshness=freshness,
+            )
+            return snapshot
+        progress_log("factor_snapshot_miss", run_id=args.run_id, factor_store_id=spec.factor_store_id)
+        if factor_store_mode == "require" or bool(getattr(args, "require_fresh_factor_snapshot", False)):
+            raise RuntimeError(
+                "因子快照不存在、缺少必要列或不匹配当前 end 日期，请先运行 factor_snapshot_worker 并确认数据页后置因子任务成功"
+            )
+
     cache_path = panel_cache_path(args, horizons)
     if not bool(getattr(args, "no_panel_cache", False)) and cache_path.exists():
         progress_log("panel_cache_hit", run_id=args.run_id, path=str(cache_path))
-        return pd.read_parquet(cache_path)
+        data = pd.read_parquet(cache_path)
+        return preprocess_factors(data, feature_columns, factor_preprocess)
     progress_log("panel_cache_miss", run_id=args.run_id, path=str(cache_path))
     raw = read_market_panel(Path(args.data_path), args.start, args.end, warmup_days=260)
     if raw.empty:
-        raise RuntimeError("日线数据为空，无法训练收益擂台模型")
+        raise RuntimeError("日线数据为空，无法训练通用策略模型")
     progress_log("raw_panel_loaded", run_id=args.run_id, rows=len(raw), columns=len(raw.columns))
     data = add_features(
         raw,
@@ -2730,6 +3342,22 @@ def load_or_build_panel(args: argparse.Namespace, horizons: Sequence[int]) -> pd
         progress_log("panel_cache_write_start", run_id=args.run_id, path=str(cache_path), rows=len(data))
         data.to_parquet(cache_path, index=False, compression="zstd")
         progress_log("panel_cache_write_done", run_id=args.run_id, path=str(cache_path), rows=len(data))
+    data = preprocess_factors(data, feature_columns, factor_preprocess)
+    enforce_factor_snapshot_freshness(args, spec, data, "现场生成面板")
+    if factor_store_mode in {"auto", "write"}:
+        snapshot_path = write_factor_snapshot(
+            args.data_path,
+            spec,
+            data,
+            extra={
+                "source": "profit_arena_worker",
+                "run_id": args.run_id,
+                "feature_count": len(feature_columns),
+                "all_factor_count": len(FEATURES),
+                "preprocess": factor_preprocess,
+            },
+        )
+        progress_log("factor_snapshot_write_done", run_id=args.run_id, path=str(snapshot_path), rows=len(data))
     return data
 
 
@@ -3106,6 +3734,15 @@ def evaluate_prediction_grid(args: argparse.Namespace, pred_input: pd.DataFrame,
             all_eval_dates,
             min_rank_ic=args.min_rank_ic,
             min_rank_ic_days=args.min_rank_ic_days,
+            capacity_capital_base=args.capacity_capital_base,
+            capacity_target_participation_rate=args.capacity_target_participation_rate,
+            capacity_max_participation_rate=args.capacity_max_participation_rate,
+            capacity_amount_unit=args.capacity_amount_unit,
+            capacity_impact_bps_coefficient=args.capacity_impact_bps_coefficient,
+            portfolio_max_single_weight=args.portfolio_max_single_weight,
+            portfolio_max_industry_weight=args.portfolio_max_industry_weight,
+            portfolio_max_size_bucket_weight=args.portfolio_max_size_bucket_weight,
+            portfolio_max_avg_crash_prob=args.portfolio_max_avg_crash_prob,
         )
         evaluations.extend(batch)
         gate_pass_so_far += sum(1 for item in batch if evaluation_gate_ok(item, args))
@@ -3228,6 +3865,12 @@ def evaluation_gate_ok(item: dict[str, Any], args: argparse.Namespace) -> bool:
     max_capital_drawdown = float(getattr(args, "max_capital_drawdown", 0.0) or 0.0)
     if max_capital_drawdown < 0 and safe_float(item.get("capital_max_drawdown")) < max_capital_drawdown:
         return False
+    if bool(getattr(args, "enforce_capacity_gate", False)) and not bool(getattr(args, "allow_capacity_fail", False)):
+        if str(item.get("capacity_status", "")).lower() == "fail":
+            return False
+    if bool(getattr(args, "enforce_portfolio_risk_gate", False)) and not bool(getattr(args, "allow_portfolio_risk_fail", False)):
+        if str(item.get("portfolio_risk_status", "")).lower() == "fail":
+            return False
     return True
 
 
@@ -3254,7 +3897,127 @@ def hard_gate_failures(item: dict[str, Any], args: argparse.Namespace) -> list[s
     max_capital_drawdown = float(getattr(args, "max_capital_drawdown", 0.0) or 0.0)
     if max_capital_drawdown < 0 and safe_float(item.get("capital_max_drawdown")) < max_capital_drawdown:
         failures.append("max_capital_drawdown")
+    if bool(getattr(args, "enforce_capacity_gate", False)) and not bool(getattr(args, "allow_capacity_fail", False)):
+        if str(item.get("capacity_status", "")).lower() == "fail":
+            failures.append("capacity_gate")
+    if bool(getattr(args, "enforce_portfolio_risk_gate", False)) and not bool(getattr(args, "allow_portfolio_risk_fail", False)):
+        if str(item.get("portfolio_risk_status", "")).lower() == "fail":
+            failures.append("portfolio_risk_gate")
     return failures
+
+
+def gate_failure_label(name: str) -> str:
+    labels = {
+        "min_trades": "交易样本不足",
+        "min_trade_years": "覆盖年份不足",
+        "min_rank_ic": "RankIC不足",
+        "min_rank_ic_days": "RankIC有效天数不足",
+        "min_capital_annual_return": "资金年化不足",
+        "min_capital_sharpe": "资金Sharpe不足",
+        "max_capital_drawdown": "资金回撤超限",
+        "capacity_gate": "容量门禁失败",
+        "portfolio_risk_gate": "组合风险预算失败",
+    }
+    return labels.get(name, name)
+
+
+def gate_failure_detail(name: str, item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    if name == "min_trades":
+        return {"value": int(item.get("trade_count", 0) or 0), "threshold": int(getattr(args, "selection_min_trades", 0) or 0)}
+    if name == "min_trade_years":
+        return {"value": int(item.get("trade_years", 0) or 0), "threshold": int(getattr(args, "selection_min_trade_years", 0) or 0)}
+    if name == "min_rank_ic":
+        return {"value": safe_float(item.get("rank_ic")), "threshold": safe_float(getattr(args, "min_rank_ic", 0.0))}
+    if name == "min_rank_ic_days":
+        return {"value": int(item.get("rank_ic_days", 0) or 0), "threshold": int(getattr(args, "min_rank_ic_days", 0) or 0)}
+    if name == "min_capital_annual_return":
+        return {"value": safe_float(item.get("capital_annual_return")), "threshold": safe_float(getattr(args, "min_capital_annual_return", 0.0))}
+    if name == "min_capital_sharpe":
+        return {"value": safe_float(item.get("capital_sharpe")), "threshold": safe_float(getattr(args, "min_capital_sharpe", 0.0))}
+    if name == "max_capital_drawdown":
+        return {"value": safe_float(item.get("capital_max_drawdown")), "threshold": safe_float(getattr(args, "max_capital_drawdown", 0.0))}
+    if name == "capacity_gate":
+        return {
+            "status": str(item.get("capacity_status", "missing")),
+            "fail_count": int(item.get("capacity_fail_count", 0) or 0),
+            "warn_count": int(item.get("capacity_warn_count", 0) or 0),
+            "max_participation_rate": safe_float(item.get("capacity_max_participation_rate")),
+            "max_estimated_impact_bps": safe_float(item.get("capacity_max_estimated_impact_bps")),
+            "min_capacity_notional": safe_float(item.get("capacity_min_capacity_notional")),
+            "threshold": safe_float(getattr(args, "capacity_max_participation_rate", 0.0)),
+        }
+    if name == "portfolio_risk_gate":
+        return {
+            "status": str(item.get("portfolio_risk_status", "missing")),
+            "fail_count": int(item.get("portfolio_risk_fail_count", 0) or 0),
+            "warn_count": int(item.get("portfolio_risk_warn_count", 0) or 0),
+            "worst_value": safe_float(item.get("portfolio_risk_worst_value")),
+            "max_single_weight": safe_float(item.get("portfolio_risk_max_single_weight")),
+            "max_industry_weight": safe_float(item.get("portfolio_risk_max_industry_weight")),
+            "max_size_bucket_weight": safe_float(item.get("portfolio_risk_max_size_bucket_weight")),
+            "max_avg_crash_prob": safe_float(item.get("portfolio_risk_max_avg_crash_prob")),
+        }
+    return {}
+
+
+def gate_diagnostics(item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    failures = hard_gate_failures(item, args)
+    return {
+        "hard_gate_ok": not failures,
+        "failures": failures,
+        "labels": [gate_failure_label(name) for name in failures],
+        "details": {name: gate_failure_detail(name, item, args) for name in failures},
+    }
+
+
+def gate_failure_summary(evaluations: list[dict[str, Any]], args: argparse.Namespace) -> dict[str, Any]:
+    total = len(evaluations)
+    tradable = [item for item in evaluations if int(item.get("trade_count", 0) or 0) > 0]
+    pass_count = 0
+    reason_counts: dict[str, int] = {}
+    examples: dict[str, list[dict[str, Any]]] = {}
+    for item in tradable:
+        diagnostics = gate_diagnostics(item, args)
+        failures = [str(name) for name in diagnostics.get("failures", [])]
+        if not failures:
+            pass_count += 1
+            continue
+        for name in failures:
+            reason_counts[name] = reason_counts.get(name, 0) + 1
+            bucket = examples.setdefault(name, [])
+            if len(bucket) < 3:
+                bucket.append({
+                    "scope": item.get("scope"),
+                    "horizon": item.get("horizon"),
+                    "top_n": item.get("top_n"),
+                    "segment": item.get("segment"),
+                    "capital_tranche_fraction": item.get("capital_tranche_fraction"),
+                    "capital_annual_return": safe_float(item.get("capital_annual_return")),
+                    "capital_max_drawdown": safe_float(item.get("capital_max_drawdown")),
+                    "rank_ic": safe_float(item.get("rank_ic")),
+                    "capacity_status": item.get("capacity_status"),
+                    "capacity_max_participation_rate": safe_float(item.get("capacity_max_participation_rate")),
+                    "portfolio_risk_status": item.get("portfolio_risk_status"),
+                    "portfolio_risk_worst_value": safe_float(item.get("portfolio_risk_worst_value")),
+                })
+    reasons = [
+        {
+            "name": name,
+            "label": gate_failure_label(name),
+            "count": count,
+            "ratio": safe_float(count / max(len(tradable), 1)),
+            "examples": examples.get(name, []),
+        }
+        for name, count in sorted(reason_counts.items(), key=lambda pair: pair[1], reverse=True)
+    ]
+    return {
+        "total_evaluations": total,
+        "tradable_evaluations": len(tradable),
+        "hard_gate_pass_count": pass_count,
+        "hard_gate_fail_count": max(len(tradable) - pass_count, 0),
+        "hard_gate_pass_ratio": safe_float(pass_count / max(len(tradable), 1)),
+        "top_failures": reasons[:8],
+    }
 
 
 def annual_return_bucket_score(annual: float) -> float:
@@ -3402,7 +4165,8 @@ def arena_score_components(item: dict[str, Any], args: argparse.Namespace) -> di
         penalties["min_trades"] = 0.0
 
     passed_gates = [name for name in gate_names if name not in penalties]
-    failures = hard_gate_failures(item, args)
+    gate = gate_diagnostics(item, args)
+    failures = list(gate.get("failures") or [])
     if not failures:
         arena_tier = 3
         arena_tier_name = "strict_champion"
@@ -3470,7 +4234,8 @@ def arena_score_components(item: dict[str, Any], args: argparse.Namespace) -> di
         },
         "penalties": penalties,
         "passed_gates": passed_gates,
-        "hard_gate_ok": not penalties,
+        "gate_diagnostics": gate,
+        "hard_gate_ok": not failures,
         "hard_gate_failures": failures,
     }
 
@@ -3535,7 +4300,7 @@ def select_best_evaluation(evaluations: list[dict[str, Any]], args: argparse.Nam
         if filtered:
             candidates = filtered
     if not candidates:
-        raise RuntimeError("收益擂台没有可选择的评估结果")
+        raise RuntimeError("通用策略没有可选择的评估结果")
     metric = str(getattr(args, "selection_metric", "compound_return") or "compound_return")
     return max(candidates, key=lambda item: safe_float(item.get(metric)))
 
@@ -3545,6 +4310,11 @@ def select_best_challenger(evaluations: list[dict[str, Any]], args: argparse.Nam
         return {}
     tradable = [item for item in evaluations if int(item.get("trade_count", 0) or 0) > 0]
     candidates = tradable or evaluations
+    gated = [item for item in candidates if evaluation_gate_ok(item, args)]
+    if gated:
+        candidates = gated
+    elif bool(getattr(args, "enforce_capacity_gate", False)) or bool(getattr(args, "enforce_portfolio_risk_gate", False)):
+        return {}
     return max(candidates, key=lambda item: arena_score_key(item, args))
 
 
@@ -3578,6 +4348,7 @@ def leaderboard_entry(item: dict[str, Any], args: argparse.Namespace) -> dict[st
         "arena_tier_name": components.get("arena_tier_name"),
         "hard_gate_ok": components.get("hard_gate_ok"),
         "hard_gate_failures": components.get("hard_gate_failures"),
+        "gate_diagnostics": components.get("gate_diagnostics"),
         "penalties": components.get("penalties"),
         "yearly_diagnostics": components.get("yearly_diagnostics"),
     }
@@ -3663,6 +4434,21 @@ def champion_payload(item: dict[str, Any]) -> dict[str, Any]:
         "capital_sharpe",
         "rank_ic",
         "rank_ic_days",
+        "capacity_status",
+        "capacity_fail_count",
+        "capacity_warn_count",
+        "capacity_max_participation_rate",
+        "capacity_max_estimated_impact_bps",
+        "portfolio_risk_status",
+        "portfolio_risk_fail_count",
+        "portfolio_risk_warn_count",
+        "portfolio_risk_worst_value",
+        "portfolio_risk_max_single_weight",
+        "portfolio_risk_max_industry_weight",
+        "portfolio_risk_max_size_bucket_weight",
+        "portfolio_risk_max_avg_crash_prob",
+        "buy_plan_status",
+        "buy_plan_reason",
     ]
     return {key: item.get(key) for key in keys if key in item}
 
@@ -3725,10 +4511,10 @@ def notify_arena_wechat(event: str, args: argparse.Namespace, champion: dict[str
     best = champion_payload(champion)
     components = arena_score_components(champion, args)
     qualification_status = "最终达标" if int(components.get("arena_tier", 0) or 0) >= 3 else "当前最优"
-    title = f"收益擂台{qualification_status}擂主复验通过"
+    title = f"通用策略{qualification_status}冠军版本复验通过"
     content = "\n".join([
         f"## {title}",
-        f"> 擂台：{getattr(args, 'arena_name', 'default')}",
+        f"> 策略：{getattr(args, 'arena_name', 'default')}",
         f"> 版本：v{version}",
         f"> run_id：{args.run_id}",
         f"> 分数：{score:.4f}",
@@ -3747,54 +4533,56 @@ def notify_arena_wechat(event: str, args: argparse.Namespace, champion: dict[str
 
 
 def arena_champion_path(args: argparse.Namespace) -> Path:
-    arena_name = str(getattr(args, "arena_name", "default") or "default")
-    safe_name = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in arena_name)
-    return Path(args.data_path) / "profit_arena" / f"arena_champion_{safe_name}.json"
+    return build_arena_manager(args).champion_path
 
 
 def arena_history_path(args: argparse.Namespace) -> Path:
-    arena_name = str(getattr(args, "arena_name", "default") or "default")
-    safe_name = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in arena_name)
-    return Path(args.data_path) / "profit_arena" / f"arena_history_{safe_name}.jsonl"
+    return build_arena_manager(args).history_path
+
+
+def build_arena_manager(args: argparse.Namespace) -> ArenaChallengeManager:
+    return ARENA_STRATEGY.manager(
+        run_id=str(args.run_id),
+        data_path=Path(args.data_path),
+        arena_name=str(getattr(args, "arena_name", ARENA_STRATEGY.default_arena_name) or ARENA_STRATEGY.default_arena_name),
+        min_improvement=float(getattr(args, "champion_min_improvement", 0.0) or 0.0),
+        progress_log=progress_log,
+        now_fn=now_text,
+    )
+
+
+def build_arena_rules(args: argparse.Namespace) -> ArenaChallengeRules:
+    return ArenaChallengeRules(
+        score_components_fn=lambda item: arena_score_components(item, args),
+        score_key_fn=lambda item: arena_score_key(item, args),
+        payload_fn=champion_payload,
+        comparable_payload_fn=comparable_champion_payload,
+    )
+
+
+def arena_strategy_payload(args: argparse.Namespace) -> dict[str, Any]:
+    task_label = "通用策略 · 版本训练"
+    if str(getattr(args, "latest_inference_source_run_id", "") or "").strip():
+        task_label = "通用策略 · 最新截面推理"
+    elif str(getattr(args, "eval_only_predictions", "") or "").strip():
+        task_label = "通用策略 · 快速重评估"
+    return ARENA_STRATEGY.observability_payload(
+        run_id=str(args.run_id),
+        arena_name=str(getattr(args, "arena_name", ARENA_STRATEGY.default_arena_name) or ARENA_STRATEGY.default_arena_name),
+        task_label=task_label,
+    )
 
 
 def load_arena_champion(args: argparse.Namespace) -> dict[str, Any] | None:
-    path = arena_champion_path(args)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        progress_log("arena_champion_load_error", run_id=args.run_id, path=str(path), error=str(exc))
-        return None
+    return build_arena_manager(args).load_champion()
 
 
 def next_arena_challenge_version(args: argparse.Namespace) -> int:
-    path = arena_history_path(args)
-    if not path.exists():
-        return 1
-    last_version = 0
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                last_version = max(last_version, int(payload.get("challenge_version", 0) or 0))
-    except Exception as exc:
-        progress_log("arena_history_read_error", run_id=args.run_id, path=str(path), error=str(exc))
-    return last_version + 1
+    return build_arena_manager(args).next_challenge_version()
 
 
 def append_arena_history(args: argparse.Namespace, record: dict[str, Any]) -> None:
-    path = arena_history_path(args)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    build_arena_manager(args).append_history(record)
 
 
 def update_arena_champion(
@@ -3803,193 +4591,14 @@ def update_arena_champion(
     summary_path: Path,
     validation_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    path = arena_champion_path(args)
-    incumbent = load_arena_champion(args)
-    challenge_version = next_arena_challenge_version(args)
-    challenger_payload = champion_payload(challenger)
-    challenger_components = arena_score_components(challenger, args)
-    challenger_score = safe_float(challenger_components.get("score"))
-    challenger_key = arena_score_key(challenger, args)
-    incumbent_components = (incumbent or {}).get("arena_score_components") or {}
-    if incumbent and not incumbent_components.get("arena_tier_name") and isinstance(incumbent.get("best"), dict):
-        incumbent_components = arena_score_components(incumbent["best"], args)
-    incumbent_score = safe_float((incumbent or {}).get("arena_score"), default=-1e18)
-    incumbent_key = arena_score_key((incumbent or {}).get("best") or {}, args) if incumbent else (-1e18, -1e18, -1e18, -1e18, -1e18, -1e18)
-    incumbent_tier = int(incumbent_components.get("arena_tier", 0) or 0) if incumbent else -1
-    challenger_tier = int(challenger_components.get("arena_tier", 0) or 0)
-    min_improvement = float(getattr(args, "champion_min_improvement", 0.0) or 0.0)
-    challenger_qualification_status = "qualified" if challenger_tier >= 3 else "provisional"
-    challenger_champion_type = "qualified_champion" if challenger_tier >= 3 else "current_best"
-    incumbent_qualification_status = (incumbent or {}).get("qualification_status")
-    incumbent_champion_type = (incumbent or {}).get("champion_type")
-    improved = (
-        incumbent is None
-        or challenger_score > incumbent_score + min_improvement
-        or (abs(challenger_score - incumbent_score) <= max(1e-9, abs(incumbent_score) * 1e-12) and challenger_key > incumbent_key)
+    manager = build_arena_manager(args)
+    return manager.challenge_champion(
+        challenger=challenger,
+        summary_path=summary_path,
+        validation_report=validation_report,
+        rules=build_arena_rules(args),
+        notify_validation_fn=lambda event, item, score, version, path: notify_arena_wechat(event, args, item, score, version, path),
     )
-    result = {
-        "arena_name": str(getattr(args, "arena_name", "default") or "default"),
-        "challenge_version": challenge_version,
-        "champion_path": str(path),
-        "history_path": str(arena_history_path(args)),
-        "updated": improved,
-        "challenger_score": challenger_score,
-        "challenger_score_key": challenger_key,
-        "challenger_tier": challenger_tier,
-        "challenger_tier_name": challenger_components.get("arena_tier_name"),
-        "challenger_qualification_status": challenger_qualification_status,
-        "challenger_champion_type": challenger_champion_type,
-        "incumbent_score": None if incumbent is None else incumbent_score,
-        "incumbent_score_key": None if incumbent is None else incumbent_key,
-        "incumbent_tier": None if incumbent is None else incumbent_tier,
-        "incumbent_tier_name": None if incumbent is None else incumbent_components.get("arena_tier_name"),
-        "incumbent_qualification_status": incumbent_qualification_status,
-        "incumbent_champion_type": incumbent_champion_type,
-        "challenger": challenger_payload,
-        "challenger_score_components": challenger_components,
-        "incumbent": incumbent,
-    }
-    if improved:
-        now = now_text()
-        new_champion = {
-            "arena_name": result["arena_name"],
-            "champion_version": challenge_version,
-            "run_id": args.run_id,
-            "summary_path": str(summary_path),
-            "arena_score": challenger_score,
-            "arena_score_components": challenger_components,
-            "best": challenger_payload,
-            "qualification_status": challenger_qualification_status,
-            "champion_type": challenger_champion_type,
-            "champion_validation": validation_report,
-            "validation_status": "pending_rerun",
-            "validation_note": "新擂主仅代表首次挑战胜出，需要同配置重跑后才能标记为 confirmed。",
-            "created_at": (incumbent or {}).get("created_at", now),
-            "updated_at": now,
-            "previous_champion": incumbent,
-        }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(new_champion, ensure_ascii=False, indent=2), encoding="utf-8")
-        result["champion"] = new_champion
-        progress_log(
-            "arena_champion_updated",
-            run_id=args.run_id,
-            arena_name=result["arena_name"],
-            champion_path=str(path),
-            challenger_score=challenger_score,
-            incumbent_score=result["incumbent_score"],
-            challenger_tier=challenger_tier,
-            challenger_tier_name=challenger_components.get("arena_tier_name"),
-            challenger_qualification_status=challenger_qualification_status,
-            challenger_champion_type=challenger_champion_type,
-            incumbent_tier=result["incumbent_tier"],
-            incumbent_tier_name=result["incumbent_tier_name"],
-            incumbent_qualification_status=result["incumbent_qualification_status"],
-            incumbent_champion_type=result["incumbent_champion_type"],
-            challenger=challenger_payload,
-        )
-    else:
-        validation_confirmed = False
-        if incumbent:
-            incumbent_payload = champion_payload((incumbent or {}).get("best") or {})
-            same_champion = comparable_champion_payload(challenger_payload) == comparable_champion_payload(incumbent_payload)
-            same_score = abs(challenger_score - incumbent_score) <= max(1e-9, abs(incumbent_score) * 1e-12)
-            pending_validation = (incumbent or {}).get("validation_status") == "pending_rerun"
-            historical_recalc_validation = (incumbent or {}).get("validation_status") == "historical_score_recalc"
-            refresh_validation_report = validation_report is not None and same_champion and same_score
-            should_notify_validation = pending_validation or historical_recalc_validation
-            if same_champion and same_score and (pending_validation or historical_recalc_validation or refresh_validation_report):
-                now = now_text()
-                incumbent = dict(incumbent)
-                incumbent["validation_status"] = "confirmed"
-                incumbent["validation_note"] = "同配置重跑复验通过；验证轮未改变擂主版本，并刷新擂主复验报告。"
-                incumbent["validated_at"] = now
-                incumbent["validation_run_id"] = args.run_id
-                incumbent["validation_summary_path"] = str(summary_path)
-                incumbent["validation_score"] = challenger_score
-                incumbent["champion_validation"] = validation_report
-                incumbent["updated_at"] = now
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(incumbent, ensure_ascii=False, indent=2), encoding="utf-8")
-                validation_confirmed = True
-                result["validation_confirmed"] = True
-                progress_log(
-                    "arena_champion_validated",
-                    run_id=args.run_id,
-                    arena_name=result["arena_name"],
-                    champion_path=str(path),
-                    champion_run_id=incumbent.get("run_id"),
-                    champion_version=incumbent.get("champion_version"),
-                    challenger_score=challenger_score,
-                )
-                if should_notify_validation:
-                    notify_arena_wechat("validated", args, challenger, challenger_score, int(incumbent.get("champion_version") or challenge_version), summary_path)
-                else:
-                    progress_log(
-                        "arena_wechat_notify_skipped",
-                        run_id=args.run_id,
-                        notify_event="validated",
-                        reason="validation_report_refresh_only",
-                    )
-        result["champion"] = incumbent
-        progress_log(
-            "arena_challenge_failed",
-            run_id=args.run_id,
-            arena_name=result["arena_name"],
-            champion_path=str(path),
-            challenger_score=challenger_score,
-            incumbent_score=incumbent_score,
-            challenger_tier=challenger_tier,
-            challenger_tier_name=challenger_components.get("arena_tier_name"),
-            challenger_qualification_status=challenger_qualification_status,
-            challenger_champion_type=challenger_champion_type,
-            incumbent_tier=incumbent_tier,
-            incumbent_tier_name=incumbent_components.get("arena_tier_name"),
-            incumbent_qualification_status=incumbent_qualification_status,
-            incumbent_champion_type=incumbent_champion_type,
-            challenger=challenger_payload,
-            champion=(incumbent or {}).get("best"),
-            validation_confirmed=validation_confirmed,
-        )
-    history_record = {
-        "arena_name": result["arena_name"],
-        "challenge_version": challenge_version,
-        "run_id": args.run_id,
-        "summary_path": str(summary_path),
-        "challenged_at": now_text(),
-        "updated": improved,
-        "challenger_score": challenger_score,
-        "challenger_tier": challenger_tier,
-        "challenger_tier_name": challenger_components.get("arena_tier_name"),
-        "challenger_qualification_status": challenger_qualification_status,
-        "challenger_champion_type": challenger_champion_type,
-        "incumbent_score": result["incumbent_score"],
-        "incumbent_tier": result["incumbent_tier"],
-        "incumbent_tier_name": result["incumbent_tier_name"],
-        "incumbent_qualification_status": result["incumbent_qualification_status"],
-        "incumbent_champion_type": result["incumbent_champion_type"],
-        "challenger": challenger_payload,
-        "challenger_score_components": challenger_components,
-        "incumbent_run_id": (incumbent or {}).get("run_id"),
-        "incumbent_champion_version": (incumbent or {}).get("champion_version"),
-        "incumbent": (incumbent or {}).get("best"),
-        "champion_after": (result.get("champion") or {}).get("best"),
-        "champion_after_run_id": (result.get("champion") or {}).get("run_id"),
-        "champion_after_version": (result.get("champion") or {}).get("champion_version"),
-        "champion_after_qualification_status": (result.get("champion") or {}).get("qualification_status"),
-        "champion_after_type": (result.get("champion") or {}).get("champion_type"),
-        "validation_confirmed": bool(result.get("validation_confirmed", False)),
-    }
-    append_arena_history(args, history_record)
-    progress_log(
-        "arena_history_appended",
-        run_id=args.run_id,
-        arena_name=result["arena_name"],
-        challenge_version=challenge_version,
-        history_path=str(arena_history_path(args)),
-        updated=improved,
-    )
-    return result
 
 
 def compact_summary_for_db(summary: dict[str, Any]) -> dict[str, Any]:
@@ -4025,6 +4634,8 @@ def write_results(args: argparse.Namespace, summary: dict[str, Any], results: li
     progress_log("db_write_start", run_id=args.run_id, db_path=args.db_path, model_path=model_path)
     compact_summary = compact_summary_for_db(summary)
     with write_transaction(args.db_path) as conn:
+        arena_manager = build_arena_manager(args)
+        arena_manager.ensure_tables(conn)
         conn.execute("DELETE FROM profit_arena_features WHERE run_id = ?", (args.run_id,))
         conn.execute("DELETE FROM profit_arena_predictions WHERE run_id = ?", (args.run_id,))
         conn.execute("DELETE FROM profit_arena_evaluations WHERE run_id = ?", (args.run_id,))
@@ -4057,6 +4668,9 @@ def write_results(args: argparse.Namespace, summary: dict[str, Any], results: li
             for rank, (feature, value) in enumerate(importance.sort_values(ascending=False).items(), 1):
                 feature_rows.append((args.run_id, scope, horizon, str(feature), safe_float(value), int(rank), now, now))
             for item in result["evaluations"]:
+                item_summary = dict(item)
+                item_summary["arena_score_components"] = arena_score_components(item, args)
+                item_summary["gate_diagnostics"] = gate_diagnostics(item, args)
                 eval_rows.append((
                     args.run_id, scope, horizon, int(item["top_n"]), safe_float(item["min_pred_return"]),
                     safe_float(item["min_market_up_ratio"]), safe_float(item["min_market_ret5"]),
@@ -4076,7 +4690,7 @@ def write_results(args: argparse.Namespace, summary: dict[str, Any], results: li
                     safe_float(item["sharpe"]), safe_float(item["capital_compound_return"]), safe_float(item["capital_annual_return"]),
                     safe_float(item["capital_max_drawdown"]), safe_float(item["capital_sharpe"]), safe_float(item["capital_final_equity"]),
                     safe_float(item.get("capital_tranche_fraction")), safe_float(item.get("rank_ic")), int(item.get("rank_ic_days", 0) or 0),
-                    json.dumps(item, ensure_ascii=False), now, now,
+                    json.dumps(item_summary, ensure_ascii=False), now, now,
                 ))
             pred_cols = [
                 "trade_date", "ts_code", "name", "industry", "size_bucket", "close", "pred_return", "model_score",
@@ -4134,6 +4748,13 @@ def write_results(args: argparse.Namespace, summary: dict[str, Any], results: li
                 ),
                 pred_rows,
             )
+        arena_manager.write_result_tables(
+            conn,
+            summary=summary,
+            model_path=model_path,
+            now=now,
+            rules=build_arena_rules(args),
+        )
     progress_log(
         "db_write_done",
         run_id=args.run_id,
@@ -4149,15 +4770,54 @@ def write_latest_predictions(args: argparse.Namespace, source_run_id: str, scope
         "trade_date", "ts_code", "name", "industry", "size_bucket", "close", "pred_return", "model_score",
         "realized_return", "future_return", "future_max_return", "future_drawdown", "crash_prob", "exit_date", "is_latest",
     ]
+    optional_summary_cols = [
+        "is_buy_candidate",
+        "position_weight",
+        "capital_scale",
+        "capacity_status",
+        "capacity_message",
+        "capacity_participation_rate",
+        "capacity_max_notional",
+        "capacity_impact_bps",
+        "portfolio_risk_status",
+        "portfolio_risk_fail_count",
+        "portfolio_risk_warn_count",
+        "portfolio_risk_worst_value",
+        "portfolio_risk_max_single_weight",
+        "portfolio_risk_max_industry_weight",
+        "portfolio_risk_max_size_bucket_weight",
+        "portfolio_risk_max_avg_crash_prob",
+    ]
     rows = []
-    keep = pred[pred_cols].copy().sort_values("model_score", ascending=False)
-    for row in keep.itertuples(index=False):
+    keep_cols = pred_cols + [column for column in optional_summary_cols if column in pred.columns]
+    keep = pred[keep_cols].copy().sort_values("model_score", ascending=False)
+    for _, row in keep.iterrows():
+        capacity_payload = {
+            "is_buy_candidate": int(row.get("is_buy_candidate", 0) or 0),
+            "position_weight": safe_float(row.get("position_weight")),
+            "capital_scale": safe_float(row.get("capital_scale"), 1.0),
+            "capacity_status": str(row.get("capacity_status", "")),
+            "capacity_message": str(row.get("capacity_message", "")),
+            "capacity_participation_rate": safe_float(row.get("capacity_participation_rate")),
+            "capacity_max_notional": safe_float(row.get("capacity_max_notional")),
+            "capacity_impact_bps": safe_float(row.get("capacity_impact_bps")),
+            "portfolio_risk_status": str(row.get("portfolio_risk_status", "")),
+            "portfolio_risk_fail_count": int(row.get("portfolio_risk_fail_count", 0) or 0),
+            "portfolio_risk_warn_count": int(row.get("portfolio_risk_warn_count", 0) or 0),
+            "portfolio_risk_worst_value": safe_float(row.get("portfolio_risk_worst_value")),
+            "portfolio_risk_max_single_weight": safe_float(row.get("portfolio_risk_max_single_weight")),
+            "portfolio_risk_max_industry_weight": safe_float(row.get("portfolio_risk_max_industry_weight")),
+            "portfolio_risk_max_size_bucket_weight": safe_float(row.get("portfolio_risk_max_size_bucket_weight")),
+            "portfolio_risk_max_avg_crash_prob": safe_float(row.get("portfolio_risk_max_avg_crash_prob")),
+            "buy_plan_status": str(row.get("buy_plan_status", "")),
+            "buy_plan_reason": str(row.get("buy_plan_reason", "")),
+        }
         rows.append((
-            source_run_id, scope, int(horizon), str(row.trade_date), str(row.ts_code), str(row.name or ""),
+            source_run_id, scope, int(horizon), str(row.trade_date), str(row.ts_code), str(row.get("name", "") or ""),
             str(row.industry or ""), str(row.size_bucket or ""), safe_float(row.close), safe_float(row.pred_return),
             safe_float(row.model_score), safe_float(row.realized_return), safe_float(row.future_return),
             safe_float(row.future_max_return), safe_float(row.future_drawdown), safe_float(row.crash_prob),
-            str(row.exit_date or ""), int(row.is_latest or 0), "{}", now, now,
+            str(row.exit_date or ""), int(row.is_latest or 0), json.dumps(capacity_payload, ensure_ascii=False), now, now,
         ))
     with write_transaction(args.db_path) as conn:
         conn.execute(
@@ -4265,10 +4925,13 @@ def latest_inference_model(args: argparse.Namespace) -> dict[str, Any]:
     model_path = Path(str(args.latest_inference_model_path or "").strip())
     scope = str(args.latest_inference_scope or (args.scope_values[0] if args.scope_values else "small")).strip() or "small"
     horizon = int(args.latest_inference_horizon or (args.horizon_values[0] if args.horizon_values else 20))
+    buy_top_n = int(args.latest_inference_buy_top_n or 0)
+    if buy_top_n <= 0:
+        buy_top_n = max(args.top_n_values) if args.top_n_values else 1
     if not source_run_id:
         raise ValueError("最新截面推理缺少 source run_id")
     if not model_path.exists():
-        raise FileNotFoundError(f"擂主模型文件不存在: {model_path}")
+        raise FileNotFoundError(f"冠军版本模型文件不存在: {model_path}")
     progress_log(
         "latest_inference_start",
         run_id=args.run_id,
@@ -4278,8 +4941,13 @@ def latest_inference_model(args: argparse.Namespace) -> dict[str, Any]:
         horizon=horizon,
         feature_set=args.feature_set,
     )
+    status_progress(12, 100, "latest_model", "加载当前冠军版本模型", f"source_run_id={source_run_id}")
     saved_model = joblib.load(model_path)
+    status_progress(18, 100, "latest_panel", "读取/生成最新因子截面", f"scope={scope} horizon={horizon}")
     data = load_or_build_panel(args, [horizon])
+    latest_freshness = enforce_factor_snapshot_freshness(args, factor_snapshot_spec(args, [horizon]), data, "最新推理")
+    progress_log("factor_snapshot_freshness_latest_inference_done", run_id=args.run_id, source_run_id=source_run_id, **latest_freshness)
+    status_progress(30, 100, "factor_freshness_gate", "最新因子截面新鲜度门禁", f"status={latest_freshness.get('status')} date={latest_freshness.get('trade_date_max')}")
     sample = data[data["size_bucket"].astype(str).eq(scope)].copy() if scope in {"small", "mid", "large"} else data.copy()
     latest_date = str(sample["trade_date"].max()) if not sample.empty else ""
     latest_pool = sample[sample["trade_date"].astype(str).eq(latest_date)].copy()
@@ -4294,14 +4962,40 @@ def latest_inference_model(args: argparse.Namespace) -> dict[str, Any]:
         crash_model = saved_model.get("crash") if isinstance(saved_model, dict) else None
         breakout_model = saved_model.get("breakout") if isinstance(saved_model, dict) else None
     if model is None:
-        raise RuntimeError("擂主模型文件缺少 main 模型，拒绝生成最新推荐")
+        raise RuntimeError("冠军版本模型文件缺少 main 模型，拒绝生成最新推荐")
     if args.crash_filter == "classifier" and crash_model is None:
-        raise RuntimeError("擂主训练配置要求 crash classifier，但模型文件缺少 crash 模型，拒绝生成最新推荐")
+        raise RuntimeError("冠军版本训练配置要求 crash classifier，但模型文件缺少 crash 模型，拒绝生成最新推荐")
     if args.breakout_filter == "classifier" and breakout_model is None:
-        raise RuntimeError("擂主训练配置要求 breakout classifier，但模型文件缺少 breakout 模型，拒绝生成最新推荐")
+        raise RuntimeError("冠军版本训练配置要求 breakout classifier，但模型文件缺少 breakout 模型，拒绝生成最新推荐")
+    required_features: list[str] = []
+    for candidate in (model, crash_model, breakout_model):
+        if candidate is None:
+            continue
+        if isinstance(candidate, dict):
+            for nested in candidate.values():
+                names = _model_feature_names(nested)
+                if names:
+                    required_features.extend(names)
+        else:
+            names = _model_feature_names(candidate)
+            if names:
+                required_features.extend(names)
+    if not required_features:
+        required_features = list(args.feature_columns)
+    required_features = list(dict.fromkeys(str(item) for item in required_features))
+    inference_consistency_report = build_feature_consistency_report(
+        frame=data,
+        expected_features=required_features,
+        manifest=factor_store_manifest_for_args(args, [horizon]),
+        latest_date=latest_date,
+    )
+    inference_consistency = enforce_feature_consistency(args, inference_consistency_report, "最新推理")
+    inference_consistency_artifact = write_feature_consistency_artifact(out_dir, "feature_consistency_latest_inference", inference_consistency_report)
+    progress_log("feature_consistency_latest_inference_done", run_id=args.run_id, source_run_id=source_run_id, **inference_consistency)
+    status_progress(38, 100, "feature_gate", "最新截面特征一致性门禁", f"status={inference_consistency.get('status')}")
     if isinstance(model, dict):
         if "regressor" not in model or "ranker" not in model:
-            raise RuntimeError("hybrid 擂主模型缺少 regressor/ranker，拒绝生成最新推荐")
+            raise RuntimeError("hybrid 冠军版本模型缺少 regressor/ranker，拒绝生成最新推荐")
         latest_pool["pred_return"] = model["regressor"].predict(
             _aligned_features(latest_pool, model["regressor"], args.feature_columns, "regressor")
         ).astype(float)
@@ -4310,7 +5004,7 @@ def latest_inference_model(args: argparse.Namespace) -> dict[str, Any]:
         ).astype(float)
     else:
         if not hasattr(model, "predict"):
-            raise RuntimeError("擂主模型不支持 predict，拒绝生成最新推荐")
+            raise RuntimeError("冠军版本模型不支持 predict，拒绝生成最新推荐")
         latest_pool["pred_return"] = model.predict(
             _aligned_features(latest_pool, model, args.feature_columns, "main")
         ).astype(float)
@@ -4334,22 +5028,103 @@ def latest_inference_model(args: argparse.Namespace) -> dict[str, Any]:
     latest_pool["model_score"] = latest_pool["rank_score_raw"]
     if args.score_mode == "blended":
         latest_pool["model_score"] = blend_model_score(latest_pool, args)
+    status_progress(58, 100, "predict", "完成最新截面模型打分", f"候选 {len(latest_pool)} 只")
     latest_pool["realized_return"] = 0.0
     latest_pool["future_return"] = latest_pool.get(f"future_return_{horizon}d", 0.0)
     latest_pool["future_max_return"] = latest_pool.get(f"future_max_return_{horizon}d", 0.0)
     latest_pool["future_drawdown"] = latest_pool.get(f"future_drawdown_{horizon}d", 0.0)
     latest_pool["exit_date"] = latest_pool.get(f"exit_date_{horizon}d", "").fillna("").astype(str)
     latest_pool["is_latest"] = 1
-    latest_pool = latest_pool.sort_values("model_score", ascending=False).head(max(args.top_n_values) * 8)
+    latest_display_n = max(max(args.top_n_values) if args.top_n_values else buy_top_n, buy_top_n)
+    latest_pool = latest_pool.sort_values("model_score", ascending=False).head(latest_display_n)
+    latest_selected = latest_pool.sort_values("model_score", ascending=False).head(buy_top_n).copy()
+    latest_selected = apply_position_weighting(latest_selected, args.position_weighting_values[0] if args.position_weighting_values else "equal")
+    latest_selected["capital_scale"] = capital_scale_series(latest_selected, args.capital_scale_mode_values[0] if args.capital_scale_mode_values else "none")
+    latest_capital_fraction = effective_capital_tranche_fraction(
+        args.capital_tranche_fraction_values[0] if args.capital_tranche_fraction_values else 0.0,
+        horizon,
+    )
+    capacity_report = build_capacity_report(
+        latest_selected,
+        top_n=buy_top_n,
+        capital_base=float(args.capacity_capital_base),
+        capital_fraction=latest_capital_fraction,
+        max_participation_rate=float(args.capacity_max_participation_rate),
+        target_participation_rate=float(args.capacity_target_participation_rate),
+        amount_unit=float(args.capacity_amount_unit),
+        impact_bps_coefficient=float(args.capacity_impact_bps_coefficient),
+        weight_column="position_weight",
+        capital_scale_column="capital_scale",
+    )
+    capacity = capacity_summary(capacity_report)
+    capacity_artifact = write_capacity_artifact(out_dir, "capacity_latest_inference", capacity_report)
+    if str(capacity.get("status", "")).lower() == "fail":
+        progress_log("capacity_latest_inference_soft_fail", run_id=args.run_id, source_run_id=source_run_id, reason="latest_predictions_will_be_filtered", **capacity)
+    progress_log("capacity_latest_inference_done", run_id=args.run_id, source_run_id=source_run_id, **capacity)
+    status_progress(72, 100, "capacity_gate", "最新推荐容量门禁", f"status={capacity.get('status')} fail={capacity.get('fail_count', 0)} warn={capacity.get('warn_count', 0)}")
+    latest_pool = attach_capacity_summary(latest_pool, capacity_report)
+    latest_pool = latest_pool.merge(
+        latest_selected[["trade_date", "ts_code", "position_weight", "capital_scale"]],
+        on=["trade_date", "ts_code"],
+        how="left",
+    )
+    latest_pool["is_buy_candidate"] = latest_pool["position_weight"].notna().astype(int)
+    latest_pool["position_weight"] = pd.to_numeric(latest_pool.get("position_weight", 0.0), errors="coerce").fillna(0.0).clip(lower=0.0)
+    latest_pool["capital_scale"] = pd.to_numeric(latest_pool.get("capital_scale", 0.0), errors="coerce").fillna(0.0).clip(lower=0.0, upper=1.0)
+    latest_capacity_selection = latest_capacity_selection_summary(latest_pool, buy_top_n)
+    progress_log("latest_capacity_selection_done", run_id=args.run_id, source_run_id=source_run_id, **latest_capacity_selection)
+    portfolio_risk_report = build_portfolio_risk_report(
+        latest_selected,
+        top_n=buy_top_n,
+        capital_fraction=latest_capital_fraction,
+        max_single_weight=float(args.portfolio_max_single_weight),
+        max_industry_weight=float(args.portfolio_max_industry_weight),
+        max_size_bucket_weight=float(args.portfolio_max_size_bucket_weight),
+        max_avg_crash_prob=float(args.portfolio_max_avg_crash_prob),
+        weight_column="position_weight",
+        capital_scale_column="capital_scale",
+    )
+    portfolio_risk = portfolio_risk_summary(portfolio_risk_report)
+    portfolio_risk_artifact = write_portfolio_risk_artifact(out_dir, "portfolio_risk_latest_inference", portfolio_risk_report)
+    if str(portfolio_risk.get("status", "")).lower() == "fail":
+        progress_log("portfolio_risk_latest_inference_soft_fail", run_id=args.run_id, source_run_id=source_run_id, reason="latest_buy_plan_will_be_blocked", **portfolio_risk)
+    progress_log("portfolio_risk_latest_inference_done", run_id=args.run_id, source_run_id=source_run_id, **portfolio_risk)
+    status_progress(84, 100, "portfolio_risk_gate", "最新推荐组合风险预算", f"status={portfolio_risk.get('status')} fail={portfolio_risk.get('fail_count', 0)} warn={portfolio_risk.get('warn_count', 0)}")
+    latest_pool["portfolio_risk_status"] = str(portfolio_risk.get("status", "missing"))
+    latest_pool["portfolio_risk_fail_count"] = int(portfolio_risk.get("fail_count", 0) or 0)
+    latest_pool["portfolio_risk_warn_count"] = int(portfolio_risk.get("warn_count", 0) or 0)
+    latest_pool["portfolio_risk_worst_value"] = safe_float(portfolio_risk.get("worst_value"))
+    latest_pool["portfolio_risk_max_single_weight"] = safe_float(portfolio_risk.get("max_single_weight"))
+    latest_pool["portfolio_risk_max_industry_weight"] = safe_float(portfolio_risk.get("max_industry_weight"))
+    latest_pool["portfolio_risk_max_size_bucket_weight"] = safe_float(portfolio_risk.get("max_size_bucket_weight"))
+    latest_pool["portfolio_risk_max_avg_crash_prob"] = safe_float(portfolio_risk.get("max_avg_crash_prob"))
+    latest_buy_plan = latest_buy_plan_status(latest_capacity_selection, portfolio_risk)
+    latest_pool["buy_plan_status"] = str(latest_buy_plan.get("status", "missing"))
+    latest_pool["buy_plan_reason"] = str(latest_buy_plan.get("reason", ""))
+    progress_log("latest_buy_plan_status_done", run_id=args.run_id, source_run_id=source_run_id, **latest_buy_plan)
+    status_progress(92, 100, "persist", "写入最新推荐结果", f"latest_date={latest_date} buy_plan={latest_buy_plan.get('status')}")
     write_latest_predictions(args, source_run_id, scope, horizon, latest_pool)
     summary = {
         "run_id": args.run_id,
         "source_run_id": source_run_id,
         "model_path": str(model_path),
+        "factor_store": factor_store_summary(args, [horizon]),
         "scope": scope,
         "horizon": horizon,
         "latest_date": latest_date,
         "latest_count": int(len(latest_pool)),
+        "buy_top_n": int(buy_top_n),
+        "display_top_n": int(latest_display_n),
+        "position_weighting": args.position_weighting_values[0] if args.position_weighting_values else "equal",
+        "capital_scale_mode": args.capital_scale_mode_values[0] if args.capital_scale_mode_values else "none",
+        "capital_tranche_fraction": args.capital_tranche_fraction_values[0] if args.capital_tranche_fraction_values else 0.0,
+        "effective_capital_tranche_fraction": latest_capital_fraction,
+        "capacity_selection": latest_capacity_selection,
+        "buy_plan": latest_buy_plan,
+        "feature_consistency": {"latest_inference": inference_consistency_artifact},
+        "factor_snapshot_freshness": latest_freshness,
+        "capacity": {"latest_inference": capacity_artifact},
+        "portfolio_risk": {"latest_inference": portfolio_risk_artifact},
         "top": latest_pool[["ts_code", "name", "model_score", "pred_return", "crash_prob"]].head(20).to_dict("records"),
     }
     summary_path = out_dir / "summary.json"
@@ -4409,8 +5184,18 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
         champion_path=str(arena_champion_path(args)),
         progress_path=str(PROGRESS_FILE),
     )
-    for scope in args.scope_values:
-        for horizon in args.horizon_values:
+    training_jobs = [(scope, horizon) for scope in args.scope_values for horizon in args.horizon_values]
+    total_training_jobs = max(len(training_jobs), 1)
+    for job_no, (scope, horizon) in enumerate(training_jobs, 1):
+            train_progress_start = 35 + int((job_no - 1) * 45 / total_training_jobs)
+            train_progress_done = 35 + int(job_no * 45 / total_training_jobs)
+            status_progress(
+                train_progress_start,
+                100,
+                "walk_forward",
+                f"训练 {scope} {horizon}日策略候选",
+                f"{job_no}/{total_training_jobs} feature_set={args.feature_set}",
+            )
             result = train_scope_horizon(args, data, scope, horizon)
             best_eval = result.get("best_eval", {}) if isinstance(result.get("best_eval"), dict) else {}
             progress_log(
@@ -4430,6 +5215,13 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
                 best_rank_ic_days=best_eval.get("rank_ic_days"),
                 reason=result.get("reason"),
             )
+            status_progress(
+                train_progress_done,
+                100,
+                "walk_forward",
+                f"完成 {scope} {horizon}日评估",
+                f"status={result.get('status')} rows={result.get('rows')} gate_pass={result.get('gate_pass_count', 0)}",
+            )
             results.append(result)
             if result.get("status") != "success":
                 continue
@@ -4446,6 +5238,16 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
                 progress_log("model_write_done", run_id=args.run_id, path=str(current_model_path))
             else:
                 current_model_path = None
+            if not result.get("best_eval"):
+                progress_log(
+                    "scope_horizon_no_capacity_qualified_candidate",
+                    run_id=args.run_id,
+                    scope=scope,
+                    horizon=horizon,
+                    gate_pass_count=result.get("gate_pass_count", 0),
+                    evaluations=len(result.get("evaluations", []) or []),
+                )
+                continue
             current_best = {**result["best_eval"], "scope": scope, "horizon": int(horizon)}
             rank_key = arena_score(current_best, args)
             if best_rank_key is None or rank_key > best_rank_key:
@@ -4454,6 +5256,7 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
                 best_model_path = str(current_model_path) if current_model_path is not None else ""
 
     if str(getattr(args, "fusion_mode", "none") or "none").lower() == "horizon_blend":
+        status_progress(82, 100, "fusion", "融合多周期候选", f"scopes={','.join(args.scope_values)}")
         for scope in args.scope_values:
             fusion_result = build_horizon_fusion_result(args, results, scope, int(getattr(args, "fusion_eval_horizon", 20)))
             best_eval = fusion_result.get("best_eval", {}) if isinstance(fusion_result.get("best_eval"), dict) else {}
@@ -4476,6 +5279,16 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
             results.append(fusion_result)
             if fusion_result.get("status") != "success":
                 continue
+            if not fusion_result.get("best_eval"):
+                progress_log(
+                    "fusion_no_capacity_qualified_candidate",
+                    run_id=args.run_id,
+                    scope=scope,
+                    horizon=fusion_result.get("horizon"),
+                    gate_pass_count=fusion_result.get("gate_pass_count", 0),
+                    evaluations=len(fusion_result.get("evaluations", []) or []),
+                )
+                continue
             current_best = {**fusion_result["best_eval"], "scope": scope, "horizon": int(getattr(args, "fusion_eval_horizon", 20))}
             rank_key = arena_score(current_best, args)
             if best_rank_key is None or rank_key > best_rank_key:
@@ -4485,11 +5298,15 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
 
     successes = [item for item in results if item.get("status") == "success"]
     if not successes or best_payload is None:
-        raise RuntimeError("收益擂台没有产生可评估模型")
+        raise RuntimeError("通用策略没有产生可评估模型")
 
     all_evaluations = collect_evaluations(results)
+    status_progress(84, 100, "leaderboard", "汇总候选榜单", f"evaluations={len(all_evaluations)}")
     leaderboards = build_leaderboards(all_evaluations, args)
+    gate_summary = gate_failure_summary(all_evaluations, args)
     validation_report = None
+    capacity_artifact: dict[str, Any] = {}
+    portfolio_risk_artifact: dict[str, Any] = {}
     for item in results:
         if (
             item.get("status") == "success"
@@ -4498,10 +5315,51 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
             and isinstance(item.get("predictions"), pd.DataFrame)
         ):
             validation_report = champion_validation_report(args, item["predictions"], best_payload)
+            selected_for_capacity = selected_trades_for_candidate(item["predictions"], best_payload)
+            status_progress(86, 100, "champion_validation", "校验最佳挑战者", f"{best_payload.get('scope')} {best_payload.get('horizon')}日 Top{best_payload.get('top_n')}")
+            capacity_report = build_capacity_report(
+                selected_for_capacity,
+                top_n=int(best_payload.get("top_n", 1) or 1),
+                capital_base=float(args.capacity_capital_base),
+                capital_fraction=effective_capital_tranche_fraction(
+                    safe_float(best_payload.get("capital_tranche_fraction"), 0.0),
+                    int(best_payload.get("horizon", 20) or 20),
+                ),
+                max_participation_rate=float(args.capacity_max_participation_rate),
+                target_participation_rate=float(args.capacity_target_participation_rate),
+                amount_unit=float(args.capacity_amount_unit),
+                impact_bps_coefficient=float(args.capacity_impact_bps_coefficient),
+                weight_column="position_weight",
+                capital_scale_column="capital_scale",
+            )
+            capacity = enforce_capacity_gate(args, capacity_report, "冠军版本候选")
+            capacity_artifact = write_capacity_artifact(out_dir, "capacity_best_challenger", capacity_report)
+            progress_log("capacity_best_challenger_done", run_id=args.run_id, **capacity)
+            status_progress(88, 100, "capacity_gate", "冠军版本候选容量门禁", f"status={capacity.get('status')} fail={capacity.get('fail_count', 0)} warn={capacity.get('warn_count', 0)}")
+            portfolio_risk_report = build_portfolio_risk_report(
+                selected_for_capacity,
+                top_n=int(best_payload.get("top_n", 1) or 1),
+                capital_fraction=effective_capital_tranche_fraction(
+                    safe_float(best_payload.get("capital_tranche_fraction"), 0.0),
+                    int(best_payload.get("horizon", 20) or 20),
+                ),
+                max_single_weight=float(args.portfolio_max_single_weight),
+                max_industry_weight=float(args.portfolio_max_industry_weight),
+                max_size_bucket_weight=float(args.portfolio_max_size_bucket_weight),
+                max_avg_crash_prob=float(args.portfolio_max_avg_crash_prob),
+                weight_column="position_weight",
+                capital_scale_column="capital_scale",
+            )
+            portfolio_risk = enforce_portfolio_risk_gate(args, portfolio_risk_report, "冠军版本候选")
+            portfolio_risk_artifact = write_portfolio_risk_artifact(out_dir, "portfolio_risk_best_challenger", portfolio_risk_report)
+            progress_log("portfolio_risk_best_challenger_done", run_id=args.run_id, **portfolio_risk)
+            status_progress(90, 100, "portfolio_risk_gate", "冠军版本候选组合风险预算", f"status={portfolio_risk.get('status')} fail={portfolio_risk.get('fail_count', 0)} warn={portfolio_risk.get('warn_count', 0)}")
             break
+    status_progress(92, 100, "arena_challenge", "挑战现任冠军版本", f"best_score={best_rank_key}")
     challenge_result = update_arena_champion(args, best_payload, summary_path, validation_report)
     summary = {
         "run_id": args.run_id,
+        "arena_strategy": arena_strategy_payload(args),
         "arena_name": args.arena_name,
         "objective": "maximize_risk_adjusted_arena_score",
         "model_kind": args.model_kind,
@@ -4520,6 +5378,31 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
         "end": args.end,
         "features": args.feature_columns,
         "feature_set": args.feature_set,
+        "factor_store": factor_store_summary(args, args.horizon_values),
+        "feature_consistency": {
+            "train": getattr(args, "feature_consistency_train_artifact", {}),
+        },
+        "capacity": {
+            "best_challenger": capacity_artifact,
+            "config": {
+                "capital_base": args.capacity_capital_base,
+                "target_participation_rate": args.capacity_target_participation_rate,
+                "max_participation_rate": args.capacity_max_participation_rate,
+                "amount_unit": args.capacity_amount_unit,
+                "impact_bps_coefficient": args.capacity_impact_bps_coefficient,
+                "enforce_capacity_gate": args.enforce_capacity_gate,
+            },
+        },
+        "portfolio_risk": {
+            "best_challenger": portfolio_risk_artifact,
+            "config": {
+                "max_single_weight": args.portfolio_max_single_weight,
+                "max_industry_weight": args.portfolio_max_industry_weight,
+                "max_size_bucket_weight": args.portfolio_max_size_bucket_weight,
+                "max_avg_crash_prob": args.portfolio_max_avg_crash_prob,
+                "enforce_portfolio_risk_gate": args.enforce_portfolio_risk_gate,
+            },
+        },
         "all_panel_features": FEATURES,
         "cost": {
             "buy_slippage": args.buy_slippage,
@@ -4568,6 +5451,7 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
         "best": best_payload,
         "best_challenger_score": best_rank_key,
         "best_challenger_score_components": arena_score_components(best_payload, args),
+        "gate_summary": gate_summary,
         "leaderboards": leaderboards,
         "champion_validation": validation_report,
         "arena_champion": challenge_result.get("champion"),
@@ -4580,6 +5464,9 @@ def train_model(args: argparse.Namespace, data: pd.DataFrame) -> dict[str, Any]:
         strict_count=len(leaderboards.get("strict_champion_candidates", []) or []),
         risk_qualified_missing_return_count=len(leaderboards.get("risk_qualified_missing_return", []) or []),
         attack_watchlist_by_annual_count=len(leaderboards.get("attack_watchlist_by_annual", []) or []),
+        hard_gate_pass_count=gate_summary.get("hard_gate_pass_count"),
+        hard_gate_fail_count=gate_summary.get("hard_gate_fail_count"),
+        top_gate_failures=gate_summary.get("top_failures", [])[:3],
         strict_best=(leaderboards.get("strict_champion_candidates") or [{}])[0].get("candidate"),
         attack_best_by_annual=(leaderboards.get("attack_watchlist_by_annual") or [{}])[0].get("candidate"),
         attack_best_by_return_drawdown_ratio=(leaderboards.get("attack_watchlist_by_return_drawdown_ratio") or [{}])[0].get("candidate"),
@@ -4632,10 +5519,12 @@ def eval_only_model(args: argparse.Namespace) -> dict[str, Any]:
     best_rank_key = arena_score(best_payload, args)
     all_evaluations = collect_evaluations([result])
     leaderboards = build_leaderboards(all_evaluations, args)
+    gate_summary = gate_failure_summary(all_evaluations, args)
     validation_report = champion_validation_report(args, pred, best_payload)
     challenge_result = update_arena_champion(args, best_payload, summary_path, validation_report)
     summary = {
         "run_id": args.run_id,
+        "arena_strategy": arena_strategy_payload(args),
         "arena_name": args.arena_name,
         "objective": "maximize_risk_adjusted_arena_score_eval_only",
         "model_kind": args.model_kind,
@@ -4704,6 +5593,7 @@ def eval_only_model(args: argparse.Namespace) -> dict[str, Any]:
         "best": best_payload,
         "best_challenger_score": best_rank_key,
         "best_challenger_score_components": arena_score_components(best_payload, args),
+        "gate_summary": gate_summary,
         "leaderboards": leaderboards,
         "champion_validation": validation_report,
         "arena_champion": challenge_result.get("champion"),
@@ -4716,6 +5606,9 @@ def eval_only_model(args: argparse.Namespace) -> dict[str, Any]:
         strict_count=len(leaderboards.get("strict_champion_candidates", []) or []),
         risk_qualified_missing_return_count=len(leaderboards.get("risk_qualified_missing_return", []) or []),
         attack_watchlist_by_annual_count=len(leaderboards.get("attack_watchlist_by_annual", []) or []),
+        hard_gate_pass_count=gate_summary.get("hard_gate_pass_count"),
+        hard_gate_fail_count=gate_summary.get("hard_gate_fail_count"),
+        top_gate_failures=gate_summary.get("top_failures", [])[:3],
         strict_best=(leaderboards.get("strict_champion_candidates") or [{}])[0].get("candidate"),
         attack_best_by_annual=(leaderboards.get("attack_watchlist_by_annual") or [{}])[0].get("candidate"),
         attack_best_by_return_drawdown_ratio=(leaderboards.get("attack_watchlist_by_return_drawdown_ratio") or [{}])[0].get("candidate"),
@@ -4730,7 +5623,7 @@ def eval_only_model(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", default=f"profit_arena_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    parser.add_argument("--arena-name", default="profit_nolev_rankic_sharpe_dd15_ann50")
+    parser.add_argument("--arena-name", default=ARENA_STRATEGY.default_arena_name)
     parser.add_argument("--champion-min-improvement", type=float, default=0.0)
     parser.add_argument("--data-path", required=True)
     parser.add_argument("--db-path", default=None)
@@ -4764,7 +5657,7 @@ def main() -> int:
     parser.add_argument("--min-daily-top-pred-return", default="-999")
     parser.add_argument("--max-daily-top-crash-prob", default="999")
     parser.add_argument("--scopes", default="all,small,mid,large")
-    parser.add_argument("--feature-set", choices=["legacy53", "core", "ecology", "all", "v6all", "pre_v7", "champion_v100"], default="all")
+    parser.add_argument("--feature-set", choices=["legacy53", "core", "ecology", "all", "v6all", "pre_v7", "champion_v100", "champion_v116", "base_v1", "stock_factor_base_v1", "stock_h20_general_final_v1", "hot_t_daily_v1", "hot_t_v1"], default="stock_factor_base_v1")
     parser.add_argument("--model-kind", choices=["regressor", "ranker", "hybrid"], default="regressor")
     parser.add_argument("--crash-filter", choices=["none", "classifier"], default="none")
     parser.add_argument("--crash-return-threshold", type=float, default=-0.08)
@@ -4811,6 +5704,19 @@ def main() -> int:
     parser.add_argument("--capital-tranche-fraction", type=float, default=0.0)
     parser.add_argument("--capital-tranche-fractions", default=None)
     parser.add_argument("--max-gross-exposure", type=float, default=1.0)
+    parser.add_argument("--capacity-capital-base", type=float, default=20000.0)
+    parser.add_argument("--capacity-target-participation-rate", type=float, default=0.02)
+    parser.add_argument("--capacity-max-participation-rate", type=float, default=0.05)
+    parser.add_argument("--capacity-amount-unit", type=float, default=1000.0)
+    parser.add_argument("--capacity-impact-bps-coefficient", type=float, default=50.0)
+    parser.add_argument("--enforce-capacity-gate", action="store_true")
+    parser.add_argument("--allow-capacity-fail", action="store_true")
+    parser.add_argument("--portfolio-max-single-weight", type=float, default=0.10)
+    parser.add_argument("--portfolio-max-industry-weight", type=float, default=0.30)
+    parser.add_argument("--portfolio-max-size-bucket-weight", type=float, default=0.60)
+    parser.add_argument("--portfolio-max-avg-crash-prob", type=float, default=0.15)
+    parser.add_argument("--enforce-portfolio-risk-gate", action="store_true")
+    parser.add_argument("--allow-portfolio-risk-fail", action="store_true")
     parser.add_argument("--fusion-mode", choices=["none", "horizon_blend"], default="none")
     parser.add_argument("--fusion-horizons", default="5,10,20")
     parser.add_argument("--fusion-eval-horizon", type=int, default=20)
@@ -4826,6 +5732,15 @@ def main() -> int:
     parser.add_argument("--latest-inference-model-path", default="")
     parser.add_argument("--latest-inference-scope", default="")
     parser.add_argument("--latest-inference-horizon", type=int, default=0)
+    parser.add_argument("--latest-inference-buy-top-n", type=int, default=0)
+    parser.add_argument("--factor-store-id", default="stock_factor_base_v1")
+    parser.add_argument("--factor-store-mode", choices=["auto", "off", "require", "write"], default="auto")
+    parser.add_argument("--factor-store-feature-set", default="stock_factor_base_v1")
+    parser.add_argument("--factor-preprocess", choices=["none", "winsorize", "zscore", "winsorize_zscore", "rank_normalize", "size_neutral", "institutional"], default="institutional")
+    parser.add_argument("--allow-factor-quality-fail", action="store_true")
+    parser.add_argument("--allow-feature-consistency-fail", action="store_true")
+    parser.add_argument("--require-fresh-factor-snapshot", action="store_true")
+    parser.add_argument("--allow-factor-snapshot-stale", action="store_true")
     parser.add_argument("--no-panel-cache", action="store_true")
     parser.add_argument("--skip-prediction-files", action="store_true")
     parser.add_argument("--threads", type=int, default=4)
@@ -4835,21 +5750,52 @@ def main() -> int:
     if args.capital_tranche_fractions is None:
         args.capital_tranche_fractions = str(args.capital_tranche_fraction)
     args.progress_every_evals = max(int(args.progress_every_evals), 1)
+    set_status_context(args)
 
     try:
-        run_status.begin(TASK_NAME)
-        progress_log("run_start", run_id=args.run_id, start=args.start, end=args.end, horizons=args.horizons, scopes=args.scopes, model_kind=args.model_kind)
-        run_status.progress(TASK_NAME, 1, 5, "schema", "创建收益最大化擂台独立表")
+        run_status.begin(TASK_NAME, metadata=arena_strategy_payload(args))
+        progress_log(
+            "run_start",
+            run_id=args.run_id,
+            arena_strategy=arena_strategy_payload(args),
+            start=args.start,
+            end=args.end,
+            horizons=args.horizons,
+            scopes=args.scopes,
+            model_kind=args.model_kind,
+        )
+        status_progress(2, 100, "schema", "创建通用策略独立表", f"run_id={args.run_id}")
         progress_log("schema_start", run_id=args.run_id, db_path=args.db_path)
         ensure_tables(args.db_path)
         if str(args.latest_inference_source_run_id or "").strip():
-            run_status.progress(TASK_NAME, 2, 5, "latest_panel", "生成最新截面特征")
+            status_progress(8, 100, "latest_panel", "生成最新截面特征", "加载冠军版本并对齐因子截面")
             summary = latest_inference_model(args)
-            run_status.progress(TASK_NAME, 5, 5, "done", "写入收益擂台最新推荐")
+            buy_plan = summary.get("buy_plan") if isinstance(summary.get("buy_plan"), dict) else {}
+            capacity_selection = summary.get("capacity_selection") if isinstance(summary.get("capacity_selection"), dict) else {}
+            portfolio_risk = summary.get("portfolio_risk") if isinstance(summary.get("portfolio_risk"), dict) else {}
+            latest_portfolio_risk = portfolio_risk.get("latest_inference") if isinstance(portfolio_risk.get("latest_inference"), dict) else {}
+            portfolio_risk_summary_payload = latest_portfolio_risk.get("summary") if isinstance(latest_portfolio_risk.get("summary"), dict) else {}
+            status_progress(
+                100,
+                100,
+                "done",
+                "写入通用策略最新推荐",
+                (
+                    f"{summary.get('latest_date')} 推荐 {summary.get('latest_count')} 只 "
+                    f"buy_plan={buy_plan.get('status', 'missing')} "
+                    f"capacity_pass={capacity_selection.get('capacity_pass_count', 0)} "
+                    f"capacity_warn={capacity_selection.get('capacity_warn_count', 0)} "
+                    f"capacity_fail={capacity_selection.get('capacity_fail_count', 0)} "
+                    f"portfolio_status={portfolio_risk_summary_payload.get('status', 'missing')} "
+                    f"portfolio_fail={portfolio_risk_summary_payload.get('fail_count', 0)} "
+                    f"portfolio_warn={portfolio_risk_summary_payload.get('warn_count', 0)}"
+                ),
+            )
             run_status.done(
                 TASK_NAME,
-                f"收益擂台最新截面推理完成: {summary.get('scope')} {summary.get('horizon')}日 "
+                f"通用策略最新截面推理完成: {summary.get('scope')} {summary.get('horizon')}日 "
                 f"{summary.get('latest_date')} 推荐 {summary.get('latest_count')} 只",
+                metadata=arena_strategy_payload(args),
             )
             print(json.dumps({
                 "run_id": args.run_id,
@@ -4859,19 +5805,32 @@ def main() -> int:
             }, ensure_ascii=False), flush=True)
             return 0
         if str(args.eval_only_predictions or "").strip():
-            run_status.progress(TASK_NAME, 2, 5, "eval_load", "读取已保存预测并快速重评估")
+            status_progress(10, 100, "eval_load", "读取已保存预测并快速重评估", str(args.eval_only_predictions))
             summary = eval_only_model(args)
-            run_status.progress(TASK_NAME, 5, 5, "done", "写入收益擂台重评估结果")
+            gate_summary = summary.get("gate_summary") if isinstance(summary.get("gate_summary"), dict) else {}
+            status_progress(
+                100,
+                100,
+                "done",
+                "写入通用策略重评估结果",
+                (
+                    f"best={summary.get('best')} "
+                    f"gate_pass={gate_summary.get('hard_gate_pass_count', 0)} "
+                    f"gate_fail={gate_summary.get('hard_gate_fail_count', 0)}"
+                ),
+            )
             best = summary["best"]
             run_status.done(
                 TASK_NAME,
-                f"收益擂台重评估完成: {best['scope']} {best['horizon']}日 Top{best['top_n']} "
+                f"通用策略重评估完成: {best['scope']} {best['horizon']}日 Top{best['top_n']} "
                 f"信号复利 {best['compound_return']:.2%} 资金年化 {best.get('capital_annual_return', 0):.2%} "
                 f"资金回撤 {best.get('capital_max_drawdown', 0):.2%}",
+                metadata=arena_strategy_payload(args),
             )
             progress_log(
                 "run_done",
                 run_id=args.run_id,
+                arena_strategy=arena_strategy_payload(args),
                 arena_name=args.arena_name,
                 best_scope=best.get("scope"),
                 best_horizon=best.get("horizon"),
@@ -4906,27 +5865,50 @@ def main() -> int:
                     "challenge_updated": (summary.get("challenge_result") or {}).get("updated"),
                 }, ensure_ascii=False), flush=True)
             return 0
-        run_status.progress(TASK_NAME, 2, 5, "load", "读取主板可交易日线与市值数据")
+        status_progress(8, 100, "load", "读取主板可交易日线与市值数据", f"{args.start}-{args.end}")
         horizons = parse_int_list(args.horizons)
-        run_status.progress(TASK_NAME, 3, 5, "features", "生成独立技术、流动性、市值和行业状态特征")
+        status_progress(16, 100, "features", "生成独立技术、流动性、市值和行业状态特征", f"horizons={horizons}")
         progress_log("panel_load_start", run_id=args.run_id, horizons=horizons)
         data = load_or_build_panel(args, horizons)
         progress_log("panel_load_done", run_id=args.run_id, rows=len(data), columns=len(data.columns))
+        status_progress(28, 100, "feature_gate", "训练面板特征一致性门禁", f"rows={len(data)} columns={len(data.columns)}")
         if len(data) < int(args.min_train_rows):
-            raise RuntimeError(f"收益擂台样本不足: {len(data)}")
-        run_status.progress(TASK_NAME, 4, 5, "train", "按收益最大化 walk-forward 训练并分层评估")
+            raise RuntimeError(f"通用策略样本不足: {len(data)}")
+        train_consistency_report = build_feature_consistency_report(
+            frame=data,
+            expected_features=feature_columns_for_set(getattr(args, "feature_set", "all")),
+            manifest=factor_store_manifest_for_args(args, horizons),
+        )
+        train_consistency_artifact = write_feature_consistency_artifact(Path(args.data_path) / "profit_arena" / args.run_id, "feature_consistency_train", train_consistency_report)
+        args.feature_consistency_train_artifact = train_consistency_artifact
+        train_consistency = enforce_feature_consistency(args, train_consistency_report, "训练面板")
+        progress_log("feature_consistency_train_done", run_id=args.run_id, **train_consistency)
+        status_progress(32, 100, "train", "按收益最大化 walk-forward 训练并分层评估", f"status={train_consistency.get('status')}")
         summary = train_model(args, data)
-        run_status.progress(TASK_NAME, 5, 5, "done", "写入收益擂台结果")
+        gate_summary = summary.get("gate_summary") if isinstance(summary.get("gate_summary"), dict) else {}
+        status_progress(
+            100,
+            100,
+            "done",
+            "写入通用策略结果",
+            (
+                f"summary={Path(args.data_path) / 'profit_arena' / args.run_id / 'summary.json'} "
+                f"gate_pass={gate_summary.get('hard_gate_pass_count', 0)} "
+                f"gate_fail={gate_summary.get('hard_gate_fail_count', 0)}"
+            ),
+        )
         best = summary["best"]
         run_status.done(
             TASK_NAME,
-            f"收益擂台完成: {best['scope']} {best['horizon']}日 Top{best['top_n']} "
+            f"通用策略完成: {best['scope']} {best['horizon']}日 Top{best['top_n']} "
             f"信号复利 {best['compound_return']:.2%} 资金年化 {best.get('capital_annual_return', 0):.2%} "
             f"资金回撤 {best.get('capital_max_drawdown', 0):.2%}",
+            metadata=arena_strategy_payload(args),
         )
         progress_log(
             "run_done",
             run_id=args.run_id,
+            arena_strategy=arena_strategy_payload(args),
             arena_name=args.arena_name,
             best_scope=best.get("scope"),
             best_horizon=best.get("horizon"),
@@ -4962,8 +5944,8 @@ def main() -> int:
             }, ensure_ascii=False), flush=True)
         return 0
     except Exception as exc:
-        run_status.error(TASK_NAME, str(exc))
-        progress_log("run_error", run_id=args.run_id, error=str(exc))
+        run_status.error(TASK_NAME, str(exc), metadata=arena_strategy_payload(args))
+        progress_log("run_error", run_id=args.run_id, arena_strategy=arena_strategy_payload(args), error=str(exc))
         raise
 
 

@@ -1,8 +1,9 @@
-"""Parallel budget grid evaluator for ml_factor_ranker.
+"""Parallel budget grid evaluator for the legacy factor-factory model.
 
 This script does not train a new model. It searches portfolio construction
 parameters around the active factor model and records each trial in
-eval_strategy_admission for normal admission comparison.
+eval_strategy_admission for historical admission comparison. Desktop production
+training now goes through the Profit Arena framework.
 """
 from __future__ import annotations
 
@@ -50,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--allow-legacy-factor-model", action="store_true", help="显式允许运行历史 ml_factor_ranker 预算网格")
     return parser.parse_args()
 
 
@@ -99,11 +101,12 @@ def run_trial(base_cfg: dict[str, Any], args_dict: dict[str, Any], trial: dict[s
         "--strategies",
         "ml_factor_ranker",
         "--baseline",
-        "small_cap_quality",
+        "ml_factor_ranker",
         "--save",
         str(trial["eval_run_id"]),
         "--strategy-version-mode",
         "active",
+        "--allow-archived-strategy-eval",
         "--json",
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT.parent), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -139,6 +142,12 @@ def sort_key(row: dict[str, Any]) -> tuple[float, float, float]:
 
 def main() -> int:
     args = parse_args()
+    if not args.allow_legacy_factor_model:
+        print(json.dumps({
+            "success": False,
+            "error": "历史因子研究预算网格默认禁止运行；如需回看旧实验，请显式传 --allow-legacy-factor-model",
+        }, ensure_ascii=False))
+        return 2
     base_cfg = load_strategy_settings().get("ml_factor_ranker") or {}
     trials = build_trials(args)
     args_dict = {"start": args.start, "end": args.end}

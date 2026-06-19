@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, Play, RefreshCw, ShieldCheck } from 'lucide-react'
-import { createTask, getFactorModelRun, listCrashWarningFeatures, listCrashWarningRuns, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorObservationEvents, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, runFactorLatestInference, startTask, type CrashWarningFeature, type CrashWarningRunSummary, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorObservationEvent, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
+import { BarChart3, BrainCircuit, CheckCircle2, DatabaseZap, FlaskConical, Layers3, Play, ShieldCheck } from 'lucide-react'
+import { createTask, getFactorModelRun, listFactorAdmissionComparisons, listFactorCorrelationResults, listFactorICResults, listFactorLatestPredictions, listFactorModelFeatures, listFactorModelPredictions, listFactorObservationEvents, listFactorResearchRuns, listFactorStateICResults, listFactorStressResults, listTasks, startTask, type FactorAdmissionComparison, type FactorCorrelationResult, type FactorICResult, type FactorLatestPrediction, type FactorModelFeature, type FactorModelPrediction, type FactorModelRun, type FactorObservationEvent, type FactorResearchRunSummary, type FactorStateICResult, type FactorStressResult, type TaskDTO } from '../services/app'
 
 type FactorFamily = {
   name: string
@@ -29,9 +29,9 @@ type GeneralStrategyPlan = {
 }
 
 const researchTabs: Array<{ key: ResearchTab; label: string }> = [
-  { key: 'recommend', label: '股票推荐' },
-  { key: 'model', label: '模型训练' },
-  { key: 'evaluation', label: '模型评估' }
+  { key: 'recommend', label: '截面观察' },
+  { key: 'model', label: '研究留档' },
+  { key: 'evaluation', label: '研究评估' }
 ]
 
 const factorFamilies: FactorFamily[] = [
@@ -43,7 +43,7 @@ const factorFamilies: FactorFamily[] = [
   { name: '风险', count: 9, examples: '20/60日波动、下行波动、回撤、跳空、短期尾部风险', role: '降低裸策略回撤', status: 'ready' },
   { name: '流动性/拥挤', count: 8, examples: '成交额、换手率、量比、成交额变化、Amihud', role: '控制容量、滑点和拥挤度', status: 'ready' },
   { name: '市值/结构', count: 6, examples: '总市值、流通市值、自由流通股本、上市天数', role: '处理规模暴露和新股风险', status: 'ready' },
-  { name: '事件/预期', count: 11, examples: '业绩预告、预告利润、龙虎榜、机构净买、高管增减持', role: '作为低容量卫星信号，辅助模型识别催化', status: 'ready' }
+  { name: '事件/预期', count: 11, examples: '业绩预告、预告利润、龙虎榜、机构净买、高管增减持', role: '作为低容量卫星特征，辅助模型识别催化', status: 'ready' }
 ]
 
 const pipelineBase: Array<Omit<PipelineStep, 'status'>> = [
@@ -51,10 +51,9 @@ const pipelineBase: Array<Omit<PipelineStep, 'status'>> = [
   { key: 'evaluate_factors', title: '因子检验', owner: 'Python 研究引擎', output: 'factor_ic_results', detail: '计算 IC、Rank IC、ICIR、分层收益、多空收益和市场状态下的因子强弱。' },
   { key: 'factor_correlation_report', title: '相关性去冗余', owner: 'Python 研究引擎', output: 'factor_correlation_report', detail: '按 Spearman 相关性识别重复特征，给训练特征写入保留和剔除依据。' },
   { key: 'train_lgbm', title: '训练 LightGBM', owner: 'Python 模型引擎', output: 'factor_model_runs', detail: '用 walk-forward 预测未来 20 日行业相对收益，落库 OOS 预测和特征重要度。' },
-  { key: 'latest_inference', title: '最新截面推理', owner: 'Python 模型引擎', output: 'factor_latest_predictions', detail: '使用最新生效模型对当前截面打分，输出 Top20% 候选池。' },
+  { key: 'latest_inference', title: '研究截面观察', owner: 'Python 模型引擎', output: 'factor_latest_predictions', detail: '使用最新生效模型对当前截面打分，输出 Top20% 候选池。' },
   { key: 'stress_report', title: '压力分段报告', owner: 'Python 评估引擎', output: 'factor_model_stress_results', detail: '按股灾、弱势、流动性挤压、年度等分段检查模型失效区间。' },
-  { key: 'strategy_admission', title: '策略准入评估', owner: 'Go 编排 + 准入评估', output: 'eval_strategy_admission', detail: '把 ml_factor_ranker 接入准入表，统一输出可启用、观察或拒绝的依据。' },
-  { key: 'validate_research_run', title: '产物完整性检查', owner: 'Python 研究引擎', output: 'factor_research_stage_results', detail: '检查面板、IC、模型、推理、压力报告和准入结果是否齐全。' }
+  { key: 'validate_research_run', title: '产物完整性检查', owner: 'Python 研究引擎', output: 'factor_research_stage_results', detail: '检查面板、IC、模型、推理和压力报告是否齐全；因子研究只产研究资产，不直接启用交易策略。' }
 ]
 
 const validationRows = [
@@ -84,7 +83,7 @@ function statusClass(status: FactorFamily['status'] | PipelineStep['status']) {
 function statusText(status: FactorFamily['status']) {
   if (status === 'ready') return '已有雏形'
   if (status === 'design') return '待实现'
-  return '后续扩展'
+  return '待纳入研究字典'
 }
 
 export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCode: string) => void }) {
@@ -104,14 +103,11 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
   const [correlations, setCorrelations] = useState<FactorCorrelationResult[]>([])
   const [stressRows, setStressRows] = useState<FactorStressResult[]>([])
   const [admissionRows, setAdmissionRows] = useState<FactorAdmissionComparison[]>([])
-  const [warningRuns, setWarningRuns] = useState<CrashWarningRunSummary[]>([])
-  const [warningFeatures, setWarningFeatures] = useState<CrashWarningFeature[]>([])
   const modelSummary = useMemo(() => parseModelSummary(model?.summary_json), [model])
   const stressEvents = useMemo(() => stressRows.filter((row) => row.bucket_type === 'full' || row.bucket_type === 'event'), [stressRows])
   const stressYears = useMemo(() => stressRows.filter((row) => row.bucket_type === 'year'), [stressRows])
   const stressStates = useMemo(() => stressRows.filter((row) => row.bucket_type === 'market_state'), [stressRows])
   const latestAdmission = admissionRows[0]
-  const latestWarningRun = warningRuns[0]
   const weakestStressRows = useMemo(() => [...stressRows]
     .filter((row) => row.bucket_type !== 'full')
     .sort((a, b) => a.annual_return - b.annual_return)
@@ -139,6 +135,8 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
   const totalFactors = factorFamilies.reduce((sum, item) => sum + item.count, 0)
   const readyFactors = factorFamilies.filter((item) => item.status === 'ready').reduce((sum, item) => sum + item.count, 0)
   const latestPredictionDate = latestPredictions[0]?.trade_date || ''
+  const hasReadyModel = model?.status === 'success'
+  const hasLatestInference = Boolean(latestPredictionDate)
   const dailyRecommendations = useMemo(() => {
     const rows = latestPredictionDate
       ? latestPredictions.filter((row) => row.trade_date === latestPredictionDate)
@@ -152,11 +150,11 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
     .filter((row) => row.event_type === 'dropped')
     .slice(0, 12), [observationEvents])
   const top10Recommendations = dailyRecommendations.slice(0, 10)
-  const recommendationVerdict = model?.status === 'success' && dailyRecommendations.length > 0
+  const recommendationVerdict = hasReadyModel && dailyRecommendations.length > 0
     ? '可观察'
-    : model?.status === 'success'
+    : hasReadyModel
       ? '待推理'
-      : '等待训练'
+      : '等待研究模型'
   const endDate = useMemo(() => currentResearchEndDate(), [])
   const startDate = useMemo(() => '20100101', [])
 
@@ -166,9 +164,6 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
     const runItems = await listFactorResearchRuns(20)
     setRuns(runItems)
     setAdmissionRows(await listFactorAdmissionComparisons(30))
-    const crashRuns = await listCrashWarningRuns(10)
-    setWarningRuns(crashRuns)
-    setWarningFeatures(await listCrashWarningFeatures(crashRuns[0]?.run_id || '', 12))
     const latestRun = runItems[0]?.run_id || ''
     if (latestRun) {
       setIcRows(await listFactorICResults(latestRun, 80))
@@ -233,13 +228,13 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
             stress_aware: true
           }
       const task = await createTask({
-        name: profile === 'smoke' ? `通用策略烟测-${params.start_date}-${params.end_date}` : `通用策略正式-${params.start_date}-${params.end_date}`,
+        name: profile === 'smoke' ? `因子研究快速验证-${params.start_date}-${params.end_date}` : `因子研究正式留档-${params.start_date}-${params.end_date}`,
         task_type: 'factor_research',
         params
       })
       await startTask(task.id)
       await refresh()
-      setNotice(profile === 'smoke' ? '已启动通用策略烟测任务' : '已启动通用策略正式任务')
+      setNotice(profile === 'smoke' ? '已启动因子研究快速验证任务' : '已启动因子研究正式留档任务')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -254,22 +249,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
     try {
       await startTask(taskID)
       await refresh()
-      setNotice('已启动通用策略任务，Go 会按流水线顺序启动子阶段')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const refreshLatestInference = async () => {
-    setBusy(true)
-    setError('')
-    setNotice('')
-    try {
-      const task = await runFactorLatestInference()
-      await refresh()
-      setNotice(`已启动通用策略最新截面推理：${task.name || task.id}`)
+      setNotice('已启动因子研究留档任务，Go 会按流水线顺序启动子阶段')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -283,7 +263,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
       {error ? <div className="errorBanner">{error}</div> : null}
 
       <div className="pageTabsHeader">
-        <div className="inlineTabs evaluationModeTabs signalViewTabs" role="tablist" aria-label="通用策略页签">
+        <div className="inlineTabs evaluationModeTabs signalViewTabs" role="tablist" aria-label="因子研究页签">
           {researchTabs.map((tab) => (
             <button key={tab.key} className={activeTab === tab.key ? 'active' : ''} onClick={() => setActiveTab(tab.key)}>
               {tab.label}
@@ -301,41 +281,39 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
       <section className="detailCard">
         <div className="tableHeader">
           <div>
-            <div className="sectionLabel">GENERAL STRATEGY</div>
-            <h2>通用策略每日股票推荐</h2>
-            <p className="recommendationMeta">基于通用因子模型的最新截面推理，每天给出 Top20% 候选；重新推理只使用当前模型跑最新行情截面，不重新训练模型。</p>
+            <div className="sectionLabel">FACTOR RESEARCH</div>
+            <h2>因子研究截面观察池</h2>
+            <p className="recommendationMeta">最新截面统一跟随数据管理更新链路生成；因子研究负责研究资产，不再单独启动影子推理。</p>
           </div>
           <div className="tableHeaderRight">
-            <button className="secondaryButton startButton" onClick={refreshLatestInference} disabled={busy}>
-              <RefreshCw size={16} />
-              重新推理
-            </button>
+            <span className={`badge ${hasReadyModel ? 'success' : 'created'}`}>{hasReadyModel ? '研究模型可用' : '等待研究模型'}</span>
+            {hasReadyModel ? <span className="mutedText">截面由数据管理自动触发</span> : null}
           </div>
         </div>
 
         <div className="metricStrip">
-          <div className={`metricCard ${dailyRecommendations.length > 0 ? 'good' : ''}`}><span>策略结论</span><b>{recommendationVerdict}</b><em>{latestPredictionDate ? `${formatTradeDate(latestPredictionDate)} 截面` : '等待最新推理'}</em></div>
-          <div className="metricCard"><span>今日推荐</span><b>{numberText(dailyRecommendations.length)}</b><em>Top20% 候选池</em></div>
-          <div className="metricCard"><span>TOP10均值分位</span><b>{percentText(avg(top10Recommendations.map((row) => row.pred_rank)))}</b><em>分位越高，排序越靠前</em></div>
-          <div className={`metricCard ${latestAdmission?.admission === '可启用' || latestAdmission?.admission === '可模拟' ? 'good' : ''}`}><span>准入状态</span><b>{latestAdmission?.admission || '待评估'}</b><em>{latestAdmission ? `评分 ${decimalText(latestAdmission.admission_score, 2)}` : '等待模型评估'}</em></div>
+          <div className={`metricCard ${dailyRecommendations.length > 0 ? 'good' : ''}`}><span>因子截面状态</span><b>{recommendationVerdict}</b><em>{latestPredictionDate ? `${formatTradeDate(latestPredictionDate)} 截面` : hasReadyModel ? '等待研究观察' : '生产截面走数据管理后置快照'}</em></div>
+          <div className="metricCard"><span>今日观察</span><b>{hasLatestInference ? numberText(dailyRecommendations.length) : '—'}</b><em>{hasLatestInference ? 'Top20% 候选池' : '等待研究观察'}</em></div>
+          <div className="metricCard"><span>TOP10均值分位</span><b>{hasLatestInference ? percentText(avg(top10Recommendations.map((row) => row.pred_rank))) : '—'}</b><em>{hasLatestInference ? '分位越高，排序越靠前' : '等待 Top10 观察候选'}</em></div>
+          <div className={`metricCard ${latestAdmission?.admission === '可启用' || latestAdmission?.admission === '可观察' ? 'good' : ''}`}><span>准入状态</span><b>{admissionLabel(latestAdmission?.admission || '待评估')}</b><em>{latestAdmission ? `评分 ${decimalText(latestAdmission.admission_score, 2)}` : '等待研究评估'}</em></div>
         </div>
 
         <div className="metricStrip">
-          <div className="metricCard"><span>1 生成因子</span><b>{numberText(runs[0]?.factor_count || totalFactors)}</b><em>基础因子 + rank/neutral 版本</em></div>
-          <div className={`metricCard ${model?.status === 'success' ? 'good' : ''}`}><span>2 训练模型</span><b>{model?.status || '-'}</b><em>{model?.model_type || 'LightGBM 等待训练'}</em></div>
-          <div className={`metricCard ${latestPredictions.length > 0 ? 'good' : ''}`}><span>3 最新推理</span><b>{numberText(latestPredictions.length)}</b><em>当前截面候选</em></div>
-          <div className="metricCard"><span>4 执行建议</span><b>{dailyRecommendations.length > 0 ? '观察建仓' : '不行动'}</b><em>先进入观察，不自动下单</em></div>
+          <div className="metricCard"><span>1 因子库</span><b>{numberText(runs[0]?.factor_count || totalFactors)}</b><em>{runs[0]?.factor_count ? '已生成训练因子' : '基础因子 + rank/neutral 版本'}</em></div>
+          <div className={`metricCard ${hasReadyModel ? 'good' : ''}`}><span>2 研究模型</span><b>{model?.status || '—'}</b><em>{model?.model_type || 'LightGBM 等待产出'}</em></div>
+          <div className={`metricCard ${latestPredictions.length > 0 ? 'good' : ''}`}><span>3 最新推理</span><b>{hasLatestInference ? numberText(latestPredictions.length) : '—'}</b><em>{hasLatestInference ? '当前截面候选' : '等待最新截面'}</em></div>
+          <div className="metricCard"><span>4 执行边界</span><b>{dailyRecommendations.length > 0 ? '观察跟踪' : hasLatestInference ? '不行动' : '等待观察'}</b><em>{hasLatestInference ? '因子研究只观察，不自动下单' : '生产截面不从这里触发'}</em></div>
         </div>
       </section>
 
       <section className="detailCard">
         <div className="tableHeader">
           <div>
-            <div className="sectionLabel">STOCK LIST</div>
-            <h2>今日推荐股票列表</h2>
-            <p className="recommendationMeta">观察池会保留入池日期、保留次数和刷新原因；Top10 给小仓建仓计划，后续候选只观察，不自动下单。</p>
+            <div className="sectionLabel">OBSERVATION LIST</div>
+            <h2>最新截面股票观察池</h2>
+            <p className="recommendationMeta">观察池会保留入池日期、保留次数和刷新原因；Top10 只做重点跟踪，其余候选仅用于研究观察，不自动下单。</p>
           </div>
-          <span>{latestPredictionDate ? `${formatTradeDate(latestPredictionDate)} · ${shortRunID(latestPredictions[0]?.run_id || '')}` : '暂无推荐截面'}</span>
+          <span>{latestPredictionDate ? `${formatTradeDate(latestPredictionDate)} · ${shortRunID(latestPredictions[0]?.run_id || '')}` : '暂无观察截面'}</span>
         </div>
         <div className="tableWrap">
           <table>
@@ -343,72 +321,72 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
               <tr>
                 <th>排名</th>
                 <th>股票</th>
-                <th>动作</th>
-                <th>条件买入</th>
-                <th>买入股数</th>
-                <th>条件卖出</th>
-                <th>卖出股数</th>
-                <th>止损/停手</th>
+                <th>观察动作</th>
+                <th>参考低吸价</th>
+                <th>下单边界</th>
+                <th>观察目标价</th>
+                <th>成交边界</th>
+                <th>风险线</th>
                 <th>验证 / 风险</th>
               </tr>
             </thead>
             <tbody>
               {dailyRecommendations.length === 0 ? (
-                <tr><td colSpan={9} className="emptyCell">暂无每日通用策略推荐，请先在模型训练页完成正式全量并生成最新截面推理</td></tr>
+                <tr><td colSpan={9} className="emptyCell">暂无因子研究观察池；生产买入清单请以通用策略页为准，因子截面由数据管理后置任务生成</td></tr>
               ) : dailyRecommendations.map((row, index) => {
                 const plan = generalStrategyPlan(row, index)
-                const executable = index < 10 && plan.shares > 0
-                const displayAction = executable ? '可试仓' : '观察'
+                const focused = index < 10
+                const displayAction = focused ? '重点跟踪' : '观察'
                 return (
                   <tr key={`${row.run_id}-${row.trade_date}-${row.ts_code}`}>
                     <td><strong>{index + 1}</strong></td>
-                    <td className="t0StockCell">
+                    <td className="stockCell">
                       <button className="tableActionButton" onClick={() => onOpenResearch?.(row.ts_code)} title="查看个股研究">
                         {row.name || row.ts_code}
                       </button>
                       <div className="mono">{row.ts_code}</div>
-                      <div className="recommendationMeta t0CurrentPrice">当前价 ¥{moneyText(row.price)}</div>
+                      <div className="recommendationMeta currentPrice">当前价 ¥{moneyText(row.price)}</div>
                       <div className="recommendationMeta">{row.industry || '—'} · {formatTradeDate(row.trade_date)}</div>
-                      <div className="recommendationMeta">首次推荐 {formatTradeDate(row.first_seen_date)} · 观察 {numberText(row.observation_days)} 天</div>
+                      <div className="recommendationMeta">首次入池 {formatTradeDate(row.first_seen_date)} · 观察 {numberText(row.observation_days)} 天</div>
                       <div className="recommendationMeta">保留 {numberText(row.seen_count)} 次 · {row.observation_result || '观察中'}</div>
                     </td>
                     <td>
-                      <span className={`badge ${executable ? 'success' : 'running'}`}>{displayAction}</span>
-                      <div className="recommendationMeta">{executable ? 'Top10 可按计划试仓' : '等组合和仓位确认'}</div>
+                      <span className={`badge ${focused ? 'success' : 'running'}`}>{displayAction}</span>
+                      <div className="recommendationMeta">{focused ? 'Top10 重点观察' : '等待下一轮截面确认'}</div>
                       <div className="recommendationMeta">今日 {percentFromPct(row.pct_chg, true)}</div>
-                      <div className="recommendationMeta">保留原因：{row.observation_reason || 'Top20%模型候选'}</div>
+                      <div className="recommendationMeta">保留原因：{row.observation_reason || 'Top20%研究候选'}</div>
                     </td>
                     <td>
                       <strong>¥{moneyText(plan.buy)}</strong>
-                      <div className="recommendationMeta">回落到价再买</div>
+                      <div className="recommendationMeta">仅作观察参考</div>
                       <div className="recommendationMeta">现价下方 {priceDistance(row.price, plan.buy, 'down')}</div>
-                      <div className="recommendationMeta">不到价不追</div>
+                      <div className="recommendationMeta">不生成买单</div>
                     </td>
                     <td>
-                      <strong>{executable ? `${plan.shares} 股` : '不买'}</strong>
-                      <div className="recommendationMeta">{executable ? '按1万元试仓估算' : '观察层不下单'}</div>
-                      <div className="recommendationMeta">100股取整</div>
+                      <strong>不下单</strong>
+                      <div className="recommendationMeta">因子研究只观察</div>
+                      <div className="recommendationMeta">交给通用策略组合层决策</div>
                     </td>
                     <td>
                       <strong>¥{moneyText(plan.sell)}</strong>
-                      <div className="recommendationMeta">建仓后目标卖出价</div>
+                      <div className="recommendationMeta">仅作观察目标</div>
                       <div className="recommendationMeta">距当前 {priceDistance(row.price, plan.sell, 'up')}</div>
-                      <div className="recommendationMeta">未触达不抢跑</div>
+                      <div className="recommendationMeta">不生成卖单</div>
                     </td>
                     <td>
-                      <strong>{executable ? `${plan.shares} 股` : '不卖'}</strong>
-                      <div className="recommendationMeta">{executable ? '建仓后同股数卖出' : '未建仓无卖单'}</div>
-                      <div className="recommendationMeta">先买后卖，不做裸卖</div>
+                      <strong>不成交</strong>
+                      <div className="recommendationMeta">观察池不撮合</div>
+                      <div className="recommendationMeta">不自动交易</div>
                     </td>
                     <td>
                       <strong className="negative">¥{moneyText(plan.stop)}</strong>
-                      <div className="recommendationMeta">跌破不建/减仓复核</div>
+                      <div className="recommendationMeta">跌破降级复核</div>
                       <div className="recommendationMeta">重新站回再评估</div>
                     </td>
                     <td>
                       <strong>{decimalText(row.pred_score, 4)}</strong>
                       <div className="recommendationMeta">分位 {percentText(row.pred_rank)}</div>
-                      <div className="recommendationMeta">保留原因：{row.observation_reason || 'Top20%模型候选'}</div>
+                      <div className="recommendationMeta">保留原因：{row.observation_reason || 'Top20%研究候选'}</div>
                       <div className="recommendationMeta">{observationStatusText(row.observation_status)} · 未来20日行业相对收益排序</div>
                       <div className="recommendationMeta">{latestAdmission ? admissionRiskText(latestAdmission) : '待准入评估'} · 不自动成交</div>
                     </td>
@@ -425,7 +403,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
           <div>
             <div className="sectionLabel">OBSERVATION HISTORY</div>
             <h2>最近移出观察池</h2>
-            <p className="recommendationMeta">每天刷新 Top20% 后，如果股票不再进入推荐池，会在这里保留移出日期、入池日期和移出原因。</p>
+            <p className="recommendationMeta">每天刷新 Top20% 后，如果股票不再进入观察池，会在这里保留移出日期、入池日期和移出原因。</p>
           </div>
           <span>{droppedObservationEvents.length > 0 ? `最近 ${numberText(droppedObservationEvents.length)} 条移出记录` : '暂无移出记录'}</span>
         </div>
@@ -448,7 +426,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
               ) : droppedObservationEvents.map((row) => (
                 <tr key={`${row.run_id}-${row.trade_date}-${row.ts_code}-${row.event_type}`}>
                   <td className="mono">{formatTradeDate(row.trade_date)}</td>
-                  <td className="t0StockCell">
+                  <td className="stockCell">
                     <button className="tableActionButton" onClick={() => onOpenResearch?.(row.ts_code)} title="查看个股研究">
                       {row.name || row.ts_code}
                     </button>
@@ -489,13 +467,13 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
               <div className="sectionLabel">PIPELINE</div>
               <h3>自动研究流水线</h3>
             </div>
-            <span>{latestTask ? `${latestTask.name} · ${statusLabel(latestTask.status)}` : '暂无进行中的通用策略任务'}</span>
+            <span>{latestTask ? `${latestTask.name} · ${statusLabel(latestTask.status)}` : '暂无进行中的因子研究任务'}</span>
             <div className="tableHeaderRight">
-              <button className="secondaryButton startButton" onClick={() => createAndStart('smoke')} disabled={busy} title="2020 至今快速跑通完整链路">
+              <button className="secondaryButton startButton" onClick={() => createAndStart('smoke')} disabled={busy} title="2020 至今快速验证完整链路">
                 <DatabaseZap size={16} />
-                烟测闭环
+                快速验证
               </button>
-              <button className="primaryButton startButton" onClick={() => createAndStart('full')} disabled={busy} title="2010 至今正式全量策略研究">
+              <button className="primaryButton startButton" onClick={() => createAndStart('full')} disabled={busy} title="2010 至今正式全量因子研究留档">
                 <Play size={16} />
                 正式全量
               </button>
@@ -530,9 +508,9 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
           <span>Go 负责任务队列和阶段编排，Python 执行计算并把阶段结果写入 MySQL</span>
         </div>
         <div className="metricStrip">
-          <div className="metricCard"><span>父任务数</span><b>{numberText(parentTasks.length)}</b><em>只展示可手动启动的研究任务</em></div>
+          <div className="metricCard"><span>父任务数</span><b>{numberText(parentTasks.length)}</b><em>只展示因子研究留档任务</em></div>
           <div className="metricCard good"><span>运行中</span><b>{numberText(runningTasks)}</b><em>正在执行的 worker</em></div>
-          <div className="metricCard"><span>排队/待启动</span><b>{numberText(queuedTasks)}</b><em>created 需要点击启动</em></div>
+          <div className="metricCard"><span>排队/待启动</span><b>{numberText(queuedTasks)}</b><em>created 表示研究留档待启动</em></div>
           <div className="metricCard bad"><span>失败/中断</span><b>{numberText(failedTasks)}</b><em>需要重跑或看日志</em></div>
         </div>
         <table>
@@ -550,7 +528,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
           </thead>
           <tbody>
             {parentTasks.length === 0 ? (
-              <tr><td colSpan={8} className="mutedText">暂无通用策略任务</td></tr>
+              <tr><td colSpan={8} className="mutedText">暂无因子研究任务</td></tr>
             ) : parentTasks.slice(0, 12).map((task) => {
               const rows = Array.isArray(task.summary.rows) ? task.summary.rows as Array<Record<string, unknown>> : []
               const panel = rows.find((row) => row.stage === 'build_factor_panel') || {}
@@ -603,7 +581,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
             <div className="sectionLabel">FACTOR LIBRARY</div>
             <h3>第一版因子目录</h3>
           </div>
-          <span>当前 105 个基础因子，模型训练使用 rank 与 neutral 版本</span>
+          <span>当前 105 个基础因子，因子研究留档使用 rank 与 neutral 版本</span>
         </div>
         <div className="factorFamilyGrid">
           {factorFamilies.map((family) => (
@@ -779,7 +757,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
             <div className="wide"><span>模型文件</span><code>{model.model_path || '等待生成'}</code></div>
           </div>
         ) : (
-          <div className="mutedText">暂无模型训练记录</div>
+          <div className="mutedText">暂无研究留档记录</div>
         )}
         <div className="subTableTitle">模型特征重要度</div>
         <table>
@@ -813,43 +791,8 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
 
       {activeTab === 'evaluation' ? (
         <>
-      <section className="detailCard">
-        <div className="tableHeader">
-          <div>
-            <div className="sectionLabel">CRASH WARNING</div>
-            <h3>股灾预警模型</h3>
-          </div>
-          <span>{latestWarningRun?.run_id || '暂无预警模型'}</span>
-        </div>
-        <div className="metricStrip">
-          <div className="metricCard good"><span>AUC</span><b>{decimalText(latestWarningRun?.roc_auc, 4)}</b><em>{latestWarningRun?.model_type || '-'}</em></div>
-          <div className="metricCard"><span>AP</span><b>{decimalText(latestWarningRun?.avg_precision, 4)}</b><em>正样本 {percentText(latestWarningRun?.positive_rate)}</em></div>
-          <div className="metricCard"><span>Top10 命中</span><b>{percentText(latestWarningRun?.top10_precision)}</b><em>捕获 {percentText(latestWarningRun?.top10_capture)}</em></div>
-          <div className="metricCard"><span>样本</span><b>{numberText(latestWarningRun?.rows)}</b><em>{dateRangeText(latestWarningRun?.start_date, latestWarningRun?.end_date)}</em></div>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>排名</th>
-              <th>特征</th>
-              <th>重要度</th>
-            </tr>
-          </thead>
-          <tbody>
-            {warningFeatures.length === 0 ? (
-              <tr><td colSpan={3} className="mutedText">暂无预警特征重要度</td></tr>
-            ) : warningFeatures.map((row) => (
-              <tr key={`${row.run_id}-${row.feature}`}>
-                <td>{row.rank_no}</td>
-                <td><b>{factorLabel(baseFactor(row.feature))}</b><div className="mono">{row.feature}</div></td>
-                <td>{decimalText(row.importance, 2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
 
-      <section className="detailCard">
+<section className="detailCard">
         <div className="tableHeader">
           <div>
             <div className="sectionLabel">STRESS REPORT</div>
@@ -886,7 +829,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
         <div className="tableHeader">
           <div>
             <div className="sectionLabel">MODEL PICKS</div>
-            <h3>最新模型候选</h3>
+            <h3>最新研究候选</h3>
           </div>
           <span>OOS 预测 Top 20%，按最近测试日期和模型分数排序</span>
         </div>
@@ -898,12 +841,12 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
               <th>预测分数</th>
               <th>预测分位</th>
               <th>实际20日超额</th>
-              <th>测试年</th>
+              <th>验证年</th>
             </tr>
           </thead>
           <tbody>
             {predictions.length === 0 ? (
-              <tr><td colSpan={6} className="mutedText">暂无模型候选，训练成功后生成</td></tr>
+              <tr><td colSpan={6} className="mutedText">暂无研究候选，研究留档成功后生成</td></tr>
             ) : predictions.slice(0, 30).map((row) => (
               <tr key={`${row.run_id}-${row.trade_date}-${row.ts_code}`}>
                 <td className="mono">{row.trade_date}</td>
@@ -938,7 +881,7 @@ export function FactorResearchPage({ onOpenResearch }: { onOpenResearch?: (tsCod
           </thead>
           <tbody>
             {latestPredictions.length === 0 ? (
-              <tr><td colSpan={5} className="mutedText">暂无最新截面推理结果</td></tr>
+              <tr><td colSpan={5} className="mutedText">暂无研究截面观察结果</td></tr>
             ) : latestPredictions.slice(0, 30).map((row) => (
               <tr key={`${row.run_id}-${row.trade_date}-${row.ts_code}`}>
                 <td className="mono">{row.trade_date}</td>
@@ -1032,29 +975,29 @@ function GeneralModelEvaluationPanel({
     .filter((row) => row.admission.includes('启用') || row.admission.includes('准入') || row.admission.includes('限制'))
     .sort((a, b) => b.admission_score - a.admission_score)[0]
   const latestDate = latestPredictions[0]?.trade_date || ''
-  const activeSummary = model ? `${model.model_type} · ${model.status}` : '暂无模型'
+  const activeSummary = model ? `${model.model_type} · ${model.status}` : '暂无研究模型'
   return (
     <section className="detailCard">
       <div className="tableHeader">
         <div>
           <div className="sectionLabel">MODEL EVALUATION</div>
-          <h3>通用策略效果评估</h3>
+          <h3>因子研究效果评估</h3>
         </div>
         <span>{latestDate ? `最新截面 ${formatTradeDate(latestDate)}` : activeSummary}</span>
       </div>
-      <div className="limitModelVerdict">
+      <div className="researchModelVerdict">
         <div>
           <span className={bestAdmission ? 'positiveText' : model?.status === 'success' ? 'warningText' : 'negativeText'}>
             {bestAdmission ? bestAdmission.admission : model?.status === 'success' ? '可观察' : '等待训练'}
           </span>
-          <b>{model?.run_id ? shortRunID(model.run_id) : '等待模型'}</b>
+          <b>{model?.run_id ? shortRunID(model.run_id) : '等待研究模型'}</b>
           <p>
             {model
               ? `OOS Rank IC ${decimalText(summary.oos_rank_ic_mean, 3)}，Top-Bottom ${signedPercentText(summary.top_bottom_spread)}，Top20均值 ${signedPercentText(summary.top20_mean_return)}；准入仍需看压力段和最新截面。`
-              : '暂无通用策略模型评估结果。'}
+              : '暂无因子研究评估结果。'}
           </p>
         </div>
-        <div className="limitModelMetrics">
+        <div className="researchModelMetrics">
           <Mini label="OOS折数" value={numberText(summary.fold_count)} />
           <Mini label="预测样本" value={numberText(summary.prediction_rows)} />
           <Mini label="Top候选" value={numberText(summary.top20_rows)} />
@@ -1064,7 +1007,7 @@ function GeneralModelEvaluationPanel({
         </div>
       </div>
 
-      <div className="limitModelEvalGrid">
+      <div className="researchModelEvalGrid">
         <div>
           <div className="formTitle">Top 分层表现</div>
           <div className="modelEvalTableWrap">
@@ -1121,14 +1064,14 @@ function GeneralModelEvaluationPanel({
         </div>
       </div>
 
-      <div className="formTitle">交易层验证</div>
-      <div className="cardHint">通用策略没有日内触价条件，这里按每个测试截面 TopN 等权持有 20 日超额做近似验证；真实执行仍以推荐页条件单价格为准。</div>
+      <div className="formTitle">市场层验证</div>
+      <div className="cardHint">因子研究没有日内触价条件，这里按每个验证截面 TopN 等权持有 20 日超额做近似验证；真实执行仍以观察页条件单价格为准。</div>
       <div className="modelEvalTableWrap">
         <table className="modelEvalTable">
           <thead>
             <tr>
               <th>规则</th>
-              <th>截面/信号</th>
+              <th>验证截面</th>
               <th>胜率</th>
               <th>单期超额</th>
               <th>累计近似</th>
@@ -1137,7 +1080,7 @@ function GeneralModelEvaluationPanel({
           </thead>
           <tbody>
             {tradeRows.length === 0 ? (
-              <tr><td colSpan={6}>暂无交易层验证</td></tr>
+              <tr><td colSpan={6}>暂无市场层验证</td></tr>
             ) : tradeRows.map((row) => (
               <tr key={row.label}>
                 <td>{row.label}</td>
@@ -1152,12 +1095,12 @@ function GeneralModelEvaluationPanel({
         </table>
       </div>
 
-      <div className="limitModelEvalGrid">
+      <div className="researchModelEvalGrid">
         <div>
           <div className="formTitle">最近评测切面</div>
-          <div className="limitModelList">
+          <div className="researchModelList">
             {recentRows.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无最近评测切面</div> : recentRows.map((row) => (
-              <div className="limitModelSliceRow" key={row.date}>
+              <div className="researchModelSliceRow" key={row.date}>
                 <b>{formatTradeDate(row.date)}</b>
                 <span>候选 {row.count} · Top10超额 {signedPercentText(row.topReturn)}</span>
               </div>
@@ -1166,7 +1109,7 @@ function GeneralModelEvaluationPanel({
         </div>
         <div>
           <div className="formTitle">重要特征</div>
-          <div className="limitModelFeatureList">
+          <div className="researchModelFeatureList">
             {modelFeatures.length === 0 ? <div className="taskGridEmpty compactEmpty">暂无特征重要性</div> : modelFeatures.slice(0, 8).map((row) => (
               <span key={`${row.run_id}-${row.feature}`}>{row.rank_no}. {featureDisplayName(row.feature)}</span>
             ))}
@@ -1303,8 +1246,7 @@ function buildPipelineSteps(input: {
     input.correlations.length &&
     input.model &&
     input.latestPredictions.length &&
-    input.stressRows.length &&
-    input.admissionRows.length
+    input.stressRows.length
   )
 
   return pipelineBase.map((step, index) => {
@@ -1341,7 +1283,7 @@ function RunInferenceProgress({ parentTask, childTask }: { parentTask: TaskDTO; 
   const rows = taskRows(parentTask)
   const running = rows.find((row) => row.task_status === 'running' || row.status === 'running') || {}
   const progress = Math.max(0, Math.min(100, Math.round((Number(task.progress) || 0) * 100)))
-  const stageName = String(task.summary.name || task.summary.stage_name || running.name || running.stage_name || '最新截面推理')
+  const stageName = String(task.summary.name || task.summary.stage_name || running.name || running.stage_name || '研究截面观察')
   const message = factorTaskMessage(task, running)
   const detail = task.status === 'success'
     ? '已完成'
@@ -1382,7 +1324,6 @@ function inferredStageStatus(
   if (key === 'train_lgbm' && input.model) return '已完成'
   if (key === 'latest_inference' && input.latestPredictions.length > 0) return '已完成'
   if (key === 'stress_report' && input.stressRows.length > 0) return '已完成'
-  if (key === 'strategy_admission' && input.admissionRows.length > 0) return '已完成'
   if (key === 'validate_research_run' && (allArtifactsDone || input.task?.status === 'success')) return '已完成'
   if (!input.task && !input.latestRun) return '待执行'
   return '待执行'
@@ -1595,7 +1536,7 @@ function factorStatusLabel(status: string) {
 }
 
 function variantLabel(variant: string) {
-  return { rank: '方向Rank', neutral: '中性化', raw: '旧版' }[variant] || variant
+  return { rank: '方向Rank', neutral: '中性化', raw: '原始值' }[variant] || variant
 }
 
 function baseFactor(feature: string) {
@@ -1624,15 +1565,15 @@ function FactorAdmissionPanel({
       <div className="tableHeader">
         <div>
           <div className="sectionLabel">ADMISSION COMPARE</div>
-          <h3>模型版本准入对比</h3>
+          <h3>历史治理参考</h3>
         </div>
-        <span>{enabled ? `启用中 ${shortRunID(enabled.row.run_id)}` : bestGoverned ? `建议启用 ${shortRunID(bestGoverned.row.run_id)}` : '暂无治理通过版本'}</span>
+        <span>{enabled ? `历史启用 ${shortRunID(enabled.row.run_id)}` : bestGoverned ? `历史建议 ${shortRunID(bestGoverned.row.run_id)}` : '暂无历史治理通过版本'}</span>
       </div>
       <div className="metricStrip">
         <div className={`metricCard ${enabled?.canEnable ? 'good' : enabled ? 'bad' : ''}`}>
-          <span>当前启用</span>
+          <span>历史启用</span>
           <b>{enabled ? enabled.admission : '暂无'}</b>
-          <em>{enabled?.row.run_id || '未配置可用版本'}</em>
+          <em>{enabled?.row.run_id || '当前因子研究不直接启用策略'}</em>
         </div>
         <div className="metricCard">
           <span>最高准入分</span>
@@ -1668,7 +1609,7 @@ function FactorAdmissionPanel({
           </thead>
           <tbody>
             {admissionRows.length === 0 ? (
-              <tr><td colSpan={10} className="mutedText">暂无模型准入记录</td></tr>
+              <tr><td colSpan={10} className="mutedText">暂无准入记录；当前因子研究流水线以产物完整性、压力检查和最新截面为准</td></tr>
             ) : admissionRows.map((item) => (
               <tr key={`${item.row.run_id}-${item.row.generated_at}`}>
                 <td>
@@ -1684,7 +1625,7 @@ function FactorAdmissionPanel({
                 <td className={item.row.max_drawdown >= -0.2 ? 'positive' : 'negative'}><b>最大回撤</b><div>{percentText(item.row.max_drawdown)}</div></td>
                 <td><b>Sharpe</b><div>{decimalText(item.row.sharpe, 2)}</div></td>
                 <td>{dateRangeText(item.row.effective_start, item.row.effective_end)}</td>
-                <td className="versionFailureText">{item.failure || item.row.reason || '训练日期、截面、收益回撤和压力检查通过，可进入候选启用。'}</td>
+                <td className="versionFailureText">{item.failure || item.row.reason || '研究日期、截面、收益回撤和压力检查通过，可进入候选启用。'}</td>
               </tr>
             ))}
           </tbody>
@@ -1759,9 +1700,13 @@ function dateRangeText(start?: string, end?: string) {
 }
 
 function admissionBadge(admission: string) {
-  if (admission === '通过' || admission === '可准入' || admission === '可启用' || admission === '可模拟') return 'success'
+  if (admission === '通过' || admission === '可准入' || admission === '可启用' || admission === '可观察') return 'success'
   if (admission === '继续观察' || admission === '观察' || admission === '治理未完整') return 'running'
   return 'failed'
+}
+
+function admissionLabel(admission: string) {
+  return admission === '可模拟' ? '可观察' : admission
 }
 
 function admissionRiskText(row: FactorAdmissionComparison) {
@@ -1780,6 +1725,7 @@ function statusLabel(status: string) {
     success: '完成',
     failed: '失败',
     cancelled: '取消',
-    interrupted: '中断'
+    interrupted: '中断',
+    historical_offline: '已归档'
   }[status] || status
 }

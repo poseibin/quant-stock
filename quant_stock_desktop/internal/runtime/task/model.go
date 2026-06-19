@@ -18,18 +18,10 @@ const (
 
 const (
 	TypeEvaluationTimeMachine Type = "evaluation_time_machine"
-	TypeStrategyEvaluation    Type = "eval_strategy_admission"
-	TypePortfolioOptimization Type = "portfolio_optimization"
-	TypeWalkForwardEvaluation Type = "walk_forward_evaluation"
-	TypeParameterExperiment   Type = "parameter_experiment"
 	TypeFactorResearch        Type = "factor_research"
-	TypeFactorAutoTune        Type = "factor_autotune"
 	TypeModelTraining         Type = "model_training"
-	TypeLimitSignalEvaluation Type = "limit_signal_evaluation"
-	TypeT0DailyResearch       Type = "t0_daily_research"
-	TypeT0TimeMachine         Type = "t0_daily_timemachine"
+	TypeFactorSnapshot        Type = "factor_snapshot"
 	TypeDataUpdate            Type = "data_update"
-	TypeDailySignal           Type = "daily_signal"
 )
 
 type Task struct {

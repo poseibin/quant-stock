@@ -1,16 +1,15 @@
-"""Long-running search for the best ml_factor_ranker model.
+"""Historical long-running search for the legacy factor-factory model.
 
 This runner is intentionally conservative: it never enables a model by itself.
 It keeps searching across successful base model runs and AutoTune parameter
 trials, records durable progress in MySQL, and leaves the final promotion to
-the normal admission/activation gates.
+the normal admission/activation gates. Desktop production training now goes
+through the Profit Arena framework; keep this script for old research only.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 import time
 from datetime import datetime
@@ -21,12 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.config.desktop_settings import load_settings
 from common.infra import status as run_status
 from common.infra.db import table_exists, write_transaction
 
 
 TASK_NAME = "factor_optimal_model_search"
+# Historical compatibility key, not a desktop production strategy.
 STRATEGY = "ml_factor_ranker"
 PASS_ADMISSIONS = {"可启用", "限制启用", "已启用"}
 
@@ -51,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-model-run-id", default="", help="只搜索指定基础模型；为空时轮转所有小盘模型")
     parser.add_argument("--use-deepseek", action="store_true")
     parser.add_argument("--stop-on-pass", action="store_true")
+    parser.add_argument("--allow-legacy-factor-model", action="store_true", help="显式允许运行历史 ml_factor_ranker 长跑搜索")
     return parser.parse_args()
 
 
@@ -167,47 +167,15 @@ def explored_count(model_run_id: str) -> int:
 
 
 def run_autotune(args: argparse.Namespace, model: dict[str, Any], cycle: int) -> dict[str, Any]:
-    settings = load_settings()
-    provider = str(settings.get("llm_provider") or "openai").strip().lower()
-    if provider not in {"openai", "deepseek"}:
-        provider = "openai"
-    token_key = "openai_token" if provider == "openai" else "deepseek_token"
-    model_key = "openai_model" if provider == "openai" else "deepseek_model"
-    default_model = "gpt-5.5" if provider == "openai" else "deepseek-v4-pro"
-    token = str(settings.get(token_key) or "").strip()
-    llm_model = str(settings.get(model_key) or default_model).strip()
     autotune_run_id = f"{args.run_id}_c{cycle:03d}_{model['run_id'][:64]}"
-    cmd = [
-        sys.executable,
-        "scripts/factor_autotune_worker.py",
-        "--run-id",
-        autotune_run_id,
-        "--base-model-run-id",
-        str(model["run_id"]),
-        "--start",
-        args.start,
-        "--end",
-        args.end,
-        "--max-rounds",
-        str(args.rounds_per_model),
-        "--trials-per-round",
-        str(args.trials_per_round),
-    ]
-    env = os.environ.copy()
-    if args.use_deepseek and token:
-        env["LLM_PROVIDER"] = provider
-        env[f"{provider.upper()}_TOKEN"] = token
-        env[f"{provider.upper()}_MODEL"] = llm_model
-        cmd.extend(["--use-deepseek", "--llm-provider", provider, "--llm-model", llm_model])
     started = now_text()
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return {
         "autotune_run_id": autotune_run_id,
         "model_run_id": model["run_id"],
-        "returncode": proc.returncode,
+        "returncode": 2,
         "started_at": started,
         "finished_at": now_text(),
-        "output_tail": proc.stdout[-5000:],
+        "output_tail": "Legacy AutoTune has been removed from the desktop production training architecture; use Profit Arena training and the post-update factor snapshot instead.",
     }
 
 
@@ -229,6 +197,12 @@ def model_priority(model: dict[str, Any]) -> tuple[int, float, str]:
 
 def main() -> int:
     args = parse_args()
+    if not args.allow_legacy_factor_model:
+        print(json.dumps({
+            "success": False,
+            "error": "历史因子研究长跑搜索默认禁止运行；如需回看旧实验，请显式传 --allow-legacy-factor-model",
+        }, ensure_ascii=False))
+        return 2
     run_status.begin(TASK_NAME)
     summary_path = ROOT / "logs" / "longrun" / f"{args.run_id}.summary.json"
     log_path = ROOT / "logs" / "longrun" / f"{args.run_id}.events.jsonl"
@@ -283,7 +257,7 @@ def main() -> int:
                 payload["state"] = "success"
                 payload["reason"] = "found_passed_trial"
                 write_summary(summary_path, payload)
-                run_status.done(TASK_NAME, "找到通过准入的通用策略候选")
+                run_status.done(TASK_NAME, "找到通过准入的历史因子研究候选")
                 return 0
             time.sleep(max(0, int(args.sleep_seconds)))
     except Exception as exc:

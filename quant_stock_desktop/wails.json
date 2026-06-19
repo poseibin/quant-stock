@@ -6,6 +6,13 @@
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
+  "info": {
+    "companyName": "Quant Stock",
+    "productName": "Quant Stock Production Workspace",
+    "productVersion": "1.0.0-profit-arena",
+    "copyright": "Copyright Quant Stock",
+    "comments": "Production desktop workspace for Profit Arena"
+  },
   "author": {
     "name": "",
     "email": ""

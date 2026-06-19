@@ -1,6 +1,6 @@
 """真实账户持仓管理（portfolio_pool_summary / portfolio_pool_holdings / portfolio_pool_trades）。
 
-桌面 app 通过 Go 调用 daily_signal.py / pool_confirm.py 触发。
+桌面 app 通过 Go 调用收益擂台买入清单 / pool_confirm.py 触发。
 本模块负责所有 pool 表的读写，以及基于行情刷新估值。
 """
 from __future__ import annotations
@@ -44,6 +44,8 @@ def _ensure_fee_columns(conn) -> None:
         add_column(conn, "portfolio_pool_trades", "cash_after", "REAL NOT NULL DEFAULT 0")
     if "position_pnl" not in cols:
         add_column(conn, "portfolio_pool_trades", "position_pnl", "REAL NOT NULL DEFAULT 0")
+    if "exit_reason" not in cols:
+        add_column(conn, "portfolio_pool_trades", "exit_reason", "TEXT NOT NULL DEFAULT ''")
     summary_cols = table_columns(conn, "portfolio_pool_summary")
     if "total_fee" not in summary_cols:
         add_column(conn, "portfolio_pool_summary", "total_fee", "REAL NOT NULL DEFAULT 0")
@@ -128,7 +130,8 @@ def list_trades(limit: int = 200) -> list[dict[str, Any]]:
         _ensure_fee_columns(conn)
         rows = conn.execute(
             """SELECT id, ts_code, side, shares, price, amount, trade_date, pnl, created_at,
-                      COALESCE(fee,0), COALESCE(net_amount,0), COALESCE(cash_after,0), COALESCE(position_pnl,0)
+                      COALESCE(fee,0), COALESCE(net_amount,0), COALESCE(cash_after,0), COALESCE(position_pnl,0),
+                      COALESCE(exit_reason,'')
                FROM portfolio_pool_trades ORDER BY id DESC LIMIT ?""",
             (int(limit),),
         ).fetchall()
@@ -147,6 +150,7 @@ def list_trades(limit: int = 200) -> list[dict[str, Any]]:
             "net_amount": float(r[10] or 0),
             "cash_after": float(r[11] or 0),
             "position_pnl": float(r[12] or 0),
+            "exit_reason": r[13] or "",
         }
         for r in rows
     ]
@@ -187,6 +191,7 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                 shares = int(trade.get("shares") or 0)
                 price = float(trade.get("price") or 0.0)
                 trade_date = str(trade.get("trade_date") or now[:10].replace("-", ""))
+                exit_reason = str(trade.get("exit_reason") or "").strip()
                 if not ts_code or shares <= 0 or price <= 0 or side not in ("buy", "sell"):
                     continue
                 amount = price * shares
@@ -238,9 +243,9 @@ def confirm_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
                         conn.execute("DELETE FROM portfolio_pool_holdings WHERE ts_code=?", (ts_code,))
 
                 conn.execute(
-                    """INSERT INTO portfolio_pool_trades(ts_code, side, shares, price, amount, trade_date, pnl, created_at, fee, net_amount, cash_after, position_pnl)
-                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (ts_code, side, shares, price, amount, trade_date, realized_pnl, now, fee, net_amount, current_cash, position_pnl),
+                    """INSERT INTO portfolio_pool_trades(ts_code, side, shares, price, amount, trade_date, pnl, created_at, fee, net_amount, cash_after, position_pnl, exit_reason)
+                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (ts_code, side, shares, price, amount, trade_date, realized_pnl, now, fee, net_amount, current_cash, position_pnl, exit_reason),
                 )
 
             conn.execute(

@@ -18,27 +18,13 @@ func NewRunID(req CreateRequest) string {
 	start := valueString(req.Params["start_date"], "start")
 	end := valueString(req.Params["end_date"], "end")
 	strategies := strategyTag(firstNonNil(req.Params["strategies_filter"], req.Params["strategies"]))
-	prefix := "tm"
-	if req.TaskType == TypeStrategyEvaluation {
-		prefix = "se"
-	} else if req.TaskType == TypePortfolioOptimization {
-		prefix = "po"
-	} else if req.TaskType == TypeWalkForwardEvaluation {
-		prefix = "wf"
-	} else if req.TaskType == TypeParameterExperiment {
-		prefix = "px"
-	} else if req.TaskType == TypeFactorResearch {
+	prefix := "task"
+	if req.TaskType == TypeFactorResearch {
 		prefix = "fr"
-	} else if req.TaskType == TypeFactorAutoTune {
-		prefix = "fat"
 	} else if req.TaskType == TypeModelTraining {
 		prefix = "mt"
-	} else if req.TaskType == TypeLimitSignalEvaluation {
-		prefix = "lse"
-	} else if req.TaskType == TypeT0DailyResearch {
-		prefix = "t0r"
-	} else if req.TaskType == TypeT0TimeMachine {
-		prefix = "t0tm"
+	} else if req.TaskType == TypeFactorSnapshot {
+		prefix = "fs"
 	}
 	return fmt.Sprintf("%s_%s_%s_%s_%s", prefix, strategies, start, end, time.Now().Format("150405"))
 }

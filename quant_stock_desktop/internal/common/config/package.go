@@ -138,10 +138,41 @@ func loadDatabaseFileConfig() (databaseFileConfig, bool) {
 func databaseConfigPaths() []string {
 	paths := []string{}
 	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
-		paths = append(paths, filepath.Join(cwd, "config.toml"))
-		paths = append(paths, filepath.Join(cwd, "quant_stock_desktop", "config.toml"))
+		paths = append(paths, databaseConfigPathsFrom(cwd)...)
+	}
+	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
+		paths = append(paths, databaseConfigPathsFrom(filepath.Dir(exe))...)
+	}
+	return uniquePaths(paths)
+}
+
+func databaseConfigPathsFrom(start string) []string {
+	paths := []string{}
+	dir := filepath.Clean(start)
+	for {
+		paths = append(paths, filepath.Join(dir, "config.toml"))
+		paths = append(paths, filepath.Join(dir, "quant_stock_desktop", "config.toml"))
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
 	return paths
+}
+
+func uniquePaths(paths []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, path := range paths {
+		clean := filepath.Clean(path)
+		if seen[clean] {
+			continue
+		}
+		seen[clean] = true
+		out = append(out, clean)
+	}
+	return out
 }
 
 func parseDatabaseConfigText(text string) (databaseFileConfig, bool) {

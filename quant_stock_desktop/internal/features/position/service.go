@@ -1,18 +1,15 @@
 package position
 
 import (
-	"bufio"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"quant_stock_desktop/internal/common/database"
@@ -27,8 +24,6 @@ type Service struct {
 	db            *database.DB
 	dbBackend     string
 	dbDSN         string
-	signalMu      sync.Mutex
-	signalRunning bool
 }
 
 func NewService(marketService *market.Service, db *database.DB) *Service {
@@ -38,22 +33,6 @@ func NewService(marketService *market.Service, db *database.DB) *Service {
 func (service *Service) SetRuntimeDatabaseConfig(backend string, dsn string) {
 	service.dbBackend = strings.TrimSpace(backend)
 	service.dbDSN = strings.TrimSpace(dsn)
-}
-
-func (service *Service) tryAcquireSignal() bool {
-	service.signalMu.Lock()
-	defer service.signalMu.Unlock()
-	if service.signalRunning {
-		return false
-	}
-	service.signalRunning = true
-	return true
-}
-
-func (service *Service) releaseSignal() {
-	service.signalMu.Lock()
-	service.signalRunning = false
-	service.signalMu.Unlock()
 }
 
 func normalizeTradeDate(value string) string {
@@ -110,7 +89,7 @@ func (service *Service) GetTrades(limit int) ([]TradeRecord, error) {
 	}
 	rows, err := service.db.Conn().Query(`SELECT t.id, t.ts_code, COALESCE(h.name, s.name, ''), t.side, t.shares, t.price, t.amount,
 	    t.trade_date, COALESCE(t.pnl,0), COALESCE(t.fee,0), COALESCE(t.net_amount,0),
-	    COALESCE(t.cash_after,0), COALESCE(t.position_pnl,0)
+	    COALESCE(t.cash_after,0), COALESCE(t.position_pnl,0), COALESCE(t.exit_reason,'')
 	    FROM portfolio_pool_trades t
 	    LEFT JOIN portfolio_pool_holdings h ON h.ts_code = t.ts_code
 	    LEFT JOIN data_stock_basic s ON s.ts_code = t.ts_code
@@ -123,7 +102,7 @@ func (service *Service) GetTrades(limit int) ([]TradeRecord, error) {
 	for rows.Next() {
 		var item TradeRecord
 		if err := rows.Scan(&item.ID, &item.TSCode, &item.Name, &item.Action, &item.Shares, &item.Price, &item.Amount,
-			&item.Date, &item.RealizedPnL, &item.Fee, &item.NetAmount, &item.CashAfter, &item.PositionPnL); err != nil {
+			&item.Date, &item.RealizedPnL, &item.Fee, &item.NetAmount, &item.CashAfter, &item.PositionPnL, &item.ExitReason); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -330,11 +309,13 @@ func (service *Service) ConfirmTrades(dataPath string, trades []TradeRequest) (S
 			return Summary{}, fmt.Errorf("invalid trade action: %s", t.Action)
 		}
 		tradeData = append(tradeData, map[string]any{
-			"ts_code":    t.TSCode,
-			"side":       side,
-			"shares":     t.Shares,
-			"price":      t.Price,
-			"trade_date": t.Date,
+			"ts_code":     t.TSCode,
+			"side":        side,
+			"shares":      t.Shares,
+			"price":       t.Price,
+			"trade_date":  t.Date,
+			"exit_reason": t.ExitReason,
+			"exit_pct":    t.ExitPct,
 		})
 	}
 	tmpFile, err := os.CreateTemp("", "trades-*.json")
@@ -353,7 +334,7 @@ func (service *Service) ConfirmTrades(dataPath string, trades []TradeRequest) (S
 	python := quantCorePython(projectRoot)
 	cmd := exec.Command(python, "-u", scriptPath, "--trades-json", tmpFile.Name())
 	cmd.Dir = projectRoot
-	cmd.Env = service.quantCoreEnv(dataPath, GenerateSignalRequest{})
+	cmd.Env = service.quantCoreEnv(dataPath)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -435,6 +416,7 @@ func (service *Service) GetRecommendation(dataPath string) (Recommendation, erro
 	if err := json.Unmarshal([]byte(payload), &rec); err != nil {
 		return Recommendation{}, err
 	}
+	rec.ActiveStrategyVersions = filterProfitArenaStrategyVersions(rec.ActiveStrategyVersions)
 	if len(rec.ActiveStrategyVersions) == 0 {
 		rec.ActiveStrategyVersions = service.activeStrategyVersions()
 	}
@@ -450,11 +432,29 @@ func (service *Service) GetRecommendation(dataPath string) (Recommendation, erro
 	return rec, nil
 }
 
+func filterProfitArenaStrategyVersions(items []RecommendationStrategyVersion) []RecommendationStrategyVersion {
+	out := make([]RecommendationStrategyVersion, 0, len(items))
+	for _, item := range items {
+		strategy := strings.TrimSpace(item.Strategy)
+		if strategy != "profit_arena_model" && strategy != "profit_arena" {
+			continue
+		}
+		if item.Label == "" {
+			item.Label = "收益擂台"
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 func (service *Service) activeStrategyVersions() []RecommendationStrategyVersion {
 	if service.db == nil {
 		return nil
 	}
-	rows, err := service.db.Conn().Query(`SELECT strategy, version, label, config_json FROM strategy_config_versions WHERE is_active = 1 ORDER BY strategy`)
+	rows, err := service.db.Conn().Query(`SELECT strategy, version, label, config_json
+		FROM strategy_config_versions
+		WHERE is_active = 1 AND strategy IN ('profit_arena_model', 'profit_arena')
+		ORDER BY strategy`)
 	if err != nil {
 		return nil
 	}
@@ -473,6 +473,9 @@ func (service *Service) activeStrategyVersions() []RecommendationStrategyVersion
 		_ = json.Unmarshal([]byte(configJSON), &cfg)
 		if item.Label == "" {
 			item.Label = cfg.Label
+		}
+		if item.Label == "" {
+			item.Label = "收益擂台"
 		}
 		item.Weight = cfg.Weight
 		item.Mode = "active"
@@ -497,6 +500,10 @@ func (service *Service) GetRunStatus(task string) (RunStatus, error) {
 		}
 		return RunStatus{}, err
 	}
+	if task == "profit_arena_rebalance" {
+		s.Task = "profit_arena_rebalance"
+		s.TaskType = "profit_arena_rebalance"
+	}
 	if s.TaskType == "" {
 		s.TaskType = inferRunStatusTaskType(task)
 	}
@@ -507,123 +514,18 @@ func inferRunStatusTaskType(task string) string {
 	switch task {
 	case "data_update":
 		return "data_update"
-	case "daily_signal":
-		return "signal"
-	case "limit_signal_evaluation":
-		return "evaluation"
-	case "limit_breakout", "limit_up_momentum", "t0_daily_research", "t0_daily_timemachine":
-		return "market_scan"
-	case "policy_support_analysis":
-		return "analysis"
+	case "profit_arena_rebalance":
+		return "profit_arena_rebalance"
+	case "profit_arena_model":
+		return "model_training"
+	case "factor_snapshot":
+		return "factor_snapshot"
 	default:
 		return "python"
 	}
 }
 
-func (service *Service) GenerateSignal(dataPath string, req GenerateSignalRequest) (GenerateSignalResponse, error) {
-	return service.GenerateSignalWithProgress(dataPath, req, nil)
-}
-
-func (service *Service) GenerateSignalWithProgress(dataPath string, req GenerateSignalRequest, onProgress func(ProgressEvent)) (GenerateSignalResponse, error) {
-	if !service.tryAcquireSignal() {
-		return GenerateSignalResponse{Output: "signal generation already running", Success: false}, errors.New("signal generation already running")
-	}
-	defer service.releaseSignal()
-
-	projectRoot := quantStockRoot(dataPath)
-	if projectRoot == "" {
-		return GenerateSignalResponse{}, errors.New("quant_stock project not found")
-	}
-	pythonPath := quantCorePython(projectRoot)
-	logPath := filepath.Join(dataPath, "logs", "daily_signal_desktop.log")
-	logDesktopSignal(logPath, "start GenerateSignalWithProgress dataPath=%s projectRoot=%s python=%s date=%s initialCash=%.2f rebalanceFreq=%d",
-		dataPath, projectRoot, pythonPath, req.Date, req.InitialCash, req.RebalanceFreq)
-	args := []string{"scripts/daily_signal.py", "--json-only"}
-	if onProgress != nil {
-		args = append(args, "--progress")
-	}
-	if strings.TrimSpace(req.Date) != "" {
-		args = append(args, "--date", strings.TrimSpace(req.Date))
-	}
-	cmd := exec.Command(pythonPath, args...)
-	cmd.Dir = projectRoot
-	cmd.Env = append(os.Environ(), service.quantCoreEnv(dataPath, req)...)
-	logDesktopSignal(logPath, "exec args=%s cwd=%s env DATA_ROOT=%s INITIAL_CASH=%.2f REBALANCE_FREQ=%d",
-		strings.Join(args, " "), cmd.Dir, dataPath, req.InitialCash, req.RebalanceFreq)
-	applyLowPriority(cmd)
-
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return GenerateSignalResponse{}, err
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return GenerateSignalResponse{}, err
-	}
-	if err := cmd.Start(); err != nil {
-		return GenerateSignalResponse{}, err
-	}
-	if cmd.Process != nil {
-		if onProgress != nil {
-			onProgress(ProgressEvent{Stage: "running", Name: "当日信号生成", WorkerPID: cmd.Process.Pid})
-		}
-		lowerPriorityAfterStart(cmd.Process.Pid)
-	}
-
-	stderrBuf := strings.Builder{}
-	stderrDone := make(chan struct{})
-	go func() {
-		defer close(stderrDone)
-		scanner := bufio.NewScanner(stderrPipe)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Text()
-			stderrBuf.WriteString(line)
-			stderrBuf.WriteByte('\n')
-			if onProgress != nil && strings.HasPrefix(line, "PROGRESS ") {
-				var ev ProgressEvent
-				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "PROGRESS ")), &ev); err == nil {
-					onProgress(ev)
-				}
-			}
-		}
-	}()
-
-	stdoutBytes, readErr := io.ReadAll(stdoutPipe)
-	waitErr := cmd.Wait()
-	<-stderrDone
-
-	output := string(stdoutBytes)
-	if waitErr != nil {
-		combined := stderrBuf.String() + output
-		logDesktopSignal(logPath, "python failed waitErr=%v stderr=%s stdout_prefix=%s", waitErr, tailString(stderrBuf.String(), 4000), headString(output, 1000))
-		return GenerateSignalResponse{Output: combined, Success: false}, waitErr
-	}
-	if readErr != nil {
-		logDesktopSignal(logPath, "python stdout read failed err=%v stdout_prefix=%s", readErr, headString(output, 1000))
-		return GenerateSignalResponse{Output: output, Success: false}, readErr
-	}
-	logDesktopSignal(logPath, "python finished stdout_bytes=%d stderr_tail=%s", len(stdoutBytes), tailString(stderrBuf.String(), 2000))
-	var head struct {
-		Date string `json:"date"`
-	}
-	if err := json.Unmarshal(stdoutBytes, &head); err != nil {
-		logDesktopSignal(logPath, "json unmarshal failed err=%v stdout_prefix=%s", err, headString(output, 2000))
-		return GenerateSignalResponse{Output: output, Success: false}, err
-	}
-	logDesktopSignal(logPath, "signal generated date=%s output_bytes=%d", head.Date, len(stdoutBytes))
-	return GenerateSignalResponse{Date: head.Date, Output: output, Success: true}, nil
-}
-
-func (service *Service) quantCoreEnv(dataPath string, req GenerateSignalRequest) []string {
-	initialCashValue := req.InitialCash
-	if initialCashValue <= 0 {
-		initialCashValue = initialCash
-	}
-	rebalanceFreq := req.RebalanceFreq
-	if rebalanceFreq <= 0 {
-		rebalanceFreq = 5
-	}
+func (service *Service) quantCoreEnv(dataPath string) []string {
 	backend := service.dbBackend
 	if backend == "" && service.db != nil {
 		backend = string(service.db.Backend())
@@ -634,11 +536,8 @@ func (service *Service) quantCoreEnv(dataPath string, req GenerateSignalRequest)
 	env := []string{
 		"DATA_ROOT=" + dataPath,
 		"DESKTOP_DB_BACKEND=" + backend,
-		fmt.Sprintf("INITIAL_CASH=%.2f", initialCashValue),
-		fmt.Sprintf("REBALANCE_FREQ=%d", rebalanceFreq),
-	}
-	if strings.TrimSpace(req.StrategyOverridesJSON) != "" {
-		env = append(env, "QUANT_STRATEGY_OVERRIDES_JSON="+strings.TrimSpace(req.StrategyOverridesJSON))
+		fmt.Sprintf("INITIAL_CASH=%.2f", initialCash),
+		"REBALANCE_FREQ=5",
 	}
 	if service.dbDSN != "" {
 		env = append(env, "DESKTOP_DB_DSN="+service.dbDSN)
@@ -655,7 +554,7 @@ func quantStockRoot(dataPath string) string {
 		filepath.Join(parent, "quant_core"),
 	}
 	for _, candidate := range candidates {
-		if info, err := os.Stat(filepath.Join(candidate, "scripts", "daily_signal.py")); err == nil && !info.IsDir() {
+		if info, err := os.Stat(filepath.Join(candidate, "scripts", "pool_confirm.py")); err == nil && !info.IsDir() {
 			return candidate
 		}
 	}
@@ -697,21 +596,6 @@ func bundledWorkerPath() string {
 	return ""
 }
 
-func logDesktopSignal(logPath string, format string, args ...any) {
-	if strings.TrimSpace(logPath) == "" {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return
-	}
-	line := fmt.Sprintf("%s ", time.Now().Format("2006-01-02T15:04:05")) + fmt.Sprintf(format, args...) + "\n"
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-	_, _ = file.WriteString(line)
-}
 
 func headString(value string, limit int) string {
 	if len(value) <= limit {

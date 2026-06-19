@@ -93,6 +93,9 @@ export function DataHealthPanel({
         if (runStatus?.state === 'failed') {
           return <span className="healthBadge missing" title={runStatus.error_message}>失败</span>
         }
+        if (runStatus?.state === 'skipped') {
+          return <span className="healthBadge partial" title={runStatus.error_message || runStatus.message}>已跳过</span>
+        }
         return <span className={`healthBadge ${row.status}`}>{row.label}</span>
       }
     },
@@ -143,14 +146,15 @@ export function DataHealthPanel({
       headerCellClass: 'dataGridActionsCell',
       renderCell: ({ row }) => {
         const isRowUpdating = row.runStatus?.state === 'running' || (isUpdating && row.runStatus?.state === 'pending')
+        const isOptional = Boolean(row.optional)
         return (
           <button
             className="tableActionButton"
             onClick={() => onUpdateDataset?.(row.name)}
-            disabled={isUpdating || !onUpdateDataset}
-            title={`更新 ${row.title}`}
+            disabled={isUpdating || !onUpdateDataset || isOptional}
+            title={isOptional ? `${row.title} 为非阻塞数据，默认跳过，不影响通用策略` : `更新 ${row.title}`}
           >
-            {isRowUpdating ? '更新中' : '更新'}
+            {isOptional ? '非阻塞' : isRowUpdating ? '更新中' : '更新'}
           </button>
         )
       }
@@ -162,7 +166,7 @@ export function DataHealthPanel({
       <div className="tableHeader">
         <div>
           <div className="formTitle">数据状态</div>
-          <div className="cardHint">检查缺失年份和需要更新的数据集</div>
+          <div className="cardHint">检查原子数据覆盖；运行全部/基础/行情更新成功后会自动抽取通用策略因子截面。股东明细类数据为非阻塞项，默认跳过，不影响通用策略。</div>
         </div>
         <div className="taskActions">
           {phases && onPhaseChange && (
@@ -179,7 +183,7 @@ export function DataHealthPanel({
           )}
           <button className="secondaryButton" onClick={onRefresh} disabled={isUpdating}>刷新状态</button>
           <button className="primaryButton" onClick={onUpdate} disabled={isUpdating}>
-            {isUpdating ? '更新中…' : '更新数据'}
+            {isUpdating ? '更新中…' : '更新数据并抽因子'}
           </button>
         </div>
       </div>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Quant Stock">
+  <rect width="64" height="64" rx="16" fill="#0d1524"/>
+  <path d="M18 42V22h10c7 0 12 4 12 10 0 3-1 6-4 8l8 8h-9l-5-5h-4v-6h2c3 0 5-2 5-5s-2-5-6-5h-2v15h-7z" fill="#ffb000"/>
+  <path d="M43 18h6v28h-6z" fill="#26c281" opacity=".9"/>
+</svg>

@@ -2,6 +2,7 @@ package task
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 )
@@ -20,11 +21,11 @@ func (service *Service) Repository() *Repository {
 
 func (service *Service) Create(req CreateRequest) (DTO, error) {
 	if req.TaskType == "" {
-		req.TaskType = TypeEvaluationTimeMachine
+		return DTO{}, errors.New("任务类型不能为空")
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		name = "未命名评估"
+		name = "未命名任务"
 	}
 	paramsData, err := json.Marshal(req.Params)
 	if err != nil {

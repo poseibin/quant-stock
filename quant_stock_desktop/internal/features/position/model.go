@@ -117,6 +117,7 @@ type Recommendation struct {
 	Rebalanced             bool                            `json:"rebalanced"`
 	RebalanceTrades        int                             `json:"rebalance_trades"`
 	ActiveStrategyVersions []RecommendationStrategyVersion `json:"active_strategy_versions"`
+	Metadata               map[string]any                  `json:"metadata,omitempty"`
 	Rows                   []RecommendationItem            `json:"rows"`
 }
 
@@ -126,21 +127,6 @@ type RecommendationStrategyVersion struct {
 	Version  int     `json:"version"`
 	Mode     string  `json:"mode"`
 	Weight   float64 `json:"weight"`
-}
-
-type GenerateSignalRequest struct {
-	Date                  string  `json:"date"`
-	InitialCash           float64 `json:"initial_cash"`
-	RebalanceFreq         int     `json:"rebalance_freq"`
-	PortfolioRunID        string  `json:"portfolio_run_id"`
-	PortfolioCandidateID  string  `json:"portfolio_candidate_id"`
-	StrategyOverridesJSON string  `json:"-"`
-}
-
-type GenerateSignalResponse struct {
-	Date    string `json:"date"`
-	Output  string `json:"output"`
-	Success bool   `json:"success"`
 }
 
 type ProgressEvent struct {
@@ -181,6 +167,11 @@ type RecommendationItem struct {
 	BuyTriggerPrice float64  `json:"buy_trigger_price"`
 	SellTargetPrice float64  `json:"sell_target_price"`
 	StopPrice       float64  `json:"stop_price"`
+	ExitReason      string   `json:"exit_reason"`
+	ExitPct         float64  `json:"exit_pct"`
+	Horizon         int      `json:"horizon"`
+	HoldDays        int      `json:"hold_days"`
+	PlannedExitDate string   `json:"planned_exit_date"`
 	Sources         []Source `json:"sources"`
 }
 
@@ -201,6 +192,10 @@ type Summary struct {
 	NHoldings     int           `json:"n_holdings"`
 	NClosed       int           `json:"n_closed"`
 	UpdatedAt     string        `json:"updated_at"`
+	QuoteStatus   string        `json:"quote_status,omitempty"`
+	QuoteMessage  string        `json:"quote_message,omitempty"`
+	QuoteSource   string        `json:"quote_source,omitempty"`
+	QuoteUpdatedAt string       `json:"quote_updated_at,omitempty"`
 	Positions     []Position    `json:"positions"`
 	Trades        []TradeRecord `json:"trades"`
 }
